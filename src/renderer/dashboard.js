@@ -787,13 +787,13 @@ function renderSoundSettings() {
   enhanceSelects(box);
 }
 
-// 音效文件独立保存在本机，显示核验结果而不把缺失原声替换为其他声音。
+// 内置原声与旧版本机原声均计入就绪状态，新安装直接显示可离线播放。
 async function refreshAudioStatus() {
   try {
     const status = await call('audio-status');
     $('#audio-library-status').textContent = status.complete
-      ? '原声音效库已就绪：两组点击音效，共九段原声。等待类提醒仅在取得真实状态时触发。'
-      : `原声音效库已就绪 ${status.installed} / ${status.total} 段，可点击下方按钮下载或修复。`;
+      ? `${status.bundled ? '应用已内置原声音效' : '本机原声音效已就绪'}：两组点击音效，共九段原声，离线可用。`
+      : `原声音效库已就绪 ${status.installed} / ${status.total} 段，可点击下方按钮修复。`;
   } catch {}
 }
 // 别名和显示隐藏仅属于龙娘，不改变 Cockpit 的实例注册表。
@@ -869,6 +869,11 @@ async function start() {
   renderOverview();
   receive(state);
   bridge.onMonitor(receive);
+  // 修复后的试听与角色播放同步恢复，设置草稿保持当前内容。
+  bridge.onAudioReady(() => {
+    void sound.configure(sound.settings);
+    void refreshAudioStatus();
+  });
   for (const b of document.querySelectorAll('.main-nav button'))
     b.addEventListener('click', () => switchTab(b.dataset.tab));
   for (const button of document.querySelectorAll('[data-settings-tab]'))
@@ -992,20 +997,20 @@ async function start() {
     $('#dirty-hint').textContent = '已恢复默认草稿，保存后生效';
   });
   action('#permission', () => call('permission'));
-  // 手动安装显示实际进度与失败原因，下载结束后刷新本机音效状态。
+  // 修复优先使用内置原声，缺少可用副本时才需要下载，并显示实际失败原因。
   action('#install-audio', async () => {
     const button = $('#install-audio');
     button.disabled = true;
-    button.textContent = '正在下载并校验…';
+    button.textContent = '正在修复并校验…';
     try {
       await call('install-audio');
       await refreshAudioStatus();
       toast('九段原声音效已就绪');
     } catch (error) {
-      toast(error.message || '音效下载失败，请检查网络后重试');
+      toast(error.message || '音效修复失败，请重试');
     } finally {
       button.disabled = false;
-      button.textContent = '下载 / 修复原声音效';
+      button.textContent = '修复原声音效';
     }
   });
   action('#import-character', async () => {

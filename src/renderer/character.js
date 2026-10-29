@@ -170,6 +170,10 @@ async function start() {
     setTimeout(() => delete stage.dataset.cue, 900);
     void sound.play(event);
   });
+  // 手动修复后立即重新读取原声，不依赖其他布局或设置变化才能恢复播放。
+  bridge.onAudioReady(() => {
+    void sound.configure(sound.settings);
+  });
   bridge.onLayout(applyLayout);
   bridge.onCursor(routeCursor);
   bridge.onInputState((enabled) => {

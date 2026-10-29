@@ -1,4 +1,3 @@
-import { installReferenceAudio } from './install-reference-audio.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -9,7 +8,8 @@ const root = fileURLToPath(new URL('../', import.meta.url)),
   temp = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-app-')),
   user = path.join(temp, 'user'),
   data = path.join(temp, 'data');
-await installReferenceAudio(path.join(data, 'assets'));
+// 不预装用户音效，首次启动必须直接使用安装包中的九段原声。
+await fs.mkdir(data, { recursive: true });
 // 用旧版已保存的默认模板启动，验证覆盖安装后能直接迁移用量单位。
 await fs.writeFile(
   path.join(data, 'settings.json'),
@@ -368,6 +368,12 @@ try {
   );
   page = application.windows().find((p) => p.url().endsWith('/dashboard.html'));
   page.on('pageerror', (e) => errors.push(e.message));
+  // 完全空的音效目录也应报告就绪，避免开发缓存掩盖新用户默认无声的问题。
+  const audioStatus = await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.command('audio-status'));
+  assert.equal(audioStatus.complete, true);
+  assert.equal(audioStatus.installed, 9);
+  assert.equal(audioStatus.bundled, 9);
+  assert.deepEqual(await fs.readdir(path.join(data, 'assets')).catch(() => []), []);
   await until(
     () => application.evaluate(() => globalThis.__dragonGirlApp.monitor.summary?.total === 15000),
     '五实例账本合计不正确',
@@ -526,6 +532,7 @@ try {
   await choose('select[name="mode"]', 'desktop');
   await page.locator('input[name="multiplePets"]').check();
   await page.locator('[data-settings-tab="sound"]').click();
+  await until(async () => /应用已内置原声音效/.test(await page.locator('#audio-library-status').textContent()), '新安装未显示内置音效已就绪');
   await choose('select[name="soundTheme"]', 'fx1');
   await page.locator('#save-settings').click();
   await until(

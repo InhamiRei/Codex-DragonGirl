@@ -18,6 +18,7 @@ export class Dashboard {
     this.primary = primary;
     this.pets = new Map();
     this.assetDirectory = path.join(monitor.directory, 'assets');
+    this.bundledAudioDirectory = path.join(ROOT, 'assets/audio');
     this.delegate = {
       openDashboard: () => this.open(),
       refresh: () => void monitor.refreshAll().catch(() => {}),
@@ -395,11 +396,22 @@ export class Dashboard {
       return true;
     }
     if (command === 'import-character') return this.importCharacter();
-    if (command === 'audio-status') return verifyAudioLibrary(this.assetDirectory);
-    // 下载地址和文件白名单固定在主进程，界面无法指定任意网络资源。
+    if (command === 'audio-status')
+      return verifyAudioLibrary(this.assetDirectory, this.bundledAudioDirectory);
+    // 离线优先修复，完成后通知所有播放器重新预热，用户无需重启或重新保存设置。
     if (command === 'install-audio') {
-      if (!this.audioInstall) this.audioInstall = downloadAudioLibrary(this.assetDirectory)
-        .finally(() => { this.audioInstall = null; });
+      if (!this.audioInstall)
+        this.audioInstall = downloadAudioLibrary(this.assetDirectory, fetch, this.bundledAudioDirectory)
+          .then((status) => {
+            const windows = [
+              this.window,
+              ...[this.primary, ...this.pets.values()].map((pet) => pet.windows.get('character')),
+            ];
+            for (const window of windows)
+              if (window && !window.isDestroyed()) window.webContents.send('dg:audio-ready');
+            return status;
+          })
+          .finally(() => { this.audioInstall = null; });
       return this.audioInstall;
     }
     if (command === 'export-json' || command === 'export-csv')

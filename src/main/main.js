@@ -6,6 +6,7 @@ import { Dashboard } from './dashboard.js';
 import { Companion } from './companion.js';
 import { resolveResourcePath } from './resources.js';
 import { createLaunchReporter } from './launcher-status.js';
+import { resolveAudioPath } from '../core/audio-library-store.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const testMode = process.env.DRAGONGIRL_TEST === '1';
@@ -62,10 +63,17 @@ if (!hasLock) {
         const userAsset = /^dragon:\/\/app\/user-assets\/([a-f0-9]{32}\.(png|webp|wav|mp3|ogg))$/.exec(
           request.url,
         );
-        if (userAsset) resolved = path.join(app.getPath('userData'), 'assets', userAsset[1]);
+        if (userAsset) {
+          const directory = path.join(app.getPath('userData'), 'assets');
+          // 原声地址兼容旧版已安装的文件，新电脑则直接读取安装包内经过校验的副本。
+          resolved = /\.(wav|mp3|ogg)$/.test(userAsset[1])
+            ? await resolveAudioPath(directory, userAsset[1], path.join(ROOT, 'assets/audio'))
+            : path.join(directory, userAsset[1]);
+        }
         if (!resolved) return new Response('Not found', { status: 404 });
         const source = await net.fetch(pathToFileURL(resolved).href);
         const headers = new Headers(source.headers);
+        if (userAsset) headers.set('Cache-Control', 'no-store');
         headers.set(
           'Content-Security-Policy',
           "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'",

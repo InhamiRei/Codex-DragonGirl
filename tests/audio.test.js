@@ -97,6 +97,8 @@ test('音效库只有原项目的两组点击和九个原文件', async () => {
   for (const file of AUDIO_FILES) {
     const bytes = await fs.readFile(path.join('.artifacts/reference-audio', file.sourceFile));
     assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256);
+    // 随包副本必须与原始缓存逐字节一致，不能只维护一份正确的清单而遗漏音频。
+    assert.deepEqual(await fs.readFile(path.join('assets/audio', file.localFile)), bytes);
   }
 });
 

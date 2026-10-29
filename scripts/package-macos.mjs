@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { verifyAudioLibrary } from '../src/core/audio-library-store.js';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = path.join(root, 'output');
 const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
@@ -17,6 +18,9 @@ function run(command, args) {
       `${path.basename(command)} 构建失败 (${result.status}): ${(result.stderr || result.stdout || '').slice(-2000)}`,
     );
 }
+// 构建前检查九段内置原声，缺失或损坏时不生成默认无声的安装包。
+if (!(await verifyAudioLibrary(path.join(root, 'assets/audio'))).complete)
+  throw new Error('内置原声音效缺失或损坏，macOS 安装包未生成。');
 // 只清理本项目输出目录中的同名生成物，不碰用户安装或配置。
 await fs.mkdir(output, { recursive: true });
 await fs.rm(bundle, { recursive: true, force: true });

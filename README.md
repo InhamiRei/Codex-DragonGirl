@@ -31,9 +31,9 @@
 
 | 电脑 | 下载文件 | 打开方法 |
 | --- | --- | --- |
-| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-1.2.0-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
-| macOS 15+，Apple Silicon | `Codex-DragonGirl-1.2.0-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
-| 同上，偏好 ZIP | `Codex-DragonGirl-1.2.0-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
+| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-1.2.1-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
+| macOS 15+，Apple Silicon | `Codex-DragonGirl-1.2.1-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
+| 同上，偏好 ZIP | `Codex-DragonGirl-1.2.1-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
 
 Windows 请保留解压后的整个文件夹，程序需要旁边的运行时文件。当前暂未提供 Windows ARM 原生版和 Intel Mac 版。
 
@@ -44,7 +44,7 @@ Windows 请保留解压后的整个文件夹，程序需要旁边的运行时文
 1. **先安装并登录 Codex。** 龙娘读取本机已有实例，无需在龙娘里填写密码或 API Key。Windows 如未找到内置 CLI，可安装官方 Codex CLI 后重启龙娘。
 2. **打开龙娘。** 管理窗口自动显示发现的账户与目录。首次建立历史账本可能需要几分钟，额度查询独立进行。
 3. **选择摆放方式。** 在「偏好设置 → 外观」选择跟随窗口或独立桌面；右键角色可恢复位置、调整大小或进入管理界面。
-4. **按需安装声音。** 进入「偏好设置 → 声音」，点击「下载 / 修复原声音效」。九段原声会按固定来源下载并核验；完成前可以正常使用无声模式。
+4. **轻点试听。** 九段原声音效已随应用附带，首次打开即可离线播放，无需下载。可在「偏好设置 → 声音」调整音量或修复音效。
 5. **查看用量。** 轻点龙娘打开气泡；点击托盘 / 菜单栏图标打开账户总览、用量账本和偏好设置。
 
 显示 / 隐藏主龙娘的快捷键：macOS 为 `⌘⌥⇧D`，Windows 为 `Ctrl+Alt+Shift+D`。也可使用右键菜单操作。
@@ -53,12 +53,11 @@ Windows 跟随针对同一系统用户运行的 Codex / ChatGPT 桌面窗口。�
 
 ## 更新内容
 
-### v1.2.0
+### v1.2.1
 
-- **新增**：Windows x64 便携包、原生窗口桥和云端构建验证。
-- **新增**：设置内下载、核验与修复原声音效，新电脑也能完成声音配置。
-- **完善**：多实例用量、透明桌宠、窗口跟随与本地账本的完整发行流程。
-- **整理**：项目封面、安装说明、更新日志与发行文件校验信息。
+- **修复**：九段原声直接随安装包附带，新电脑首次打开即可离线播放，无需手动下载。
+- **修复**：声音设置识别内置原声，旧版本机音频损坏时自动使用有效的内置副本。
+- **完善**：离线修复后立即恢复播放，构建与桌面验收检查内置音效完整性和点击播放。
 
 升级：退出旧版，下载对应系统的新版本并替换应用文件。设置和账本保存在独立用户目录中；Windows 可将新版解压到新文件夹后启动。
 
@@ -118,4 +117,4 @@ npm run verify:package
 
 ## 素材与致谢
 
-原声音效参考 [DeepSeek Balance Whale Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)，来源、文件校验和权利说明见 [音效来源](docs/音效来源.md)。音频不内置于发行包，也不标为本项目原创。
+原声音效来自 [DeepSeek Balance Whale Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)，九段原声随应用附带，来源、文件校验和权利说明见 [音效来源](docs/音效来源.md)。第三方音频不标为本项目原创，也不另行授予素材许可。

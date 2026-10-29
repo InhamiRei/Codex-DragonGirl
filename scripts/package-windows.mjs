@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { verifyAudioLibrary } from '../src/core/audio-library-store.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 if (process.platform !== 'win32' || process.arch !== 'x64')
@@ -14,6 +15,9 @@ const bundle = path.join(output, name);
 const application = path.join(bundle, 'resources/app');
 const native = path.join(root, 'native/bin/dragongirl-native.exe');
 await fs.access(native);
+// 构建前强制检查随包音效，避免再次发布新电脑默认无声的安装包。
+if (!(await verifyAudioLibrary(path.join(root, 'assets/audio'))).complete)
+  throw new Error('内置原声音效缺失或损坏，Windows 安装包未生成。');
 
 // 成品仅复制 Electron 运行时与明确列出的应用文件，不复制本机配置或制作缓存。
 await fs.mkdir(output, { recursive: true });
@@ -35,7 +39,7 @@ await fs.writeFile(path.join(bundle, '使用说明.txt'), '\ufeff' + [
   'GPT龙娘 · 作者 Hey、小怪兽',
   '请先完整解压 ZIP，再双击 DragonGirl.exe。不要只拖出单个 EXE。',
   '支持 Windows 10 / 11 x64；无需安装 Node.js、npm 或开发工具。',
-  '账户统计需要本机已安装并登录 Codex；原声音效可在偏好设置 → 声音中手动下载。',
+  '账户统计需要本机已安装并登录 Codex；九段原声音效已内置，首次打开即可离线播放。',
   '本版本未作商业代码签名。请从项目官方 Release 下载并核对 SHA-256。',
   '用户数据：%APPDATA%\\Codex DragonGirl\\',
   '升级前退出旧版，再解压新版到新目录；保留上述用户数据目录即可保留设置与账本。',

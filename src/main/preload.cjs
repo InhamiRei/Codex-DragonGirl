@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld(
     command: (command, value) => ipcRenderer.invoke('dg:command', command, value),
     onMonitor: (listener) => subscribe('dg:monitor', listener),
     onSound: (listener) => subscribe('dg:sound', listener),
+    onAudioReady: (listener) => subscribe('dg:audio-ready', listener),
     bootstrap: () => ipcRenderer.invoke('dg:bootstrap'),
     ready: () => ipcRenderer.send('dg:ready'),
     interactive: (enabled) => ipcRenderer.send('dg:interactive', enabled),
