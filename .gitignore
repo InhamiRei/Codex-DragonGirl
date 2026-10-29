@@ -1,0 +1,25 @@
+node_modules/
+.DS_Store
+.artifacts/
+.test-data/
+npm-debug.log*
+*.tmp
+/启动龙娘.app/
+
+output/
+native/bin/
+
+# 本机配置、账户资料与制作过程文件不进入源码仓库。
+.codex/
+.agents/
+.env
+.env.*
+!.env.example
+**/generation.json
+**/*-prompt.txt
+**/*-prompt.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+auth.json
+snapshots.json

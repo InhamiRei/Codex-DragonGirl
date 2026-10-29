@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>龙娘的气泡</title>
+    <link rel="stylesheet" href="bubble.css" />
+  </head>
+  <body>
+    <!-- 主体为完整椭圆，两颗思绪泡在下方独立定位。 -->
+    <svg id="outline" class="outline" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path id="outline-path"></path>
+    </svg>
+    <article id="bubble" class="bubble" role="button" tabindex="0" aria-label="点击收起龙娘的气泡">
+      <!-- 内容在固定椭圆内部换行和滚动，不能改变外框尺寸。 -->
+      <div id="bubble-content" class="bubble-content">
+        <header class="bubble-header">
+          <span id="plan" class="plan" hidden></span>
+          <span id="quota-title" class="quota-title"></span>
+        </header>
+        <div id="message" class="message" aria-live="polite"></div>
+      </div>
+    </article>
+    <div id="tail" class="tail" aria-hidden="true"></div>
+    <script type="module" src="bubble.js"></script>
+  </body>
+</html>

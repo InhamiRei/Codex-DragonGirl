@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'">
+    <title>龙娘</title>
+    <link rel="stylesheet" href="character.css">
+  </head>
+  <body>
+    <!-- 角色只占据自身窗口，气泡在另一个透明窗口里独立排版。 -->
+    <main id="stage" class="stage" aria-label="龙娘，可以拖动，轻点说话，右键设置">
+      <div id="character" class="character">
+        <img id="portrait" alt="白发紫眼睛、带龙角的 龙娘" draggable="false">
+      </div>
+    </main>
+    <script type="module" src="character.js"></script>
+  </body>
+</html>

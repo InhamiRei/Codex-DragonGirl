@@ -1,0 +1,36 @@
+{
+  "name": "codex-dragongirl",
+  "productName": "Codex DragonGirl",
+  "version": "1.2.0",
+  "author": "Hey、小怪兽",
+  "homepage": "https://github.com/InhamiRei/Codex-DragonGirl",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/InhamiRei/Codex-DragonGirl.git"
+  },
+  "private": true,
+  "description": "一只可以拖动、贴边和轻轻戳一戳的桌面龙娘。",
+  "type": "module",
+  "main": "src/main/main.js",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node scripts/launch.mjs",
+    "build:launcher:mac": "node scripts/build-macos-launcher.mjs",
+    "check": "node scripts/check.mjs",
+    "test": "node --test tests/*.test.js",
+    "test:desktop": "node scripts/desktop-smoke.mjs",
+    "build:native": "node scripts/build-native.mjs",
+    "package:mac": "node scripts/package-macos.mjs",
+    "package:win": "node scripts/package-windows.mjs",
+    "test:windows": "node scripts/windows-smoke.mjs",
+    "verify:windows": "node scripts/verify-windows-package.mjs",
+    "test:app": "node scripts/app-smoke.mjs",
+    "verify:package": "node scripts/verify-package.mjs"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "playwright": "1.64.1"
+  }
+}

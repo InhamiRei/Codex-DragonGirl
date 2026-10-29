@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GPT龙娘 · 用量管理</title>
+    <link rel="stylesheet" href="dashboard.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <img class="brand-logo" src="../../assets/characters/codex-dragon-girl.png" alt="GPT龙娘 Logo" />
+        <strong>GPT龙娘</strong>
+      </div>
+      <nav class="main-nav" aria-label="主导航">
+        <button data-tab="overview" class="selected" aria-current="page">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="4" y="4" width="6" height="6" rx="1.5" />
+            <rect x="14" y="4" width="6" height="6" rx="1.5" />
+            <rect x="4" y="14" width="6" height="6" rx="1.5" />
+            <rect x="14" y="14" width="6" height="6" rx="1.5" /></svg
+          ><span>账户总览</span>
+        </button>
+        <button data-tab="usage">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18H5zM9 8h6M9 12h6M9 16h4" /></svg
+          ><span>用量账本</span>
+        </button>
+        <button data-tab="settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h16M4 17h16" />
+            <circle cx="9" cy="7" r="3" />
+            <circle cx="15" cy="17" r="3" /></svg
+          ><span>偏好设置</span>
+        </button>
+      </nav>
+    </aside>
+    <main class="workspace">
+      <header class="page-header">
+        <div>
+          <h1 id="title">账户总览</h1>
+          <p id="subtitle">查看各个实例的额度与使用情况。</p>
+        </div>
+        <div class="header-actions">
+          <span id="connection" class="connection-state">正在发现实例</span>
+          <button id="toggle-filter" aria-expanded="false" aria-controls="filter-panel" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16l-6 7v6l-4 2v-8z" /></svg>
+            <span id="filter-button-label">筛选</span>
+          </button>
+          <div class="refresh-control"><button id="refresh" class="primary">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M18 17A7 7 0 0 1 6 18l-2-3" /></svg
+            ><span id="refresh-label">刷新账户</span>
+          </button>
+          <span id="refresh-status" class="hint" role="status" hidden></span></div>
+        </div>
+      </header>
+      <div id="toast" role="status" hidden></div>
+      <div class="content-scroll" id="content-scroll">
+        <div class="content-inner">
+          <div id="index-state" class="index-state" role="status" hidden></div>
+          <section id="overview" class="view">
+            <div id="metrics" class="metrics"></div>
+            <div class="section-heading">
+              <div>
+                <h2>账户实例 <span id="instance-count" class="count-badge"></span></h2>
+                <p>每个数据目录独立统计，共享账户额度会单独标注。</p>
+              </div>
+              <button id="add-home">添加目录</button>
+            </div>
+            <div id="accounts" class="accounts"></div>
+            <div class="overview-bottom">
+              <article class="panel chart-panel">
+                <div class="panel-heading">
+                  <h2>本机用量走势</h2>
+                  <span class="hint">最近十四个记录日</span>
+                </div>
+                <div id="overview-chart" class="chart"></div>
+              </article>
+              <article class="panel scope-note">
+                <span class="note-symbol" aria-hidden="true">✦</span>
+                <h2>了解统计范围</h2>
+                <p>
+                  账户额度来自官方服务。本机账本统计当前目录中的记录，其他设备与云端任务可能不包含在内。
+                </p>
+                <button id="goto-usage" class="text-button">
+                  查看详细账本<span aria-hidden="true">→</span>
+                </button>
+              </article>
+            </div>
+          </section>
+          <section id="usage" class="view" hidden>
+            <article id="filter-panel" class="panel filter-panel" hidden>
+              <div class="panel-heading">
+                <h2>筛选记录</h2>
+                <div class="button-group"><button id="clear-filter">重置为全部</button>
+                <button id="apply-filter" class="primary">应用筛选</button></div>
+              </div>
+              <div class="filter-grid">
+                <div class="field">
+                  <label for="filter-home">实例</label
+                  ><select id="filter-home">
+                    <option value="">全部实例</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="filter-model">模型</label
+                  ><select id="filter-model">
+                    <option value="">全部模型</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="filter-source">来源</label
+                  ><select id="filter-source">
+                    <option value="">全部来源</option>
+                    <option>主任务</option>
+                    <option>子代理</option>
+                    <option>自动审核</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="filter-project">项目</label
+                  ><select id="filter-project">
+                    <option value="">全部项目</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="filter-tier">运行速度</label
+                  ><select id="filter-tier">
+                    <option value="">全部速度</option>
+                    <option value="default">标准</option>
+                    <option value="priority">快速</option>
+                    <option value="flex">弹性</option>
+                    <option value="ultrafast">极速</option>
+                    <option value="unknown">未记录</option>
+                  </select>
+                </div>
+                <div class="field date-range">
+                  <span class="field-label" id="date-range-label">日期范围</span>
+                  <div>
+                    <input id="filter-from" type="date" aria-label="开始日期" /><span>至</span
+                    ><input id="filter-to" type="date" aria-label="结束日期" />
+                  </div>
+                </div>
+              </div>
+              <div class="filter-footer">
+                <div class="quick-ranges" aria-label="快捷日期">
+                  <button data-range="today">今日</button><button data-range="7">近七天</button
+                  ><button data-range="30">近三十天</button><button data-range="month">本月</button
+                  ><button data-range="all" class="selected">全部</button>
+                </div>
+              </div>
+            </article>
+            <div id="usage-metrics" class="metrics"></div>
+            <article class="panel activity-panel">
+              <div class="panel-heading">
+                <h2>Token 活动</h2>
+                <div class="activity-controls">
+                  <select id="activity-year" aria-label="活动年份"></select>
+                  <div class="chart-modes" aria-label="统计方式">
+                    <button data-activity-mode="daily" aria-pressed="true" class="selected">每天</button>
+                    <button data-activity-mode="weekly" aria-pressed="false">每周</button>
+                    <button data-activity-mode="cumulative" aria-pressed="false">累计总量</button>
+                  </div>
+                </div>
+              </div>
+              <div class="activity-scroll"><div id="usage-chart" class="activity-chart"></div></div>
+              <div class="activity-footer"><span id="activity-summary" class="hint"></span>
+                <div class="activity-legend" aria-label="颜色越深表示用量越多">少
+                  <i data-level="0"></i><i data-level="1"></i><i data-level="2"></i><i data-level="3"></i><i data-level="4"></i>多
+                </div>
+              </div>
+            </article>
+              <article class="panel">
+                <div class="panel-heading"><h2>模型分布</h2></div>
+                <div id="model-bars"></div>
+              </article>
+            <article class="panel records-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>会话明细</h2>
+                  <p class="hint">自身用量与子任务合计分别展示，费用仅供参考。</p>
+                </div>
+                <div class="records-actions"><input
+                  id="thread-search"
+                  type="search"
+                  placeholder="搜索项目或会话编号"
+                  aria-label="搜索会话"
+                />
+                <button id="export-csv">导出表格</button><button id="export-json">导出数据</button></div>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>项目与会话</th>
+                      <th>实例</th>
+                      <th>来源</th>
+                      <th class="numeric">自身用量</th>
+                      <th class="numeric">含子任务</th>
+                      <th class="numeric">费用（美元）</th>
+                      <th>最近活动</th>
+                    </tr>
+                  </thead>
+                  <tbody id="thread-rows"></tbody>
+                </table>
+              </div>
+              <div class="table-pagination">
+                <p id="row-count" class="table-note" role="status"></p>
+                <div class="button-group" aria-label="会话分页">
+                  <button id="threads-prev">上一页</button><span id="thread-page" class="hint"></span><button id="threads-next">下一页</button>
+                </div>
+              </div>
+            </article>
+          </section>
+          <section id="settings" class="view" hidden>
+            <nav class="settings-nav" aria-label="设置分类">
+              <button type="button" data-settings-tab="appearance" class="selected" aria-current="page">
+                外观</button
+              ><button type="button" data-settings-tab="sound">声音</button
+              ><button type="button" data-settings-tab="bubble">气泡</button
+              ><button type="button" data-settings-tab="statistics">统计</button
+              ><button type="button" data-settings-tab="instances">实例</button
+              ><button type="button" data-settings-tab="data">数据</button>
+            </nav>
+            <form id="settings-form">
+              <section class="settings-pane" data-settings-pane="appearance">
+                <article class="panel settings-panel">
+                  <div class="panel-heading">
+                    <div>
+                      <h2>外观与跟随</h2>
+                      <p>调整龙娘的显示方式、大小与交互。</p>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="display-mode">显示方式</label>
+                      <p>跟随应用窗口，或固定在桌面上。</p>
+                    </div>
+                    <div class="setting-control">
+                      <select name="mode" id="display-mode">
+                        <option value="follow">跟随应用窗口</option>
+                        <option value="desktop">独立桌面</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="selected-home">关联实例</label>
+                      <p>决定主龙娘展示哪个实例的数据。</p>
+                    </div>
+                    <div class="setting-control">
+                      <select name="selectedHome" id="selected-home">
+                        <option value="">自动跟随前台实例</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="multiple-pets">多实例角色</label>
+                      <p>为每个运行实例显示一只龙娘。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="multiple-pets"
+                        name="multiplePets"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="character-scale">角色大小</label>
+                      <p>调整角色尺寸，气泡文字大小保持不变。</p>
+                    </div>
+                    <div class="setting-control range-control">
+                      <input
+                        id="character-scale"
+                        name="scale"
+                        type="range"
+                        min="0.5"
+                        max="1.5"
+                        step="0.05"
+                        value="1"
+                      /><output id="scale-label" for="character-scale">100%</output>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="snap-enabled">贴边吸附</label>
+                      <p>拖动后自动吸附到附近的屏幕边缘。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="snap-enabled"
+                        name="snapEnabled"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="character-flip">角色翻转</label>
+                      <p>水平翻转角色朝向。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="character-flip"
+                        name="flip"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="character-motion">动画反馈</label>
+                      <p>点击时显示按压与回弹效果。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="character-motion"
+                        name="motion"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="launch-login">随系统启动</label>
+                      <p>登录电脑后自动打开龙娘。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="launch-login"
+                        name="launchAtLogin"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <span class="setting-label">角色图片</span>
+                      <p>选择带透明背景的角色图片。</p>
+                    </div>
+                    <div class="setting-control button-group">
+                      <button type="button" id="import-character">导入图片</button
+                      ><button type="button" id="reset-character">恢复默认</button>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <span class="setting-label">窗口权限</span>
+                      <p id="permission-status">窗口跟随需要读取应用窗口信息。</p>
+                    </div>
+                    <div class="setting-control">
+                      <button type="button" id="permission">检查窗口权限</button>
+                    </div>
+                  </div>
+                </article>
+              </section>
+              <section class="settings-pane" data-settings-pane="sound" hidden>
+                <article class="panel settings-panel">
+                  <div class="panel-heading">
+                    <div>
+                      <h2>声音与通知</h2>
+                      <p>调整原声音效、音量与安静时间。</p>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="sound-enabled">启用音效</label>
+                      <p>点击角色或收到提醒时播放声音。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="sound-enabled"
+                        name="soundEnabled"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="sound-theme">点击音效组</label>
+                      <p>采用原项目成对的按下与松开音频。</p>
+                    </div>
+                    <div class="setting-control">
+                      <select name="soundTheme" id="sound-theme">
+                        <option value="duck">小黄鸭</option>
+                        <option value="fx1">音效一</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="sound-volume">总音量</label>
+                      <p>统一控制所有音效的播放音量。</p>
+                    </div>
+                    <div class="setting-control range-control">
+                      <input
+                        id="sound-volume"
+                        name="volume"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                      /><output id="volume-label" for="sound-volume">35%</output>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="system-notifications">系统通知</label>
+                      <p>在任务结束或额度不足时显示通知。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="system-notifications"
+                        name="notifications"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <span class="setting-label">免打扰时段</span>
+                      <p>此时段内保持安静，留空表示关闭。</p>
+                    </div>
+                    <div class="setting-control time-range">
+                      <div class="field">
+                        <label for="quiet-start">开始</label
+                        ><input id="quiet-start" name="quietStart" type="time" />
+                      </div>
+                      <div class="field">
+                        <label for="quiet-end">结束</label
+                        ><input id="quiet-end" name="quietEnd" type="time" />
+                      </div>
+                    </div>
+                  </div>
+                </article>
+                <article class="panel">
+                  <div class="panel-heading">
+                    <div>
+                      <h2>事件音效</h2>
+                      <p>小黄鸭、音效一与五段事件提示音。</p>
+                    </div>
+                  </div>
+                  <div class="sound-table-heading">
+                    <span>事件</span><span>原声音效</span><span>音量</span><span></span><span>操作</span>
+                  </div>
+                  <div id="sound-rows" class="sound-rows"></div>
+                  <p class="panel-note" id="audio-library-status">正在检查本机原声音效库…</p>
+                  <button id="install-audio" class="button" type="button">下载 / 修复原声音效</button>
+                  <p class="panel-note">点击后从小鲸鱼原项目下载九段音频到本机。音频来源及权利说明见 README。</p>
+                </article>
+              </section>
+              <section class="settings-pane" data-settings-pane="bubble" hidden>
+                <article class="panel settings-panel">
+                  <div class="panel-heading">
+                    <div>
+                      <h2>气泡与提醒</h2>
+                      <p>选择需要关注的额度和用量。</p>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="low-quota">低额度提醒</label>
+                      <p>剩余额度低于这个比例时提醒。</p>
+                    </div>
+                    <div class="setting-control input-unit">
+                      <input id="low-quota" name="lowQuota" type="number" min="0" max="100" /><span
+                        >%</span
+                      >
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="token-budget">每日用量预算</label>
+                      <p>本机 Tokens 用量达到预算时提醒，填零关闭。</p>
+                    </div>
+                    <div class="setting-control input-unit">
+                      <input id="token-budget" name="tokenBudget" type="number" min="0" /><span
+                        >Tokens</span
+                      >
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="cost-budget">每日费用预算</label>
+                      <p>参考费用达到预算时提醒，填零关闭。</p>
+                    </div>
+                    <div class="setting-control input-unit">
+                      <input id="cost-budget" name="costBudget" type="number" min="0" step="0.01" /><span
+                        >美元</span
+                      >
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="bubble-seconds">气泡显示时长</label>
+                      <p>自动收起前的等待时间。</p>
+                    </div>
+                    <div class="setting-control input-unit">
+                      <input
+                        id="bubble-seconds"
+                        name="bubbleSeconds"
+                        type="number"
+                        min="1"
+                        max="120"
+                      /><span>秒</span>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="pinned-bubble">保持气泡显示</label>
+                      <p>开启后，气泡需要手动收起。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="pinned-bubble"
+                        name="pinnedBubble"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                </article>
+                <article class="panel">
+                  <div class="panel-heading">
+                    <div>
+                      <h2>气泡内容</h2>
+                      <p>编辑文字，点击下方按钮插入动态信息。</p>
+                    </div>
+                  </div>
+                  <label class="visually-hidden" for="bubble-template">气泡文字</label
+                  ><textarea id="bubble-template" name="bubbleTemplate" rows="4"></textarea>
+                  <div class="template-inserts">
+                    <span>插入信息</span><button type="button" data-insert="实例">实例名称</button
+                    ><button type="button" data-insert="套餐">当前套餐</button
+                    ><button type="button" data-insert="额度">剩余额度</button
+                    ><button type="button" data-insert="今日用量">今日用量</button
+                    ><button type="button" data-insert="任务状态">任务状态</button>
+                  </div>
+                </article>
+              </section>
+              <section class="settings-pane" data-settings-pane="statistics" hidden>
+                <article class="panel settings-panel">
+                  <div class="panel-heading">
+                    <div>
+                      <h2>统计偏好</h2>
+                      <p>设置刷新频率、时间范围与显示单位。</p>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="refresh-seconds">账户刷新间隔</label>
+                      <p>定时查询各账户的真实额度。</p>
+                    </div>
+                    <div class="setting-control input-unit">
+                      <input
+                        id="refresh-seconds"
+                        name="refreshSeconds"
+                        type="number"
+                        min="30"
+                        max="3600"
+                      /><span>秒</span>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="scan-seconds">日志检查间隔</label>
+                      <p>只读取新增内容，不重复扫描历史。</p>
+                    </div>
+                    <div class="setting-control input-unit">
+                      <input id="scan-seconds" name="scanSeconds" type="number" min="5" max="300" /><span
+                        >秒</span
+                      >
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="timezone">账本时区</label>
+                      <p>每日统计以此时区的零点为边界。</p>
+                    </div>
+                    <div class="setting-control">
+                      <select name="timezone" id="timezone">
+                        <option value="Asia/Shanghai">北京时间</option>
+                        <option value="UTC">协调世界时</option>
+                        <option value="Asia/Tokyo">东京时间</option>
+                        <option value="America/Los_Angeles">洛杉矶时间</option>
+                        <option value="Europe/London">伦敦时间</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="currency">金额单位</label>
+                      <p>仅影响参考费用的显示。</p>
+                    </div>
+                    <div class="setting-control">
+                      <select name="currency" id="currency">
+                        <option value="USD">美元</option>
+                        <option value="CNY">人民币</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="exchange-rate">参考汇率</label>
+                      <p>每一美元折合的人民币金额。</p>
+                    </div>
+                    <div class="setting-control input-unit">
+                      <input
+                        id="exchange-rate"
+                        name="exchangeRate"
+                        type="number"
+                        min="0.001"
+                        step="0.001"
+                      /><span>元</span>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="retention-days">明细保留时长</label>
+                      <p>填零表示永久保留本机账本。</p>
+                    </div>
+                    <div class="setting-control input-unit">
+                      <input
+                        id="retention-days"
+                        name="retentionDays"
+                        type="number"
+                        min="0"
+                        max="3650"
+                      /><span>天</span>
+                    </div>
+                  </div>
+                </article>
+                <article class="panel">
+                  <div class="panel-heading">
+                    <div>
+                      <h2>自定义模型价格</h2>
+                      <p>单价单位为每百万 Tokens 的美元金额。</p>
+                    </div>
+                  </div>
+                  <div class="price-editor">
+                    <div class="field span-two">
+                      <label for="price-model">模型名称</label
+                      ><input id="price-model" placeholder="填写实际模型名称" />
+                    </div>
+                    <div class="field span-two">
+                      <label for="price-effective">生效日期</label
+                      ><input id="price-effective" type="date" />
+                    </div>
+                    <div class="field">
+                      <label for="price-input">输入单价</label
+                      ><input id="price-input" type="number" min="0" step="0.01" placeholder="0.00" />
+                    </div>
+                    <div class="field">
+                      <label for="price-cached">缓存读取</label
+                      ><input id="price-cached" type="number" min="0" step="0.01" placeholder="0.00" />
+                    </div>
+                    <div class="field">
+                      <label for="price-output">输出单价</label
+                      ><input id="price-output" type="number" min="0" step="0.01" placeholder="0.00" />
+                    </div>
+                    <div class="field">
+                      <label for="price-write">缓存写入</label
+                      ><input
+                        id="price-write"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="沿用输入单价"
+                      />
+                    </div>
+                    <div class="field">
+                      <label for="price-fast">快速模式倍率</label
+                      ><input id="price-fast" type="number" min="0" step="0.1" value="1" />
+                    </div>
+                    <div class="field">
+                      <label for="price-flex">弹性模式倍率</label
+                      ><input id="price-flex" type="number" min="0" step="0.1" value="1" />
+                    </div>
+                    <div class="price-submit span-two">
+                      <button type="button" id="save-price">添加或更新价格</button>
+                    </div>
+                  </div>
+                  <div id="price-list"></div>
+                  <p class="panel-note">
+                    未设置的模型沿用内置价格；未知价格保持空缺。内置价格核对日期为 2026 年 10 月 28
+                    日，参考费用不等于订阅账单。
+                  </p>
+                </article>
+              </section>
+              <section class="settings-pane" data-settings-pane="instances" hidden>
+                <article class="panel">
+                  <div class="panel-heading">
+                    <div>
+                      <h2>实例管理</h2>
+                      <p>设置显示名称和可见性，不修改原应用的数据。</p>
+                    </div>
+                    <button type="button" id="settings-add-home">添加目录</button>
+                  </div>
+                  <div class="instance-table-heading">
+                    <span>实例与目录</span><span>显示名称</span><span>操作</span>
+                  </div>
+                  <div id="instance-settings"></div>
+                </article>
+              </section>
+              <section class="settings-pane" data-settings-pane="data" hidden>
+                <article class="panel settings-panel">
+                  <div class="panel-heading">
+                    <div>
+                      <h2>数据与维护</h2>
+                      <p>管理龙娘自己的设置和本地账本。</p>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <span class="setting-label">设置文件</span>
+                      <p>导入的内容先进入草稿，保存后生效。</p>
+                    </div>
+                    <div class="setting-control button-group">
+                      <button type="button" id="export-settings">导出设置</button
+                      ><button type="button" id="import-settings">导入设置</button>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <span class="setting-label">账本备份</span>
+                      <p>保存当前统计记录，便于后续恢复。</p>
+                    </div>
+                    <div class="setting-control">
+                      <button type="button" id="backup">备份账本</button>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <span class="setting-label">重建统计索引</span>
+                      <p>先备份，再根据原始日志重新统计。</p>
+                    </div>
+                    <div class="setting-control">
+                      <button type="button" id="rebuild">备份并重建</button>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <span class="setting-label">问题诊断</span>
+                      <p>导出连接与运行状态，不包含对话正文。</p>
+                    </div>
+                    <div class="setting-control">
+                      <button type="button" id="diagnostics">导出诊断</button>
+                    </div>
+                  </div>
+                </article>
+              </section>
+            </form>
+          </section>
+          <footer class="page-footer"><span>GPT龙娘 · 本机用量管理</span><span id="updated"></span></footer>
+        </div>
+      </div>
+      <div class="save-bar" id="settings-save-bar" hidden>
+        <div>
+          <span id="dirty-hint" role="status">更改将在保存后生效</span>
+          <div class="button-group">
+            <button type="button" id="reset-settings" class="text-button">恢复默认</button
+            ><button type="button" id="cancel-settings">取消修改</button
+            ><button type="submit" form="settings-form" id="save-settings" class="primary">
+              保存设置
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+    <div id="chart-tooltip" class="chart-tooltip" role="tooltip" hidden></div>
+    <script type="module" src="dashboard.js"></script>
+  </body>
+</html>

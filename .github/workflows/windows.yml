@@ -1,0 +1,47 @@
+name: Windows 构建与验证
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: 安装开发依赖
+        run: npm ci
+      - name: 编译窗口桥
+        run: npm run build:native
+      - name: 检查语法
+        run: npm run check
+      - name: 准备隔离音效测试缓存
+        run: node scripts/fetch-reference-audio.mjs
+      - name: 验证统计、交互与真实 Windows 窗口
+        run: npm test
+      - name: 验证桌面应用
+        run: npm run test:windows
+        timeout-minutes: 3
+      - name: 构建 Windows 便携包
+        run: npm run package:win
+      - name: 验证解压后的安装包
+        run: npm run verify:windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Windows-x64
+          path: |
+            output/*-Windows-x64.zip
+            output/release-manifest-Windows-x64.json
+            output/verification-Windows-x64.json
+          if-no-files-found: error
+          retention-days: 14
