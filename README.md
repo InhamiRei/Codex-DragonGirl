@@ -19,6 +19,7 @@
 
 - **桌面陪伴**：透明背景、鼠标穿透、拖动吸附、缩放、翻转、自定义角色图片与轻点互动。
 - **窗口跟随**：跟随当前 Codex 窗口，多开时可设置每个运行实例一只；最小化后自动隐藏关联角色。macOS 打开文件或文件夹选择框时暂时收起角色与气泡，关闭后恢复原位置。
+- **启动联动**：首次开启「随 Codex 启动」后，照常打开 Codex，龙娘就会自动出现；自动启动不弹管理窗口。
 - **额度气泡**：查看实际剩余额度、重置时间和今日 Tokens，用量窗口按服务返回结果展示。
 - **多实例总览**：自动发现默认目录、Cockpit 多开目录，也可手动添加；同一账户的共享额度会作提示。
 - **本机账本**：按日期、实例、模型、来源筛选，查看模型分布、年度活动热力图和会话明细，支持 CSV / JSON 导出。
@@ -32,9 +33,9 @@
 
 | 电脑 | 下载文件 | 打开方法 |
 | --- | --- | --- |
-| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-1.2.2-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
-| macOS 15+，Apple Silicon | `Codex-DragonGirl-1.2.2-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
-| 同上，偏好 ZIP | `Codex-DragonGirl-1.2.2-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
+| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-1.3.0-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
+| macOS 15+，Apple Silicon | `Codex-DragonGirl-1.3.0-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
+| 同上，偏好 ZIP | `Codex-DragonGirl-1.3.0-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
 
 Windows 请保留解压后的整个文件夹，程序需要旁边的运行时文件。当前暂未提供 Windows ARM 原生版和 Intel Mac 版。
 
@@ -50,9 +51,33 @@ Windows 请保留解压后的整个文件夹，程序需要旁边的运行时文
 
 显示 / 隐藏主龙娘的快捷键：macOS 为 `⌘⌥⇧D`，Windows 为 `Ctrl+Alt+Shift+D`。也可使用右键菜单操作。
 
+### 随 Codex 自动启动
+
+打开「偏好设置 → 外观 → 启动方式」，选择 **随 Codex 启动** 并保存一次。之后继续使用原来的 Codex 图标即可，无需另开龙娘。首次默认保持手动启动，升级保留原来的选择。
+
+| 启动方式 | 行为 |
+| --- | --- |
+| 手动启动 | 需要时打开龙娘，同时显示管理窗口。 |
+| 登录电脑时启动 | 登录后静默打开龙娘，从托盘或菜单栏进入管理界面。 |
+| 随 Codex 启动 | 登录后由小型后台助手等待 Codex，发现桌面应用后启动龙娘；在跟随模式下，全部 Codex / ChatGPT 宿主退出后，自动启动的龙娘保存并退出。 |
+
+最小化只隐藏角色，恢复窗口后继续跟随。点击「退出龙娘」后，本批 Codex 实例全部结束前不会自动重开；手动再次打开龙娘可以立即恢复。手动启动、手动打开管理界面或使用独立桌面模式时，可以继续使用账本与桌面陪伴，退出由用户控制。
+
+Windows 和 macOS 的助手均随安装包附带，无需安装 Node.js。关闭联动时，选择「手动启动」并保存，会移除本应用的登录项。更新或移动安装目录后，手动打开新版一次即可更新路径；macOS 请先移入 Applications，Windows 请保留完整解压目录。卸载前先切回手动启动。
+
+若设置提示助手未连接，可先保存为手动启动，再重新开启联动；同时检查系统的登录项 / 启动应用是否允许龙娘运行。注册失败会显示错误并保留原来的设置。
+
 Windows 跟随针对同一系统用户运行的 Codex / ChatGPT 桌面窗口。受系统权限保护或以其他用户运行的进程可能无法识别，可切换独立桌面模式，并手动添加目录。WSL 内部的独立账户和 Linux 窗口暂不作自动映射。
 
 ## 更新内容
+
+### v1.3.0
+
+- 修复双额度气泡的标签换行与原生滚动条，正常用量完整展示，长消息仍可滚动查看。
+- 修复保存偏好覆盖新拖动位置，退出前等待位置写入，保留重启后的跟随锚点。
+- 新增三种启动方式与原生后台助手，开启一次即可随 Codex 自动出现。
+- 自动启动保持安静，主动退出暂停本批实例；支持多实例去重、更新路径修复和失败恢复。
+- 新增生命期、静默窗口和安装包启动验证。
 
 ### v1.2.2
 
@@ -124,6 +149,9 @@ npm run verify:windows
 # Apple Silicon macOS
 npm run test:desktop
 npm run test:app
+npm run test:startup
+npm run test:position
+npm run test:bubble
 npm run test:accounts
 npm run package:mac
 npm run verify:package

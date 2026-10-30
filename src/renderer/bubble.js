@@ -36,7 +36,8 @@ function renderUsage(usage) {
     const remaining = quota.remaining > 0 && quota.remaining < 1 ? '<1' : Math.round(quota.remaining);
     const value = element('span', 'quota-value', remaining);
     value.append(element('span', 'quota-unit', '%'));
-    heading.append(element('span', 'quota-label', `${quota.label} · 剩余`), value);
+    // 用紧凑的剩余标签给百分比留出宽度，普通双额度不因标点和空格被挤成两行。
+    heading.append(element('span', 'quota-label', `${quota.label}剩余`), value);
     row.append(heading);
     content.append(row);
   }
@@ -82,6 +83,10 @@ function measure(model) {
   if (document.body.dataset.layout === 'usage' &&
       (contentPane.scrollHeight > contentPane.clientHeight + 1 || !contentFitsEllipse()))
     document.body.dataset.compact = 'true';
+  const scrollable = contentPane.scrollHeight > contentPane.clientHeight + 1;
+  bubble.setAttribute('aria-label', scrollable
+    ? '点击收起龙娘的气泡，长内容可用滚轮或上下方向键查看'
+    : '点击收起龙娘的气泡');
   bridge.measureBubble({
     revision: model.revision,
     width: model.maxWidth,
@@ -89,14 +94,21 @@ function measure(model) {
   });
 }
 
-// 滚动条上的点击用于阅读长文字，气泡其余区域仍可点击收起。
-function closeFromContent(event) {
-  if (contentPane.scrollHeight > contentPane.clientHeight + 1 && event.target === contentPane) {
-    const rect = contentPane.getBoundingClientRect();
-    const scrollbar = Math.max(8, contentPane.offsetWidth - contentPane.clientWidth);
-    if (event.clientX >= rect.right - scrollbar) return;
-  }
+// 没有可见滚动条后，内容区域不再保留无效的点击死区。
+function closeFromContent() {
   bridge.closeBubble();
+}
+
+// 原生滚动条隐藏后保留方向键和翻页阅读，长内容仍完整存在于滚动容器中。
+function scrollFromKeyboard(event) {
+  if (contentPane.scrollHeight <= contentPane.clientHeight + 1) return false;
+  const steps = { ArrowDown: 24, ArrowUp: -24, PageDown: contentPane.clientHeight, PageUp: -contentPane.clientHeight };
+  if (Object.hasOwn(steps, event.key)) contentPane.scrollTop += steps[event.key];
+  else if (event.key === 'Home') contentPane.scrollTop = 0;
+  else if (event.key === 'End') contentPane.scrollTop = contentPane.scrollHeight;
+  else return false;
+  event.preventDefault();
+  return true;
 }
 
 // 主体只绘制完整椭圆，两颗独立小泡沿下缘定位，保持原有位置和间距。
@@ -183,6 +195,7 @@ async function start() {
   bubble.addEventListener('click', closeFromContent);
   outline.addEventListener('click', () => bridge.closeBubble());
   bubble.addEventListener('keydown', (event) => {
+    if (scrollFromKeyboard(event)) return;
     if (['Enter', ' ', 'Escape'].includes(event.key)) {
       event.preventDefault();
       bridge.closeBubble();

@@ -485,6 +485,7 @@ export class Monitor extends EventEmitter {
   // 保存偏好后重置计时器，使刷新频率立即生效。
   async saveSettings(value) {
     this.settings = await this.settingsStore.save(value);
+    if (this.stopped) return this.settings;
     clearInterval(this.scanTimer);
     this.scanTimer = setInterval(() => {
       if (!this.scanning) this.worker.postMessage({ type: 'scan' });
@@ -529,6 +530,7 @@ export class Monitor extends EventEmitter {
       clearTimeout(timer);
     for (const c of this.controllers) c.abort();
     this.native?.kill();
+    await this.settingsStore.flush().catch((error) => console.error('退出前保存偏好失败：', error.message));
     await this.saveCache().catch(() => {});
     for (const p of this.pending.values()) p.reject(new Error('应用正在退出'));
     this.pending.clear();

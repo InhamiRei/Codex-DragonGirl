@@ -16,9 +16,10 @@ const DASHBOARD_URL = 'dragon://app/src/renderer/dashboard.html';
 // 总览窗口统一管理 N 个采集源，桌宠窗口只负责各自展示和交互。
 export class Dashboard {
   // 绑定主角色、采集器和经过来源校验的界面命令。
-  constructor(monitor, primary) {
+  constructor(monitor, primary, startup = null) {
     this.monitor = monitor;
     this.primary = primary;
+    this.startup = startup;
     this.pets = new Map();
     this.assetDirectory = path.join(monitor.directory, 'assets');
     this.bundledAudioDirectory = path.join(ROOT, 'assets/audio');
@@ -74,6 +75,7 @@ export class Dashboard {
   }
   // 设置与详情需要可聚焦的正常窗口，不改变桌宠的鼠标穿透策略。
   async open() {
+    this.startup?.retain();
     if (this.window && !this.window.isDestroyed()) {
       this.window.show();
       this.window.focus();
@@ -207,6 +209,7 @@ export class Dashboard {
           const i = this.latest.instances.find((i) => i.home === process.home);
           const pet = new Companion(path.join(this.monitor.directory, 'pets', i.id), {
             secondary: true,
+            initiallySuppressed: true,
             delegate: this.delegate,
           });
           pet.instanceId = i.id;
@@ -267,7 +270,8 @@ export class Dashboard {
   // 跟随模式中的拖拽保存窗口内相对锚点，屏幕缩放不会破坏用户意图。
   onDrag(pet) {
     const frame = pet.followTarget;
-    if (this.monitor.settings.mode !== 'follow' || !frame || !pet.home) return;
+    if (this.monitor.stopped || this.monitor.settings.mode !== 'follow' || !frame || !pet.home) return;
+    const home = pet.home;
     const x = Math.max(
         0,
         Math.min(1, (pet.character.x - frame.x) / Math.max(1, frame.width - pet.character.width)),
@@ -277,10 +281,10 @@ export class Dashboard {
         Math.min(1, (pet.character.y - frame.y) / Math.max(1, frame.height - pet.character.height)),
       );
     void this.monitor
-      .saveSettings({
-        ...this.monitor.settings,
-        followOffsets: { ...this.monitor.settings.followOffsets, [pet.home]: { x, y } },
-      })
+      .saveSettings((current) => ({
+        ...current,
+        followOffsets: { ...current.followOffsets, [home]: { x, y } },
+      }))
       .catch(() => {
         this.monitor.nativeError = '跟随位置暂未保存，请检查应用数据目录';
         this.monitor.publish();
@@ -383,6 +387,7 @@ export class Dashboard {
     if (command === 'test-retry') return this.tests.retry(value || {});
     if (command === 'test-export') return this.exportTest(value || {});
     if (command === 'default-settings') return normalizeSettings();
+    if (command === 'startup-status') return this.startup?.snapshot() || { message: '' };
     if (command === 'normalize-settings') return normalizeSettings(value);
     if (command === 'snapshot') return { ...this.monitor.snapshot(), appearance: this.primary.state };
     if (command === 'refresh') return this.monitor.refreshAll();
@@ -395,10 +400,13 @@ export class Dashboard {
       this.monitor.requestPermission();
       return true;
     }
-    if (command === 'settings') {
-      const settings = await this.monitor.saveSettings(value);
-      if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
-      return settings;
+    if (command === 'settings' || command === 'replace-settings') {
+      // 普通表单只能修改偏好；位置以排队写入时的最新值为准，导入或恢复默认才替换位置。
+      const persist = (settings) => this.monitor.saveSettings(command === 'replace-settings'
+        ? settings : (current) => ({ ...settings, followOffsets: current.followOffsets }));
+      return this.startup
+        ? this.startup.save(value, persist)
+        : persist(value);
     }
     if (command === 'appearance') {
       if (Number.isFinite(value?.scale))

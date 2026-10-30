@@ -332,6 +332,8 @@ try {
   assert.deepEqual([plusBubble.card.width, plusBubble.card.height], [usageBubble.card.width, usageBubble.card.height], '双额度改变了固定轮廓。');
   assert.equal(plusBubble.textOutside, false, '双额度文字超出椭圆轮廓。');
   assert.ok(plusBubble.scrollWidth <= plusBubble.clientWidth + 1, '双额度出现横向溢出。');
+  assert.ok(plusBubble.scrollHeight <= plusBubble.clientHeight + 1, '普通双额度不应裁切或需要滚动。');
+  assert.equal(await bubble.locator('#bubble-content').evaluate((pane) => getComputedStyle(pane).scrollbarWidth), 'none');
   const plusLayout = await bubble.evaluate(() => {
     const header = document.querySelector('.bubble-header').getBoundingClientRect();
     const rows = [...document.querySelectorAll('.quota-heading')].map((node) => node.getBoundingClientRect());
@@ -409,8 +411,17 @@ try {
   assert.deepEqual((await snapshot()).state, beforeCancel.state);
   console.log('✓ 取消拖动恢复原位且不写入异常位置。');
 
-  // 自由摆放后改变尺寸，底边应保持固定，并在退出前完整写入磁盘。
-  await dragTo(workArea.x + workArea.width * 0.4, workArea.y + workArea.height * 0.5);
+  // 缩放恢复单独建立确定的拖动提交，避免上一段 CDP 取消事件干扰此处的位置前提。
+  await application.evaluate(() => {
+    const companion = globalThis.__dragonGirlTest;
+    companion.cancelGesture();
+    const rect = { ...companion.character }, area = companion.display.workArea;
+    const start = { x: rect.x + 20, y: rect.y + 20 };
+    const end = { x: start.x + area.x + area.width * 0.4 - rect.x, y: start.y + area.y + area.height * 0.5 - rect.y };
+    companion.gesture.begin(start, rect);
+    companion.moveGesture(end);
+    companion.endGesture(end);
+  });
   const beforeScale = await snapshot();
   await application.evaluate(() => globalThis.__dragonGirlTest.setScale(1.25));
   const resized = await snapshot();

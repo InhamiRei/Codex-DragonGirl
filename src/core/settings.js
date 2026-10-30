@@ -43,6 +43,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   currency: 'USD',
   exchangeRate: 7,
   timezone: 'Asia/Shanghai',
+  startupMode: 'manual',
   launchAtLogin: false,
   retentionDays: 0,
 });
@@ -69,6 +70,10 @@ export function normalizeSettings(value = {}) {
     'launchAtLogin',
   ])
     if (typeof v[key] === 'boolean') d[key] = v[key];
+  // 旧版登录自启只迁移到原来的行为，不替用户开启新的 Codex 联动。
+  d.startupMode = ['manual', 'login', 'codex'].includes(v.startupMode)
+    ? v.startupMode : v.launchAtLogin === true ? 'login' : 'manual';
+  d.launchAtLogin = d.startupMode === 'login';
   for (const [key, low, high] of [
     ['refreshSeconds', 30, 3600],
     ['scanSeconds', 5, 300],
@@ -195,18 +200,26 @@ export class SettingsStore {
     }
     return this.value;
   }
-  // 仅保存校验过的本应用设置。
-  async save(value) {
-    const next = normalizeSettings(value);
-    this.queue = this.queue
+  // 普通设置提前复制，局部更新则在队列中读取最新值，防止拖动与表单保存互相覆盖。
+  save(value) {
+    const snapshot = typeof value === 'function' ? null : normalizeSettings(value);
+    const operation = this.queue
       .catch(() => {})
       .then(async () => {
+        const next = typeof value === 'function'
+          ? normalizeSettings(value(structuredClone(this.value))) : snapshot;
         await fs.mkdir(path.dirname(this.file), { recursive: true });
         await fs.writeFile(this.file + '.tmp', JSON.stringify(next, null, 2), { mode: 0o600 });
         await fs.rename(this.file + '.tmp', this.file);
         this.value = next;
+        return next;
       });
+    this.queue = operation;
+    return operation;
+  }
+
+  // 退出必须等待窗口锚点和偏好的全部排队写入，不依赖磁盘通常足够快。
+  async flush() {
     await this.queue;
-    return next;
   }
 }

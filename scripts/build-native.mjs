@@ -24,4 +24,15 @@ const result = spawnSync(command, args,
   { stdio: 'inherit', windowsHide: true, env: { ...process.env, ...(process.platform === 'darwin' ? { DEVELOPER_DIR: '/Library/Developer/CommandLineTools' } : {}) } },
 );
 if (result.status !== 0) process.exit(result.status || 1);
-console.log('原生实例与窗口桥编译完成。');
+// 启动助手是独立小程序；Windows 使用图形子系统，登录时不会弹出终端。
+const startupArgs = process.platform === 'win32'
+  ? ['/nologo', '/optimize+', '/target:winexe', '/platform:x64', '/reference:System.Web.Extensions.dll',
+    `/out:${path.join(root, 'native/bin/dragongirl-startup.exe')}`, path.join(root, 'native/DragonStartup.cs')]
+  : ['swiftc', '-O', '-target', 'arm64-apple-macosx15.0', '-module-cache-path', path.join(os.tmpdir(), 'dragongirl-swift-cache'),
+    path.join(root, 'native/DragonStartup.swift'), '-o', path.join(root, 'native/bin/dragongirl-startup')];
+const startup = spawnSync(command, startupArgs, {
+  stdio: 'inherit', windowsHide: true,
+  env: { ...process.env, ...(process.platform === 'darwin' ? { DEVELOPER_DIR: '/Library/Developer/CommandLineTools' } : {}) },
+});
+if (startup.status !== 0) process.exit(startup.status || 1);
+console.log('原生窗口桥与启动助手编译完成。');

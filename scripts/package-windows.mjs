@@ -31,6 +31,7 @@ for (const file of ['README.md', 'CHANGELOG.md'])
   await fs.copyFile(path.join(root, file), path.join(application, file));
 await fs.mkdir(path.join(application, 'native/bin'), { recursive: true });
 await fs.copyFile(native, path.join(application, 'native/bin/dragongirl-native.exe'));
+await fs.copyFile(path.join(root, 'native/bin/dragongirl-startup.exe'), path.join(application, 'native/bin/dragongirl-startup.exe'));
 const runtimePackage = { ...pkg };
 delete runtimePackage.scripts;
 delete runtimePackage.devDependencies;

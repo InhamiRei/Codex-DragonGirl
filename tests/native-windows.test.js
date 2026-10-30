@@ -40,6 +40,9 @@ test('Windows 原生桥读取窗口并仅公开环境白名单', { skip: process
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   assert.ok(row, '未发现测试进程');
+  const startupProbe = spawnSync(path.join(root, 'native/bin/dragongirl-startup.exe'), ['--probe'], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(startupProbe.status, 0, startupProbe.stderr);
+  assert.ok(JSON.parse(startupProbe.stdout).hosts.some((host) => host.startsWith(`${child.pid}:`)), '启动助手未识别最小化的桌面宿主');
   // Windows 可能展开 8.3 短路径，按实际目录比较账户归属。
   assert.equal((await fs.realpath(row.home)).toLowerCase(), (await fs.realpath(home)).toLowerCase());
   assert.equal(row.coordinateSpace, 'physical');

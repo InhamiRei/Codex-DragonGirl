@@ -54,6 +54,9 @@ test('macOS 文件夹面板隐藏跟随，关闭、移动及最小化后正确�
     return process?.windows.length === 1 && process;
   }, '未发现自建 macOS 主窗口，请在桌面会话运行测试');
   assert.equal(initial.platform, 'darwin');
+  const startupProbe = spawnSync(path.join(root, 'native/bin/dragongirl-startup'), ['--probe'], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(startupProbe.status, 0, startupProbe.stderr);
+  assert.ok(JSON.parse(startupProbe.stdout).hosts.some((host) => host.startsWith(`${child.pid}:`)), '启动助手未识别真实桌面宿主');
   const main = followWindowFrame(initial);
   assert.ok(main);
   await fs.writeFile(path.join(directory, 'command'), 'open');

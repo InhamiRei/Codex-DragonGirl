@@ -37,7 +37,7 @@ export class Companion {
   static registry = new Set();
   static ipcRegistered = false;
   // 所有运行数据都留在本应用目录，测试时可以完全隔离。
-  constructor(dataDirectory, { testMode = false, secondary = false, delegate = null } = {}) {
+  constructor(dataDirectory, { testMode = false, secondary = false, delegate = null, initiallySuppressed = false } = {}) {
     this.secondary = secondary;
     this.delegate = delegate;
     this.appearance = {};
@@ -50,6 +50,7 @@ export class Companion {
     this.ready = new Set();
     this.character = null;
     this.visible = true;
+    this.suppressedByFollow = initiallySuppressed;
     this.bubbleVisible = false;
     this.lineIndex = 0;
     this.bubbleKind = null;
@@ -199,7 +200,7 @@ export class Companion {
         const c = locate(event, view);
         if (!c) continue;
         c.ready.add(view);
-        if (view === 'character' && c.visible) {
+        if (view === 'character' && c.visible && !c.suppressedByFollow) {
           c.windows.get(view).showInactive();
           // macOS 首次显示可能收回屏幕边缘的透明边距，重新发送实际坐标以保持气泡与可见角色对齐。
           c.windows.get(view).webContents.send('dg:layout', c.characterModel());

@@ -66,6 +66,7 @@ const env = {
 };
 delete env.ELECTRON_RUN_AS_NODE;
 let application, page;
+let processExit = null, stderrTail = '';
 const errors = [];
 // 等待明确状态条件，失败时报告最接近用户观察的现象。
 async function until(check, message, timeout = 20000) {
@@ -305,8 +306,11 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   await page.evaluate(() => { document.getElementById('toast').hidden = true; });
   await page.locator('.activity-panel').scrollIntoViewIfNeeded();
   const cell = page.locator('.activity-cell[data-day="2026-01-01"]');
-  await cell.hover();
-  await until(() => page.locator('#chart-tooltip').isVisible(), '热力图悬停未显示提示');
+  // 后台刷新可能替换节点，重新定位并实际悬停后验证当前提示。
+  await until(async () => {
+    await cell.hover();
+    return page.locator('#chart-tooltip').isVisible();
+  }, '热力图悬停未显示提示');
   assert.match(await page.locator('#chart-tooltip').textContent(), /2026-01-01\n100 Tokens/);
   await page.screenshot({ animations: 'disabled', path: path.join(root, '.artifacts/usage-heatmap.png') });
   await page.locator('[data-activity-mode="weekly"]').click();
@@ -354,6 +358,9 @@ try {
     timeout: 30000,
   });
   application.on('window', (p) => p.on('pageerror', (e) => errors.push(e.message)));
+  // 保留测试进程退出原因，区分页面关闭、运行时崩溃与普通断言失败。
+  application.process().once('exit', (code, signal) => { processExit = { code, signal }; });
+  application.process().stderr?.on('data', (data) => { stderrTail = (stderrTail + data).slice(-5000); });
   await until(
     () => application.evaluate(() => !!globalThis.__dragonGirlApp?.dashboard.window),
     '总览未启动',
@@ -731,7 +738,7 @@ try {
   });
   await until(() => bubble.locator('.quota').count().then((count) => count === 3), '多桶额度未完整显示');
   assert.deepEqual(await bubble.locator('.quota-value').allTextContents(), ['<1%', '0%', '100%']);
-  assert.deepEqual(await bubble.locator('.quota-label').allTextContents(), ['Codex · 5 小时 · 剩余', 'Codex · 周额度 · 剩余', '研究 · 周额度 · 剩余']);
+  assert.deepEqual(await bubble.locator('.quota-label').allTextContents(), ['Codex · 5 小时剩余', 'Codex · 周额度剩余', '研究 · 周额度剩余']);
   assert.equal(await bubble.locator('.quota[data-low="true"]').count(), 2);
   await application.evaluate(() => {
     const a = globalThis.__dragonGirlApp;
@@ -920,7 +927,12 @@ try {
       description: element.getAttribute('aria-describedby'),
     })),
   })).catch(() => null);
-  await fs.writeFile(path.join(root, '.artifacts/app-failure.json'), JSON.stringify({ error: error.message, details }, null, 2));
+  const lifecycle = await application?.evaluate(() => ({
+    managed: globalThis.__dragonGirlApp?.startup.managed,
+    hostExit: globalThis.__dragonGirlApp?.startup.hostExit,
+    dashboardDestroyed: globalThis.__dragonGirlApp?.dashboard.window?.isDestroyed(),
+  })).catch(() => null);
+  await fs.writeFile(path.join(root, '.artifacts/app-failure.json'), JSON.stringify({ error: error.message, details, lifecycle, processExit, stderrTail }, null, 2));
   throw error;
 } finally {
   await application?.close().catch(() => {});

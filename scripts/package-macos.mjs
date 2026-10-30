@@ -39,6 +39,7 @@ await fs.copyFile(
   path.join(root, 'native/bin/dragongirl-native'),
   path.join(application, 'native/bin/dragongirl-native'),
 );
+await fs.copyFile(path.join(root, 'native/bin/dragongirl-startup'), path.join(application, 'native/bin/dragongirl-startup'));
 await fs.mkdir(path.join(application, 'scripts'), { recursive: true });
 await fs.copyFile(
   path.join(root, 'scripts/native-harness.mjs'),

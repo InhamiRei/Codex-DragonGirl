@@ -44,6 +44,9 @@ try {
   await compareFolder('src', code);
   await compareFolder('assets', code);
   await compareFolder('docs', code);
+  for (const binary of ['dragongirl-native', 'dragongirl-startup'])
+    if (!(await fs.readFile(path.join(root, 'native/bin', binary))).equals(await fs.readFile(path.join(code, 'native/bin', binary))))
+      throw new Error(`原生组件过期：${binary}`);
   // 说明和版本信息也必须来自当前源码，避免文档修改后误用旧包。
   for (const file of ['README.md', 'CHANGELOG.md'])
     if (!(await fs.readFile(path.join(root, file))).equals(await fs.readFile(path.join(code, file))))
@@ -76,6 +79,18 @@ try {
     DRAGONGIRL_TEST_EXECUTABLE: exe,
   });
   console.log(text.trim());
+  console.log(run(process.execPath, [path.join(root, 'scripts/startup-smoke.mjs')], {
+    ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
+  }).trim());
+  console.log(run(process.execPath, [path.join(root, 'scripts/startup-open-smoke.mjs')], {
+    ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
+  }).trim());
+  console.log(run(process.execPath, [path.join(root, 'scripts/position-smoke.mjs')], {
+    ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
+  }).trim());
+  console.log(run(process.execPath, [path.join(root, 'scripts/bubble-smoke.mjs')], {
+    ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
+  }).trim());
   const result = {
     passed: true,
     version: manifest.version,
@@ -89,6 +104,9 @@ try {
       'Applications 安装入口',
       '脱离工程目录启动',
       '五实例完整界面测试',
+      '原生启动助手完整性与静默联动入口',
+      '位置保存与重启恢复、内置音效离线可用',
+      '四档显示比例下双额度完整且无原生滚动条',
     ],
   };
   await fs.writeFile(

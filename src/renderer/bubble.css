@@ -6,7 +6,8 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .outline path { fill: var(--paper); stroke: var(--ink); stroke-width: 3.5; stroke-linejoin: round; pointer-events: visiblePainted; }
 .bubble { position: absolute; z-index: 1; top: 8px; left: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; width: calc(var(--max-width) - 16px); height: calc(var(--max-height) - 42px); margin: 0; padding: 18px 24px; border: 3px solid transparent; border-radius: 50%; color: var(--text); cursor: pointer; visibility: hidden; }
 .bubble * { font-family: inherit; font-weight: inherit; }
-.bubble-content { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 1 auto; width: 160px; max-width: 100%; max-height: 100%; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #d5c8e8 transparent; }
+.bubble-content { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 1 auto; width: 160px; max-width: 100%; max-height: 100%; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: none; }
+.bubble-content::-webkit-scrollbar { display: none; width: 0; height: 0; }
 body[data-layout="text"] .bubble-content, body[data-compact="true"] .bubble-content { max-height: min(84px, 100%); }
 .bubble-header { display: none; align-items: baseline; justify-content: center; flex-wrap: wrap; gap: 6px; flex-shrink: 0; max-width: 100%; font-size: 14px; line-height: 1.35; text-align: center; }
 body[data-layout="usage"] .bubble-header { display: flex; }

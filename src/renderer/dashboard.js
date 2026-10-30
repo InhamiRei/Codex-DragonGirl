@@ -16,6 +16,7 @@ let state,
   filter = {},
   toastTimer,
   dirty = false,
+  replaceSettings = false,
   reportLoading = false,
   reportRequest = 0,
   threadPage = 1,
@@ -701,6 +702,7 @@ function renderThreads() {
 function fillSettings(settings) {
   draft = structuredClone(settings);
   dirty = false;
+  replaceSettings = false;
   const form = $('#settings-form');
   for (const [key, value] of Object.entries(draft)) {
     const field = form.elements.namedItem(key);
@@ -722,12 +724,19 @@ function fillSettings(settings) {
     : '跟随异常时可检查权限，统计功能仍可使用。';
   renderSoundSettings();
   void refreshAudioStatus();
+  void refreshStartupStatus();
   renderInstanceSettings();
   renderPrices();
   syncSelects(form);
   for (const range of form.querySelectorAll('input[type=range]')) updateRange(range);
   $('#dirty-hint').textContent = '更改将在保存后生效';
   $('#dirty-hint').dataset.dirty = 'false';
+}
+// 启动状态单独读取，查看设置不会更改系统登录项。
+async function refreshStartupStatus() {
+  const status = await call('startup-status');
+  $('#startup-status').textContent = status.message;
+  if (status.pending) setTimeout(() => void refreshStartupStatus(), 2000);
 }
 // 读取控件只修改草稿，不变更后台采集器。
 function readDraft() {
@@ -984,7 +993,7 @@ async function start() {
     event.preventDefault();
     $('#save-settings').disabled = true;
     try {
-      const settings = await call('settings', readDraft());
+      const settings = await call(replaceSettings ? 'replace-settings' : 'settings', readDraft());
       appearance = await call('appearance', {
         scale: Number($('#settings-form').elements.scale.value),
         snapEnabled: $('#settings-form').elements.snapEnabled.checked,
@@ -1000,6 +1009,7 @@ async function start() {
   action('#cancel-settings', () => fillSettings(state.settings));
   action('#reset-settings', async () => {
     fillSettings(await call('default-settings'));
+    replaceSettings = true;
     markDirty();
     $('#dirty-hint').textContent = '已恢复默认草稿，保存后生效';
   });
@@ -1064,6 +1074,7 @@ async function start() {
     if (imported) {
       const clean = await call('normalize-settings', imported);
       fillSettings(clean);
+      replaceSettings = true;
       markDirty();
       toast('设置已载入草稿，检查后保存');
     }

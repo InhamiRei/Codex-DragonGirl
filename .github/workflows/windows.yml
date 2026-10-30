@@ -32,6 +32,15 @@ jobs:
       - name: 验证桌面应用
         run: npm run test:windows
         timeout-minutes: 3
+      - name: 验证静默启动与 Codex 联动
+        run: npm run test:startup
+        timeout-minutes: 3
+      - name: 验证位置和音效重启恢复
+        run: npm run test:position
+        timeout-minutes: 3
+      - name: 验证气泡缩放与原生滚动条
+        run: npm run test:bubble
+        timeout-minutes: 3
       - name: 验证账号测智界面与本地协议
         run: npm run test:accounts
         timeout-minutes: 3
@@ -47,4 +56,13 @@ jobs:
             output/release-manifest-Windows-x64.json
             output/verification-Windows-x64.json
           if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Windows-bubble-validation
+          path: |
+            .artifacts/bubble-scrollbar-*.png
+            .artifacts/bubble-scrollbar-report.json
+          if-no-files-found: ignore
           retention-days: 14

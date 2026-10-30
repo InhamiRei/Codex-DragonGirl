@@ -8,6 +8,9 @@ import { resolveResourcePath } from './resources.js';
 import { createLaunchReporter } from './launcher-status.js';
 import { resolveAudioPath } from '../core/audio-library-store.js';
 import { accountTestPreview } from './test-preview.js';
+import { StartupController } from './startup.js';
+import { startupReason } from '../core/startup-policy.js';
+import { SettingsStore } from '../core/settings.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const testMode = process.env.DRAGONGIRL_TEST === '1';
@@ -23,7 +26,7 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'dragon', privileges: { standard: true, secure: true, supportFetchAPI: true } },
   { scheme: 'dragon-preview', privileges: { standard: true, secure: true } },
 ]);
-let companion, monitor, dashboard;
+let companion, monitor, dashboard, startup;
 let quitAfterSave = false,
   closing = false;
 const hasLock = app.requestSingleInstanceLock();
@@ -32,27 +35,35 @@ if (!hasLock) {
   void reportLaunch('ready').finally(() => app.quit());
 } else {
   // 重复启动只叫出已有角色，不创建两份叠在一起的桌宠。
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    if (startupReason(argv) !== 'manual' || closing) return;
+    startup?.retain();
     if (!companion?.stopping) companion?.show();
+    void dashboard?.open();
   });
   app.on('activate', () => {
+    if (!dashboard || closing) return;
+    startup?.retain();
     if (!companion?.stopping) companion?.show();
   });
   app.on('window-all-closed', () => {});
 
   // 显式等待异步配置写入结束，拖动后立刻退出仍可正确恢复位置。
   app.on('before-quit', (event) => {
-    if (quitAfterSave || !companion) return;
+    if (quitAfterSave || !startup) return;
     event.preventDefault();
-    if (closing || companion.stopping) return;
+    if (closing) return;
     closing = true;
     void (async () => {
+      await startup.prepareQuit().catch((error) => console.error('暂停自动启动失败：', error.message));
       await dashboard?.stop();
       await monitor?.stop();
-      await companion.stop();
+      await companion?.stop();
     })().finally(() => {
-      quitAfterSave = true;
-      app.quit();
+      void startup.stop().finally(() => {
+        quitAfterSave = true;
+        app.quit();
+      });
     });
   });
 
@@ -96,17 +107,26 @@ if (!hasLock) {
         return new Response(source.body, { status: source.status, headers });
       });
       app.dock?.hide();
-      companion = new Companion(app.getPath('userData'), { testMode });
+      const initialSettings = await new SettingsStore(app.getPath('userData')).load();
+      startup = new StartupController({ app, root: ROOT, directory: app.getPath('userData'), testMode });
+      if (!(await startup.start(initialSettings))) {
+        startup.hostExit = true;
+        app.quit();
+        return;
+      }
+      companion = new Companion(app.getPath('userData'), {
+        testMode, initiallySuppressed: startup.reason !== 'manual' && initialSettings.mode === 'follow',
+      });
       if (testMode) globalThis.__dragonGirlTest = companion;
       await companion.start();
       if (!testMode || process.env.DRAGONGIRL_MONITOR_TEST === '1') {
         monitor = new Monitor(app.getPath('userData'), {
           testMode: testMode && process.env.DRAGONGIRL_LIVE_VERIFY !== '1',
         });
-        dashboard = new Dashboard(monitor, companion);
-        globalThis.__dragonGirlApp = { monitor, dashboard, companion };
+        dashboard = new Dashboard(monitor, companion, startup);
+        globalThis.__dragonGirlApp = { monitor, dashboard, companion, startup };
         await monitor.start();
-        await dashboard.open();
+        if (startup.reason === 'manual') await dashboard.open();
       }
       await reportLaunch('ready');
       // 原生实点验收必须同时具备测试标记、显式参数和独立报告路径。
@@ -123,7 +143,7 @@ if (!hasLock) {
       console.error(error);
       // 应用启动器负责显示握手错误；命令行直接启动时保留 Electron 原生错误框。
       const reported = await reportLaunch('error', error.message);
-      if (!reported) dialog.showErrorBox('龙娘暂时没能启动', error.message);
+      if (!reported && startupReason(process.argv) === 'manual') dialog.showErrorBox('龙娘暂时没能启动', error.message);
       app.quit();
     });
 }

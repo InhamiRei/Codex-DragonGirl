@@ -382,17 +382,16 @@
                   </div>
                   <div class="setting-row">
                     <div class="setting-copy">
-                      <label for="launch-login">随系统启动</label>
-                      <p>登录电脑后自动打开龙娘。</p>
+                      <label for="startup-mode">启动方式</label>
+                      <p>随 Codex 启动时自动出现，完全退出 Codex 后收起；自动启动不弹管理窗口。</p>
+                      <p id="startup-status" role="status"></p>
                     </div>
                     <div class="setting-control">
-                      <input
-                        id="launch-login"
-                        name="launchAtLogin"
-                        type="checkbox"
-                        class="switch"
-                        role="switch"
-                      />
+                      <select id="startup-mode" name="startupMode">
+                        <option value="manual">手动启动</option>
+                        <option value="login">登录电脑时启动</option>
+                        <option value="codex">随 Codex 启动</option>
+                      </select>
                     </div>
                   </div>
                   <div class="setting-row">
