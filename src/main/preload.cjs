@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld(
   Object.freeze({
     command: (command, value) => ipcRenderer.invoke('dg:command', command, value),
     onMonitor: (listener) => subscribe('dg:monitor', listener),
+    onAccountTests: (listener) => subscribe('dg:account-tests', listener),
     onSound: (listener) => subscribe('dg:sound', listener),
     onAudioReady: (listener) => subscribe('dg:audio-ready', listener),
     bootstrap: () => ipcRenderer.invoke('dg:bootstrap'),

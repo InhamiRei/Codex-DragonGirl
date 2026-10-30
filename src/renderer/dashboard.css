@@ -199,13 +199,20 @@ label,
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 4px 30px;
+  gap: 10px;
+  padding: 0 0 20px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
 }
 .brand-logo {
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  padding: 4px;
+  border: 1px solid #e2d9f0;
+  border-radius: 13px;
+  background: linear-gradient(145deg, #f4f0fb, #e7def6);
+  box-shadow: 0 3px 10px #7561ad12;
   object-fit: contain;
 }
 .brand strong {

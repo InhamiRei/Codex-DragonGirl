@@ -126,7 +126,7 @@ async function verifyLayout() {
       const scroll = document.getElementById('content-scroll');
       return { nav, rows, overflow: scroll.scrollWidth > scroll.clientWidth + 1 };
     });
-    assert.equal(geometry.nav.length, 3);
+    assert.equal(geometry.nav.length, 4);
     assert.ok(
       geometry.nav.every((r) => r.height === 44 && r.textX === geometry.nav[0].textX),
       '导航文字或高度没有对齐',
@@ -599,6 +599,52 @@ try {
     ...globalThis.__dragonGirlApp.companion.character,
   }));
   assert.equal(after.x - before.x, 80);
+  // 文件夹面板必须同时收起角色和气泡，释放输入，并且不影响其他实例的角色。
+  const modalState = await application.evaluate(() => {
+    const { monitor, companion, dashboard } = globalThis.__dragonGirlApp;
+    const runtime = monitor.processes[0];
+    globalThis.__followMain = { ...runtime.windows[0], id: 100 };
+    companion.showBubble('文件夹选择前的气泡', 'speech');
+    companion.gesture.begin({ x: companion.character.x + 10, y: companion.character.y + 10 }, companion.character);
+    companion.setInteractive('character', true);
+    runtime.platform = 'darwin';
+    runtime.modalOpen = true;
+    runtime.windows = [{ id: 101, x: 160, y: 180, width: 640, height: 448 }, globalThis.__followMain];
+    monitor.emit('windows', {});
+    companion.notify('complete', '选择框打开时的新通知');
+    return {
+      character: companion.windows.get('character').isVisible(),
+      bubble: companion.windows.get('bubble').isVisible(),
+      active: !!companion.gesture.active,
+      interactive: companion.interactive.get('character'),
+      visible: companion.visible,
+      others: [...dashboard.pets.values()].every((pet) => pet.windows.get('character').isVisible()),
+    };
+  });
+  assert.deepEqual(modalState, { character: false, bubble: false, active: false, interactive: false, visible: true, others: true });
+  const restored = await application.evaluate(() => {
+    const { monitor, companion } = globalThis.__dragonGirlApp;
+    monitor.processes[0].windows = [globalThis.__followMain];
+    monitor.processes[0].modalOpen = false;
+    monitor.emit('windows', {});
+    return { visible: companion.windows.get('character').isVisible(), character: { ...companion.character } };
+  });
+  assert.equal(restored.visible, true);
+  assert.deepEqual(restored.character, after, '关闭选择框后改变了原来的跟随位置');
+  // 用户主动隐藏的角色不能因关闭系统面板重新弹出。
+  const staysHidden = await application.evaluate(() => {
+    const { monitor, companion } = globalThis.__dragonGirlApp;
+    companion.hide();
+    monitor.processes[0].modalOpen = true;
+    monitor.emit('windows', {});
+    monitor.processes[0].modalOpen = false;
+    monitor.emit('windows', {});
+    const hidden = !companion.visible && !companion.windows.get('character').isVisible();
+    companion.show();
+    delete globalThis.__followMain;
+    return hidden;
+  });
+  assert.equal(staysHidden, true);
   await application.evaluate(() => {
     const a = globalThis.__dragonGirlApp;
     a.monitor.processes[0].windows = [];
@@ -808,7 +854,7 @@ try {
     animations: 'disabled',
     path: path.join(root, '.artifacts/model-prices.png'),
   });
-  assert.equal(await page.locator('.main-nav button').count(), 3);
+  assert.equal(await page.locator('.main-nav button').count(), 4);
   assert.doesNotMatch(
     await page.locator('body').innerText(),
     /YOUR CODEX|CODEX COMPANION|Standard|Ultrafast|PROLITE|tokens|USD|词元/,
@@ -842,6 +888,8 @@ try {
           '筛选 CSV 导出',
           '五角色隔离',
           '窗口随动',
+          '系统面板隐藏角色和气泡、释放输入并恢复原位置',
+          '关闭面板保留用户主动隐藏与其他实例显示状态',
           '隐藏恢复',
           '资源释放',
           '三个主要页面',

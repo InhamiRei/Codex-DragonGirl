@@ -1,8 +1,9 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
-// 原生桥只读取进程目录、有限网络环境及窗口几何，不截屏、不读取凭据。
+// 原生桥只读取进程目录、有限网络环境、窗口类型及几何，不截屏、不读取凭据。
 struct ProcessInfoRow {
     let pid: pid_t
     let appPath: String
@@ -14,6 +15,61 @@ let permittedEnvironment = ["CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROX
 var cachedProcesses: [pid_t: ProcessInfoRow] = [:]
 var lastDiscovery = Date.distantPast
 var lastOutput = ""
+var cachedModality: [pid_t: (geometry: String, modal: Bool?, checkedAt: Date)] = [:]
+
+// 只读取窗口级类型和模态标记，不读取标题、正文或控件值，也不主动请求辅助功能权限。
+func windowAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+    return value
+}
+
+// 使用公开位置与尺寸匹配屏幕上的窗口，不把其他桌面或最小化窗口的弹窗算进来。
+func accessibilityWindowFrame(_ window: AXUIElement) -> CGRect? {
+    guard let position = windowAttribute(window, kAXPositionAttribute), CFGetTypeID(position) == AXValueGetTypeID(),
+          let size = windowAttribute(window, kAXSizeAttribute), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+    var point = CGPoint.zero, dimensions = CGSize.zero
+    guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &dimensions) else { return nil }
+    return CGRect(origin: point, size: dimensions)
+}
+
+// 系统文件面板可能直接是模态窗口，也可能作为主窗口的 sheet 子节点出现。
+func modalWindowState(_ pid: pid_t, _ visible: [[String: Any]]) -> Bool? {
+    guard AXIsProcessTrusted() else { return nil }
+    let application = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(application, 0.08)
+    guard let windows = windowAttribute(application, kAXWindowsAttribute) as? [AXUIElement], !windows.isEmpty else { return nil }
+    var complete = true
+    var matched = Set<Int>()
+    for window in windows {
+        guard let rect = accessibilityWindowFrame(window) else { complete = false; continue }
+        guard let index = visible.firstIndex(where: { frame in
+            guard let x = frame["x"] as? CGFloat, let y = frame["y"] as? CGFloat,
+                  let width = frame["width"] as? CGFloat, let height = frame["height"] as? CGFloat else { return false }
+            return abs(rect.minX - x) <= 2 && abs(rect.minY - y) <= 2 && abs(rect.width - width) <= 2 && abs(rect.height - height) <= 2
+        }) else { continue }
+        matched.insert(index)
+        guard let modal = windowAttribute(window, kAXModalAttribute) as? Bool else { complete = false; continue }
+        if modal { return true }
+        guard let children = windowAttribute(window, kAXChildrenAttribute) as? [AXUIElement] else { complete = false; continue }
+        for child in children {
+            guard let role = windowAttribute(child, kAXRoleAttribute) as? String else { complete = false; continue }
+            if role == kAXSheetRole { return true }
+        }
+    }
+    // 新面板已出现在 Quartz、无障碍树却尚未更新时保持未知，让几何兜底立即收起角色。
+    return complete && matched.count == visible.count ? false : nil
+}
+
+// 稳定窗口降低查询频率；定期重试可覆盖面板动画期间无障碍树尚未同步的短暂状态。
+func cachedModalWindowState(_ pid: pid_t, _ windows: [[String: Any]]) -> Bool? {
+    let data = (try? JSONSerialization.data(withJSONObject: windows, options: [.sortedKeys])) ?? Data()
+    let geometry = String(decoding: data, as: UTF8.self) + String(AXIsProcessTrusted())
+    if let cached = cachedModality[pid], cached.geometry == geometry, Date().timeIntervalSince(cached.checkedAt) < 0.5 { return cached.modal }
+    let modal = windows.isEmpty ? false : modalWindowState(pid, windows)
+    cachedModality[pid] = (geometry: geometry, modal: modal, checkedAt: Date())
+    return modal
+}
 
 // 进程环境只解析白名单；完整 ps 输出只存在于本次函数内存。
 func processEnvironment(_ pid: pid_t) -> [String: String] {
@@ -39,6 +95,7 @@ func discoverProcesses() {
     }
     let active = Set(apps.map(\.processIdentifier))
     cachedProcesses = cachedProcesses.filter { active.contains($0.key) }
+    cachedModality = cachedModality.filter { active.contains($0.key) }
     for app in apps where cachedProcesses[app.processIdentifier] == nil {
         let environment = processEnvironment(app.processIdentifier)
         let home = environment["CODEX_HOME"] ?? defaultHome
@@ -60,7 +117,9 @@ func emitSnapshot() {
                   (window[kCGWindowAlpha as String] as? Double ?? 1) > 0.1 else { return nil }
             return ["id": window[kCGWindowNumber as String] ?? 0, "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
         }
-        return ["pid": row.pid, "appPath": row.appPath, "home": row.home, "networkEnv": row.environment, "frontmost": front == row.pid, "windows": visible]
+        var process: [String: Any] = ["pid": row.pid, "appPath": row.appPath, "home": row.home, "networkEnv": row.environment, "frontmost": front == row.pid, "windows": visible, "platform": "darwin"]
+        if let modal = cachedModalWindowState(row.pid, visible) { process["modalOpen"] = modal }
+        return process
     }
     let snapshot: [String: Any] = ["processes": processes, "screenPermission": CGPreflightScreenCaptureAccess()]
     guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]), let output = String(data: data, encoding: .utf8), output != lastOutput else { return }

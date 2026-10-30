@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GPT龙娘 · 用量管理</title>
     <link rel="stylesheet" href="dashboard.css" />
+    <link rel="stylesheet" href="account-tests.css" />
   </head>
   <body>
     <aside class="sidebar">
@@ -24,6 +25,10 @@
         <button data-tab="usage">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18H5zM9 8h6M9 12h6M9 16h4" /></svg
           ><span>用量账本</span>
+        </button>
+        <button data-tab="account-tests">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h8M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M8 15h8" /></svg
+          ><span>账号测智</span>
         </button>
         <button data-tab="settings">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -210,6 +215,50 @@
                   <button id="threads-prev">上一页</button><span id="thread-page" class="hint"></span><button id="threads-next">下一页</button>
                 </div>
               </div>
+            </article>
+          </section>
+          <section id="account-tests" class="view" hidden>
+            <div class="test-toolbar">
+              <nav class="test-tabs" aria-label="账号测智分类">
+                <button type="button" data-test-tab="new" class="selected" aria-current="page">新建测试</button>
+                <button type="button" data-test-tab="history">测试记录</button>
+              </nav>
+              <button type="button" id="test-current" hidden>查看当前测试</button>
+            </div>
+            <div id="test-new">
+              <article class="panel test-form-panel">
+                <form id="test-form">
+                  <fieldset id="test-fields">
+                    <div class="field test-kind-field"><label for="test-kind">测试题目</label><select id="test-kind"><option value="pelican">鹈鹕动画</option><option value="custom">自定义提示词</option></select></div>
+                    <div class="field test-account-field">
+                      <div class="test-field-heading"><label for="test-account-search">测试账号 <span id="test-selection-count" class="hint">0 / 0</span></label><button type="button" id="test-select-all" class="test-small-button">全选</button></div>
+                      <input id="test-account-search" type="search" placeholder="搜索账户总览中的实例" />
+                      <div id="test-accounts" class="test-accounts"></div>
+                    </div>
+                    <div class="test-parameter-grid">
+                      <div class="field"><div class="test-field-heading"><label for="test-model">模型</label><button type="button" id="test-load-models" class="test-small-button">刷新模型</button></div><select id="test-model" disabled><option value="gpt-6-astra">GPT-6 Astra</option></select></div>
+                      <div class="field"><label for="test-effort">思考强度</label><select id="test-effort" disabled><option value="medium">中</option></select></div>
+                      <div class="field"><label for="test-concurrency">并发数</label><select id="test-concurrency"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
+                    </div>
+                    <p id="test-model-status" class="test-error" role="status" hidden></p>
+                    <div class="field test-prompt-field"><div class="test-field-heading"><label for="test-prompt">提示词</label><button type="button" id="test-reset-prompt" class="test-small-button">恢复默认</button></div><textarea id="test-prompt" rows="5" maxlength="20000" required></textarea><span id="test-prompt-count" class="hint"></span></div>
+                  </fieldset>
+                  <div class="test-start-row"><p class="hint">测试会消耗所选账号的额度。</p><button type="submit" id="test-start" class="primary" disabled>开始测试</button></div>
+                </form>
+              </article>
+            </div>
+            <div id="test-history" hidden>
+              <div class="test-history-toolbar"><h2>测试记录</h2><button type="button" id="test-refresh-history">刷新记录</button></div>
+              <div id="test-history-list"></div>
+              <div class="test-history-pagination"><button type="button" id="test-history-prev">上一页</button><span id="test-history-page" class="hint"></span><button type="button" id="test-history-next">下一页</button></div>
+            </div>
+            <article id="test-detail" class="test-detail" hidden>
+              <div class="test-detail-navigation"><button type="button" id="test-back-history">返回测试记录</button><div class="button-group"><button type="button" id="test-export-run">导出记录</button><button type="button" id="test-cancel" hidden>停止测试</button></div></div>
+              <section class="panel test-detail-summary">
+                <div class="test-detail-heading"><div><h2 id="test-detail-title"></h2><p id="test-detail-meta" class="hint"></p></div><span id="test-detail-status" class="test-run-count" role="status" aria-label="测试完成进度"></span></div>
+                <div class="test-saved-prompt"><h3>提示词</h3><p id="test-detail-prompt"></p></div>
+              </section>
+              <div id="test-results" class="test-results"></div>
             </article>
           </section>
           <section id="settings" class="view" hidden>
@@ -769,7 +818,7 @@
               </section>
             </form>
           </section>
-          <footer class="page-footer"><span>GPT龙娘 · 本机用量管理</span><span id="updated"></span></footer>
+          <footer class="page-footer"><span>GPT龙娘</span><span id="updated"></span></footer>
         </div>
       </div>
       <div class="save-bar" id="settings-save-bar" hidden>

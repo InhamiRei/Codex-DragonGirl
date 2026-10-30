@@ -7,6 +7,9 @@ import { randomBytes } from 'node:crypto';
 import { DEFAULT_SETTINGS, normalizeSettings } from '../core/settings.js';
 import { planLabel, instanceLabel } from '../shared/presentation.js';
 import { Companion } from './companion.js';
+import { followWindowFrame } from '../shared/follow-window.js';
+import { AccountTests } from '../core/account-tests.js';
+import { extractTestHtml } from '../shared/account-tests.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const DASHBOARD_URL = 'dragon://app/src/renderer/dashboard.html';
 
@@ -19,6 +22,18 @@ export class Dashboard {
     this.pets = new Map();
     this.assetDirectory = path.join(monitor.directory, 'assets');
     this.bundledAudioDirectory = path.join(ROOT, 'assets/audio');
+    this.tests = new AccountTests(monitor.directory, {
+      getInstances: () => monitor.snapshot().instances,
+      getSettings: () => monitor.settings,
+      getRuntime: (id) => {
+        const instance = monitor.instances.find((item) => item.id === id);
+        const runtime = monitor.processes.find((item) => item.home === instance?.home) || instance?.processes?.[0];
+        return { appPath: runtime?.appPath, networkEnv: runtime?.networkEnv || {} };
+      },
+    });
+    this.tests.on('update', (run) => {
+      if (this.window && !this.window.isDestroyed()) this.window.webContents.send('dg:account-tests', run);
+    });
     this.delegate = {
       openDashboard: () => this.open(),
       refresh: () => void monitor.refreshAll().catch(() => {}),
@@ -82,6 +97,10 @@ export class Dashboard {
     this.window.setMenuBarVisibility(false);
     this.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     this.window.webContents.on('will-navigate', (event) => event.preventDefault());
+    // 生成页面只能在受限预览协议内导航，脚本和链接不能跳到网络或本地文件。
+    this.window.webContents.on('will-frame-navigate', (event) => {
+      if (event.isMainFrame || !event.url.startsWith('dragon-preview://test/')) event.preventDefault();
+    });
     await this.window.loadURL(DASHBOARD_URL);
     this.window.show();
   }
@@ -222,7 +241,7 @@ export class Dashboard {
       this.updating = false;
     }
   }
-  // 窗口最小化或不可见时隐藏关联角色；恢复后自动回到保存的相对位置。
+  // 选择文件等模态弹窗、最小化或不可见时隐藏关联角色；恢复后沿用相对位置。
   follow() {
     const settings = this.monitor.settings;
     if (!settings) return;
@@ -238,7 +257,7 @@ export class Dashboard {
         continue;
       }
       const process = this.monitor.processes.find((p) => p.pid === pet.followPID);
-      let frame = process?.windows?.[0] || null;
+      let frame = followWindowFrame(process);
       // Windows 原生窗口使用物理像素，转换为 Electron 的逻辑坐标后再跟随。
       if (frame && process.coordinateSpace === 'physical' && globalThis.process.platform === 'win32')
         frame = screen.screenToDipRect(null, frame);
@@ -355,6 +374,14 @@ export class Dashboard {
   }
   // 固定命令表只暴露统计和本应用设置，禁止渲染层调用任意命令或修改 Codex 资料。
   async command(command, value) {
+    if (command === 'test-models') return this.tests.models(value);
+    if (command === 'test-start') return this.tests.start(value);
+    if (command === 'test-cancel') return this.tests.cancel(value);
+    if (command === 'test-list') return this.tests.list(value);
+    if (command === 'test-read') return this.tests.read(value);
+    if (command === 'test-delete') return this.tests.remove(value);
+    if (command === 'test-retry') return this.tests.retry(value || {});
+    if (command === 'test-export') return this.exportTest(value || {});
     if (command === 'default-settings') return normalizeSettings();
     if (command === 'normalize-settings') return normalizeSettings(value);
     if (command === 'snapshot') return { ...this.monitor.snapshot(), appearance: this.primary.state };
@@ -476,9 +503,32 @@ export class Dashboard {
   }
   // 退出前关闭所有附属角色，取消后台窗口资源。
   async stop() {
+    await this.tests.stop();
     for (const pet of this.pets.values()) await pet.stop();
     this.pets.clear();
     if (this.window && !this.window.isDestroyed()) this.window.destroy();
     ipcMain.removeHandler('dg:command');
+  }
+
+  // 导出只读取用户选择的测试记录，不包含账号目录、代理和认证信息。
+  async exportTest({ id, instanceId, format = 'json' }) {
+    const run = await this.tests.read(id);
+    const result = run.results.find((item) => item.instanceId === instanceId);
+    if (!['json', 'html', 'text'].includes(format)) throw new Error('不支持的导出格式');
+    let body;
+    if (format === 'json') body = JSON.stringify(run, null, 2);
+    else {
+      if (!result) throw new Error('未找到该账号的测试结果');
+      body = format === 'html' && result.status === 'completed' ? extractTestHtml(result.text) : result.text;
+      if (!body || (format === 'html' && result.status !== 'completed')) throw new Error('没有可导出的完整结果');
+    }
+    const extension = format === 'text' ? 'txt' : format;
+    const choice = await dialog.showSaveDialog(this.window, {
+      defaultPath: `账号测智-${id.slice(0, 8)}.${extension}`,
+      filters: [{ name: format === 'html' ? 'HTML 页面' : format === 'text' ? '文本' : '测试数据', extensions: [extension] }],
+    });
+    if (choice.canceled) return false;
+    await fs.writeFile(choice.filePath, body, { mode: 0o600 });
+    return true;
   }
 }

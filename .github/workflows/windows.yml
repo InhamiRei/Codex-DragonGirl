@@ -32,6 +32,9 @@ jobs:
       - name: 验证桌面应用
         run: npm run test:windows
         timeout-minutes: 3
+      - name: 验证账号测智界面与本地协议
+        run: npm run test:accounts
+        timeout-minutes: 3
       - name: 构建 Windows 便携包
         run: npm run package:win
       - name: 验证解压后的安装包

@@ -7,6 +7,7 @@ import { Companion } from './companion.js';
 import { resolveResourcePath } from './resources.js';
 import { createLaunchReporter } from './launcher-status.js';
 import { resolveAudioPath } from '../core/audio-library-store.js';
+import { accountTestPreview } from './test-preview.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const testMode = process.env.DRAGONGIRL_TEST === '1';
@@ -20,6 +21,7 @@ if (testMode && path.isAbsolute(process.env.DRAGONGIRL_DATA_DIR || ''))
 // 使用本地自定义协议加载模块，页面不能读取主进程源码或任意磁盘文件。
 protocol.registerSchemesAsPrivileged([
   { scheme: 'dragon', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: 'dragon-preview', privileges: { standard: true, secure: true } },
 ]);
 let companion, monitor, dashboard;
 let quitAfterSave = false,
@@ -58,6 +60,8 @@ if (!hasLock) {
   app
     .whenReady()
     .then(async () => {
+      // 生成内容使用独立来源，主页面仍只允许项目脚本，且保留严格的资源白名单。
+      protocol.handle('dragon-preview', (request) => accountTestPreview(request.url, dashboard?.tests));
       protocol.handle('dragon', async (request) => {
         let resolved = resolveResourcePath(ROOT, request.url);
         const userAsset = /^dragon:\/\/app\/user-assets\/([a-f0-9]{32}\.(png|webp|wav|mp3|ogg))$/.exec(
@@ -76,7 +80,7 @@ if (!hasLock) {
         if (userAsset) headers.set('Cache-Control', 'no-store');
         headers.set(
           'Content-Security-Policy',
-          "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'",
+          "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; media-src 'self'; frame-src dragon-preview:; base-uri 'none'; form-action 'none'",
         );
         const types = {
           '.html': 'text/html; charset=utf-8',

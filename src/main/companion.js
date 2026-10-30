@@ -620,7 +620,10 @@ export class Companion {
     this.followTarget = frame;
     this.suppressedByFollow = !frame;
     if (!frame) {
+      // 弹窗或最小化期间同时释放拖拽和鼠标命中，恢复时不改变用户主动隐藏的状态。
+      this.cancelGesture();
       this.hideBubble();
+      this.setInteractive('character', false);
       this.windows.get('character')?.hide();
       return;
     }

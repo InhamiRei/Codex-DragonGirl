@@ -4,6 +4,7 @@ import { planLabel, instanceLabel, originLabel } from '../shared/presentation.js
 import { SoundEngine } from './audio.js';
 import { dayKey, midnight, nextDay } from '../shared/time.js';
 import { activityCalendar, activityLevel } from '../shared/activity.js';
+import { AccountTestsView } from './account-tests.js';
 const bridge = window.dragonGirl,
   sound = new SoundEngine();
 let state,
@@ -23,6 +24,7 @@ let state,
   refreshing = false,
   tooltipTarget;
 const THREAD_PAGE_SIZE = 20;
+let accountTests;
 const $ = (selector) => document.querySelector(selector);
 const names = {
   press: '按下',
@@ -125,6 +127,7 @@ function switchTab(tab) {
   const titles = {
     overview: ['账户总览', '查看各个实例的额度与使用情况。'],
     usage: ['用量账本', '按日期、实例和模型查看本机记录。'],
+    'account-tests': ['账号测智', '统一题目和参数，对比各个账号的回答。'],
     settings: ['偏好设置', '调整显示、声音与统计偏好。'],
   };
   if (!titles[tab]) return;
@@ -144,6 +147,7 @@ function switchTab(tab) {
   $('#subtitle').textContent = titles[tab][1];
   $('#toggle-filter').hidden = tab !== 'usage';
   if (tab === 'usage') void loadReport();
+  if (tab === 'account-tests') void accountTests.open().catch(() => {});
   if (tab === 'settings') {
     if (!draft) fillSettings(state.settings);
     switchSettingsTab(activeSettingsTab);
@@ -510,6 +514,7 @@ function receive(next) {
   state = { ...state, ...next };
   renderOverview();
   renderRefresh();
+  accountTests?.updateAccounts();
   updateSelect(
     '#filter-home',
     state.instances.map((i) => [i.id, instanceLabel(i, state.settings)]),
@@ -865,6 +870,8 @@ function action(id, callback) {
 async function start() {
   enhanceSelects();
   state = await call('snapshot');
+  accountTests = new AccountTestsView({ call, toast, getState: () => state });
+  bridge.onAccountTests((run) => accountTests.receive(run));
   appearance = state.appearance;
   renderOverview();
   receive(state);
