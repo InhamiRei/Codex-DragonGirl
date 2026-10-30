@@ -64,5 +64,6 @@ jobs:
           path: |
             .artifacts/bubble-scrollbar-*.png
             .artifacts/bubble-scrollbar-report.json
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14
