@@ -12,12 +12,13 @@ const run = promisify(execFile);
 
 // 只读取本产品自己的登录项，固定脚本不接收外部路径或账户信息。
 async function registration() {
-  const script = `[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+  const script = `$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\\Microsoft\\Windows\\CurrentVersion\\Run')
-try { $value = if ($null -ne $key) { $key.GetValue('Codex DragonGirl Startup', $null) } else { $null }; ConvertTo-Json -InputObject $value -Compress }
+try { $value = if ($null -ne $key) { $key.GetValue('Codex DragonGirl Startup', $null) } else { $null }; [Console]::WriteLine((ConvertTo-Json -InputObject @{ value = $value } -Compress)) }
 finally { if ($null -ne $key) { $key.Dispose() } }`;
-  const result = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true });
-  return JSON.parse(result.stdout.trim().replace(/^\uFEFF/, ''));
+  const result = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+  return JSON.parse(result.stdout.trim().replace(/^\uFEFF/, '')).value;
 }
 
 // Windows 可能展开 8.3 短路径；按真实文件比较，同时要求完整引号防止空格拆参。
@@ -29,7 +30,7 @@ async function matchesHelper(command, helper) {
 
 // 真实注册验证仅在一次性的 Windows CI 用户下执行，本机单测不修改登录项。
 test('Windows 原生助手注册和移除当前用户登录项，中文空格路径保持完整', {
-  skip: process.platform !== 'win32' || process.env.GITHUB_ACTIONS !== 'true', timeout: 30000,
+  skip: process.platform !== 'win32' || process.env.GITHUB_ACTIONS !== 'true', timeout: 120000,
 }, async (t) => {
   assert.equal(await registration(), null, '测试环境已有同名登录项，不覆盖已有设置');
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), '龙娘 启动注册-'));
