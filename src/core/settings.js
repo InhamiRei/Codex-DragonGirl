@@ -34,6 +34,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   bubbleTemplate: '{套餐}\n{额度}\n今日 {今日用量} Tokens',
   flip: false,
   motion: true,
+  eyeTracking: true,
+  blinkEnabled: true,
+  expressionsEnabled: true,
   characterAsset: '',
   manualHomes: [],
   followOffsets: {},
@@ -67,6 +70,9 @@ export function normalizeSettings(value = {}) {
     'pinnedBubble',
     'flip',
     'motion',
+    'eyeTracking',
+    'blinkEnabled',
+    'expressionsEnabled',
     'launchAtLogin',
   ])
     if (typeof v[key] === 'boolean') d[key] = v[key];

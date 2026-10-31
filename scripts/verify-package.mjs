@@ -91,6 +91,10 @@ try {
   console.log(run(process.execPath, [path.join(root, 'scripts/bubble-smoke.mjs')], {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
+  // 从解压后的真实安装包验证两类表情，确认含泪素材和新渲染模块都已随包发布。
+  for (const script of ['expression-smoke.mjs', 'sad-smoke.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
+    ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
+  }).trim());
   const result = {
     passed: true,
     version: manifest.version,
@@ -107,6 +111,7 @@ try {
       '原生启动助手完整性与静默联动入口',
       '位置保存与重启恢复、内置音效离线可用',
       '四档显示比例下双额度完整且无原生滚动条',
+      '安装包成功与失败表情、素材加载和自动恢复',
     ],
   };
   await fs.writeFile(

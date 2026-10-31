@@ -368,12 +368,57 @@
                   <div class="setting-row">
                     <div class="setting-copy">
                       <label for="character-motion">动画反馈</label>
-                      <p>点击时显示按压与回弹效果。</p>
+                      <p>点击时按压回弹，视线转动时身体轻微跟随。</p>
                     </div>
                     <div class="setting-control">
                       <input
                         id="character-motion"
                         name="motion"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="eye-tracking">眼睛跟随</label>
+                      <p>默认角色的眼睛、眼眶和睫毛跟随鼠标，身体轻轻配合；自定义图片保持原样。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="eye-tracking"
+                        name="eyeTracking"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="natural-blink">自然眨眼</label>
+                      <p>默认角色不定时轻眨双眼，快速闭合后自然睁开。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="natural-blink"
+                        name="blinkEnabled"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="dynamic-expressions">动态表情</label>
+                      <p>轻点或主任务完成时开心闪亮约两秒；主任务失败时含泪低垂，约六秒后恢复。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="dynamic-expressions"
+                        name="expressionsEnabled"
                         type="checkbox"
                         class="switch"
                         role="switch"

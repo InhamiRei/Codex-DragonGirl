@@ -75,7 +75,15 @@ try {
   });
   if (bubble.status !== 0) throw new Error(bubble.stderr || bubble.stdout || '安装包气泡排版失败');
   console.log(bubble.stdout.trim());
-  const report = { passed: true, version: manifest.version, checks: ['ZIP SHA-256', '源码一致', 'x64 二进制', '中文空格路径解压', '脱离源码启动', '桌面功能测试', '静默启动与宿主退出', '位置恢复与内置音效', '四档显示比例与无原生滚动条'] };
+  // 表情也在解压后的便携包运行，避免仅在源码目录中能找到新素材。
+  for (const script of ['expression-smoke.mjs', 'sad-smoke.mjs']) {
+    const expression = spawnSync(process.execPath, [path.join(root, 'scripts', script)], {
+      env: { ...process.env, DRAGONGIRL_TEST_EXECUTABLE: executable }, encoding: 'utf8', timeout: 120000,
+    });
+    if (expression.status !== 0) throw new Error(expression.stderr || expression.stdout || '安装包表情验证失败');
+    console.log(expression.stdout.trim());
+  }
+  const report = { passed: true, version: manifest.version, checks: ['ZIP SHA-256', '源码一致', 'x64 二进制', '中文空格路径解压', '脱离源码启动', '桌面功能测试', '静默启动与宿主退出', '位置恢复与内置音效', '四档显示比例与无原生滚动条', '成功与失败表情及素材完整性'] };
   await fs.writeFile(path.join(output, 'verification-Windows-x64.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally {

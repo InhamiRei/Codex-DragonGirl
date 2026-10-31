@@ -357,6 +357,7 @@ export class Monitor extends EventEmitter {
           i,
           m.task.status === 'error' ? 'error' : 'complete',
           dialogueLine(kind, index),
+          m.task.status === 'complete' ? 'happy' : m.task.status === 'error' ? 'sad' : null,
         );
       }
     }
@@ -405,13 +406,14 @@ export class Monitor extends EventEmitter {
   }
 
   // 静音时仍更新数据；事件文本不包含对话正文。
-  notify(instance, event, text) {
+  notify(instance, event, text, expression = null) {
     if (!isQuiet(this.settings))
       this.emit('notice', {
         home: instance.id,
         name: instance.name,
         event,
         text,
+        expression,
         system: this.settings.notifications,
       });
   }

@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld(
     onMonitor: (listener) => subscribe('dg:monitor', listener),
     onAccountTests: (listener) => subscribe('dg:account-tests', listener),
     onSound: (listener) => subscribe('dg:sound', listener),
+    onExpression: (listener) => subscribe('dg:expression', listener),
     onAudioReady: (listener) => subscribe('dg:audio-ready', listener),
     bootstrap: () => ipcRenderer.invoke('dg:bootstrap'),
     ready: () => ipcRenderer.send('dg:ready'),

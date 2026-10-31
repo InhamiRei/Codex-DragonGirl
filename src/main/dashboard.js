@@ -63,6 +63,7 @@ export class Dashboard {
       const pet =
         [this.primary, ...this.pets.values()].find((c) => c.instanceId === notice.home) || this.primary;
       pet.notify(notice.event, notice.text);
+      if (notice.expression) pet.showExpression(notice.expression);
       if (notice.system && Notification.isSupported()) {
         const n = new Notification({ title: `GPT龙娘 · ${notice.name}`, body: notice.text, silent: true });
         n.on('click', () => {

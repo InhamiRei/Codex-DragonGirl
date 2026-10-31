@@ -571,6 +571,26 @@ try {
   await choose('select[name="soundTheme"]', 'duck');
   await page.locator('#cancel-settings').click();
   assert.equal(await page.locator('select[name="soundTheme"]').inputValue(), 'fx1');
+  // 从真实设置控件保存视线、眨眼与表情，确认草稿、磁盘和角色收到的外观配置保持一致。
+  await page.locator('[data-settings-tab="appearance"]').click();
+  assert.equal(await page.locator('#eye-tracking').isChecked(), true);
+  assert.equal(await page.locator('#natural-blink').isChecked(), true);
+  assert.equal(await page.locator('#dynamic-expressions').isChecked(), true);
+  for (const enabled of [false, true]) {
+    await page.locator('#eye-tracking').setChecked(enabled);
+    await page.locator('#natural-blink').setChecked(enabled);
+    await page.locator('#dynamic-expressions').setChecked(enabled);
+    await page.locator('#save-settings').click();
+    await until(() => application.evaluate((_, expected) => {
+      const { monitor, companion } = globalThis.__dragonGirlApp;
+      return monitor.settings.eyeTracking === expected && companion.appearance.settings.eyeTracking === expected
+        && monitor.settings.blinkEnabled === expected && companion.appearance.settings.blinkEnabled === expected
+        && monitor.settings.expressionsEnabled === expected && companion.appearance.settings.expressionsEnabled === expected;
+    }, enabled), '视线、眨眼与表情开关没有同步到角色');
+    assert.equal(JSON.parse(await fs.readFile(path.join(data, 'settings.json'), 'utf8')).eyeTracking, enabled);
+    assert.equal(JSON.parse(await fs.readFile(path.join(data, 'settings.json'), 'utf8')).blinkEnabled, enabled);
+    assert.equal(JSON.parse(await fs.readFile(path.join(data, 'settings.json'), 'utf8')).expressionsEnabled, enabled);
+  }
   // 用五个不同 PID 和窗口几何验证多个角色的窗口绑定与随动。
   await application.evaluate(() => {
     const a = globalThis.__dragonGirlApp;
@@ -752,6 +772,12 @@ try {
   await until(() => bubble.locator('.quota-note').textContent().then((text) => text === '额度待刷新'), '过期额度没有显示待刷新');
   assert.equal(await bubble.locator('.quota').count(), 0, '过期额度仍显示有效进度条');
   // 菜单互动直接执行真实菜单回调，并验证后台外观更新不会吞掉短句或完成提示。
+  const character = application.windows().find((window) => window.url().endsWith('/character.html'));
+  await character.emulateMedia({ reducedMotion: 'no-preference' });
+  await character.evaluate(() => {
+    window.__completionExpressions = [];
+    window.dragonGirl.onExpression((name) => window.__completionExpressions.push(name));
+  });
   const speech = await application.evaluate(() => {
     const c = globalThis.__dragonGirlApp.companion;
     c.state.speechEnabled = false;
@@ -775,6 +801,15 @@ try {
   assert.equal(speech.afterUpdate, speech.second, '对话被后台状态覆盖');
   assert.match(speech.complete, /交卷|龙角|成果/);
   assert.equal(speech.afterComplete, speech.complete, '完成提示被后台状态覆盖');
+  await until(() => character.locator('#character').getAttribute('data-expression').then((value) => value === 'happy'), '主任务完成没有通过监控器触发开心');
+  assert.deepEqual(await character.evaluate(() => window.__completionExpressions), ['happy']);
+  // 真正失败必须沿监控器、实例路由和表情订阅完整到达角色，取消和子任务保持独立。
+  await application.evaluate(() => {
+    const { monitor, companion } = globalThis.__dragonGirlApp;
+    monitor.workerMessage({ type: 'task', task: { home: companion.instanceId, source: '主任务', status: 'error' } });
+  });
+  await until(() => character.locator('#character').getAttribute('data-expression').then((value) => value === 'sad'), '主任务失败没有通过监控器触发伤心');
+  assert.deepEqual(await character.evaluate(() => window.__completionExpressions), ['happy', 'sad']);
   await bubble.screenshot({
     animations: 'disabled',
     omitBackground: true,
@@ -891,6 +926,8 @@ try {
           '目录发现',
           '独立筛选',
           '设置保存取消',
+          '视线、眨眼与动态表情开关保存并同步到角色',
+          '真实主任务完成事件触发开心表情',
           '九段原声解码与线性波形一致',
           '筛选 CSV 导出',
           '五角色隔离',

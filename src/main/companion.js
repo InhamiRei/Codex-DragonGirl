@@ -27,6 +27,7 @@ import {
 import { DragGesture } from '../shared/gesture.js';
 import { StateStore } from './state-store.js';
 import { dialogueLine } from '../shared/dialogue.js';
+import { eyeTrackingEnabled } from '../shared/gaze.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const ORIGIN = 'dragon://app';
@@ -47,7 +48,9 @@ export class Companion {
     this.gesture = new DragGesture();
     this.windows = new Map();
     this.interactive = new Map();
+    this.cursorPositions = new Map();
     this.ready = new Set();
+    this.lastCharacterVisibility = null;
     this.character = null;
     this.visible = true;
     this.suppressedByFollow = initiallySuppressed;
@@ -165,6 +168,11 @@ export class Companion {
       this.cancelGesture();
       this.hide();
     });
+    // 原生透明窗口的隐藏不总会触发页面可见性事件，显式同步显示状态以暂停视线动画。
+    if (view === 'character') for (const event of ['show', 'hide']) window.on(event, () => {
+      this.sendCharacterLayout();
+      if (event === 'show') this.pollCursor(true);
+    });
     this.windows.set(view, window);
     this.interactive.set(view, false);
     return window;
@@ -203,7 +211,7 @@ export class Companion {
         if (view === 'character' && c.visible && !c.suppressedByFollow) {
           c.windows.get(view).showInactive();
           // macOS 首次显示可能收回屏幕边缘的透明边距，重新发送实际坐标以保持气泡与可见角色对齐。
-          c.windows.get(view).webContents.send('dg:layout', c.characterModel());
+          c.sendCharacterLayout();
         }
         if (c.ready.size === 2) {
           clearTimeout(c.startupTimer);
@@ -276,9 +284,19 @@ export class Companion {
         height: this.character.height,
       },
       asset: this.appearance.asset || `${ORIGIN}/assets/characters/codex-dragon-girl.png`,
+      visible: !!window && !window.isDestroyed() && window.isVisible(),
       snapEnabled: this.state.snapEnabled,
       appearance: this.appearance,
     };
+  }
+
+  // 记录实际发给渲染层的可见性，原生显隐绕过窗口事件时，光标轮询也能纠正旧状态。
+  sendCharacterLayout() {
+    const window = this.windows.get('character');
+    if (!window || window.isDestroyed() || !this.ready.has('character')) return;
+    const model = this.characterModel();
+    this.lastCharacterVisibility = model.visible;
+    window.webContents.send('dg:layout', model);
   }
 
   // 所有窗口几何集中更新，气泡始终跟随角色，且只发送变化后的布局。
@@ -286,7 +304,7 @@ export class Companion {
     const window = this.windows.get('character');
     if (!window || window.isDestroyed()) return;
     window.setBounds(stageBounds(this.character), false);
-    window.webContents.send('dg:layout', this.characterModel());
+    this.sendCharacterLayout();
     if (this.bubbleVisible) this.positionBubble();
     this.pollCursor(true);
   }
@@ -306,7 +324,7 @@ export class Companion {
     this.applyCharacter();
   }
 
-  // 只有成功松手的拖拽才提交位置；点击只切换独立气泡。
+  // 松手后由手势状态机区分点击与拖动，只有轻点会触发开心和独立气泡。
   endGesture(point) {
     const result = this.gesture.end(point);
     this.dragging = false;
@@ -318,7 +336,10 @@ export class Companion {
       this.applyCharacter();
       this.persist();
       this.delegate?.onDrag?.(this);
-    } else this.toggleBubble();
+    } else {
+      this.toggleBubble();
+      this.showExpression('happy');
+    }
     this.windows.get('character').webContents.send('dg:dragging', false);
     this.pollCursor(true);
   }
@@ -458,22 +479,34 @@ export class Companion {
     window.webContents.send('dg:input-state', next);
   }
 
-  // 鼠标移动转发之外再加低频原生兜底，窗口移动到静止光标下方也能恢复命中。
+  // 复用全局光标轮询驱动视线；仅在位置变化时发消息，隐藏角色与静止鼠标不增加绘制。
   pollCursor(force = false) {
     if (this.stopping) return;
     clearTimeout(this.cursorTimer);
     const point = screen.getCursorScreenPoint();
     let nearby = false;
+    let followingEyes = false;
     for (const [view, window] of this.windows) {
-      if (window.isDestroyed() || !window.isVisible() || !this.ready.has(view)) continue;
+      if (window.isDestroyed() || !this.ready.has(view)) continue;
+      const visible = window.isVisible();
+      // macOS 原生显示可能先于 Electron 的 show 通知完成，不能让可见角色一直保留隐藏标记。
+      if (view === 'character' && visible !== this.lastCharacterVisibility) this.sendCharacterLayout();
+      if (!visible) continue;
       const bounds = window.getBounds();
       const inside = containsPoint(bounds, point);
+      const followEyes = view === 'character' && eyeTrackingEnabled(this.appearance.asset, this.appearance.settings);
+      followingEyes ||= followEyes;
       nearby ||= inside;
       if (!inside && !(view === 'character' && this.gesture.active)) this.setInteractive(view, false);
-      if ((inside || force) && !(view === 'character' && this.gesture.active))
-        window.webContents.send('dg:cursor', { x: point.x - bounds.x, y: point.y - bounds.y });
+      const local = { x: point.x - bounds.x, y: point.y - bounds.y };
+      const previous = this.cursorPositions.get(view);
+      if ((inside || force || followEyes) && !(view === 'character' && this.gesture.active)
+        && (force || previous?.x !== local.x || previous?.y !== local.y)) {
+        this.cursorPositions.set(view, local);
+        window.webContents.send('dg:cursor', local);
+      }
     }
-    this.cursorTimer = setTimeout(() => this.pollCursor(), nearby ? 24 : 100);
+    this.cursorTimer = setTimeout(() => this.pollCursor(), nearby ? 24 : followingEyes ? 33 : 100);
     this.cursorTimer.unref();
   }
 
@@ -644,6 +677,16 @@ export class Companion {
     }
     if (this.visible && this.ready.has('character') && !this.windows.get('character').isVisible())
       this.windows.get('character').showInactive();
+  }
+
+  // 表情与声音独立；只接受已知表情，隐藏或拖动期间不积压表情消息。
+  showExpression(name) {
+    const window = this.windows.get('character');
+    if (!['happy', 'sad'].includes(name) || this.stopping || this.gesture.active || this.appearance.settings?.expressionsEnabled === false
+      || !this.ready.has('character') || !window || window.isDestroyed() || !window.isVisible()) return;
+    // 先同步当前可见性，再发出表情；正常桌面点击不能因渲染层残留的隐藏状态而被丢弃。
+    this.sendCharacterLayout();
+    window.webContents.send('dg:expression', name);
   }
 
   // 事件声和状态提示复用角色窗口，不额外创建音频后台进程。

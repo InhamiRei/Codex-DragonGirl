@@ -41,6 +41,18 @@ jobs:
       - name: 验证气泡缩放与原生滚动条
         run: npm run test:bubble
         timeout-minutes: 3
+      - name: 验证眼睛和身体跟随
+        run: npm run test:eyes
+        timeout-minutes: 3
+      - name: 验证自然眨眼
+        run: npm run test:blink
+        timeout-minutes: 3
+      - name: 验证开心星光
+        run: npm run test:expression
+        timeout-minutes: 3
+      - name: 验证失败伤心表情
+        run: npm run test:sad
+        timeout-minutes: 3
       - name: 验证账号测智界面与本地协议
         run: npm run test:accounts
         timeout-minutes: 3
@@ -56,6 +68,22 @@ jobs:
             output/release-manifest-Windows-x64.json
             output/verification-Windows-x64.json
           if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Windows-expression-validation
+          path: |
+            .artifacts/eyes-*.png
+            .artifacts/eyes-report.json
+            .artifacts/blink-*.png
+            .artifacts/blink-report.json
+            .artifacts/happy-*.png
+            .artifacts/expression-*.json
+            .artifacts/sad-*.png
+            .artifacts/sad-*.json
+          include-hidden-files: true
+          if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@v4
         if: always()

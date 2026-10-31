@@ -5,12 +5,14 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .stage[data-gesture="dragging"] { cursor: grabbing; }
 .character { position: absolute; transform-origin: 50% 100%; will-change: transform; pointer-events: none; }
 .character img { display: block; width: 100%; height: 100%; object-fit: contain; -webkit-user-drag: none; }
+.eye-layer { position: absolute; pointer-events: none; }
+.eye-layer[hidden] { display: none; }
 
-.stage[data-status="working"] .character img { filter: drop-shadow(0 0 7px #9b8fdb70); }
-.stage[data-status="error"] .character img { filter: drop-shadow(0 0 7px #dc957060); }
+.stage[data-status="working"] .character { filter: drop-shadow(0 0 7px #9b8fdb70); }
+.stage[data-status="error"] .character { filter: drop-shadow(0 0 7px #dc957060); }
 
-.stage[data-status="complete"] .character img{filter:drop-shadow(0 0 7px #95c6b850)}
-.stage[data-cue="quota"] .character img{filter:drop-shadow(0 0 12px #dab57a90)}
-.stage[data-cue="complete"] .character img{animation:complete-glow .85s ease-out}
+.stage[data-status="complete"] .character{filter:drop-shadow(0 0 7px #95c6b850)}
+.stage[data-cue="quota"] .character{filter:drop-shadow(0 0 12px #dab57a90)}
+.stage[data-cue="complete"] .character{animation:complete-glow .85s ease-out}
 @keyframes complete-glow{0%,100%{filter:brightness(1)}40%{filter:brightness(1.16) drop-shadow(0 0 10px #b0d3c8)}}
-@media(prefers-reduced-motion:reduce){.stage .character img{animation:none!important}}
+@media(prefers-reduced-motion:reduce){.stage .character{animation:none!important}}

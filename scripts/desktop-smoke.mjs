@@ -189,8 +189,9 @@ try {
   assert.equal(initial.windows.character.x + initialLayout.rect.x + initialLayout.rect.width, workArea.x + workArea.width);
   await until(() => page.evaluate(async () => {
     const model = await window.dragonGirl.bootstrap();
-    const rect = document.getElementById('character').getBoundingClientRect();
-    return Math.abs(rect.x - model.rect.x) < 1 && Math.abs(rect.y - model.rect.y) < 1;
+    // 身体跟随只改变视觉姿态，检查原始排版锚点，避免把正常倾斜当作窗口错位。
+    const rect = getComputedStyle(document.getElementById('character'));
+    return Math.abs(parseFloat(rect.left) - model.rect.x) < 1 && Math.abs(parseFloat(rect.top) - model.rect.y) < 1;
   }), '首次显示后的角色绘制坐标与气泡锚点不一致。');
   console.log('✓ 初次启动的实际角色底边与右边贴齐工作区，透明窗口留白不产生间距。');
 

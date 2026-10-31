@@ -1,7 +1,7 @@
-// 逆转以底部中心为原点的旋转与缩放，再映射到素材坐标。
+// 逆转身体平移及以底部中心为原点的旋转、缩放，再映射到素材坐标。
 export function imagePoint(point, rect, pose = { scaleX: 1, scaleY: 1, angle: 0 }) {
-  const dx = point.x - rect.x - rect.width / 2;
-  const dy = point.y - rect.y - rect.height;
+  const dx = point.x - rect.x - rect.width / 2 - (pose.translateX || 0);
+  const dy = point.y - rect.y - rect.height - (pose.translateY || 0);
   const radians = (-pose.angle * Math.PI) / 180;
   const x = (dx * Math.cos(radians) - dy * Math.sin(radians)) / pose.scaleX + rect.width / 2;
   const y = (dx * Math.sin(radians) + dy * Math.cos(radians)) / pose.scaleY + rect.height;
