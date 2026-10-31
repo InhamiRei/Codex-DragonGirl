@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_CHARACTER_ASSET, EYE_ARTWORK } from '../src/shared/gaze.js';
 import { spawnSync } from 'node:child_process';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+// 去掉目录末尾的反斜杠，避免 Windows 启动参数中的闭合引号被转义。
+const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-expression-'));
 const artifacts = path.join(root, '.artifacts');
 const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
