@@ -11,6 +11,9 @@ const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-sad-'));
 const artifacts = path.join(root, '.artifacts');
 const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
+// 按显示密度复现跨平台像素差异，非法参数立即停止验收。
+const deviceScale = process.env.DRAGONGIRL_TEST_DEVICE_SCALE;
+if (deviceScale && !['1', '2'].includes(deviceScale)) throw new Error('测试显示密度仅支持 1 或 2');
 const errors = [];
 let application, page;
 
@@ -59,8 +62,8 @@ async function seek(time) {
 }
 
 // 按统一画幅比较真正的眼区像素，嘴部不能出现新增图形，泪珠的重心必须向下移动。
-async function metrics() {
-  return page.evaluate((artwork) => {
+async function metrics(captureTearBaseline = false) {
+  return page.evaluate(({ artwork, captureTearBaseline }) => {
     const image = document.getElementById('portrait');
     const baseline = document.createElement('canvas'), actual = document.createElement('canvas');
     baseline.width = actual.width = 665; baseline.height = actual.height = 591;
@@ -72,6 +75,9 @@ async function metrics() {
       after.drawImage(canvas, eye.x / 2, eye.y / 2, eye.width / 2, eye.height / 2);
     }
     const original = before.getImageData(0, 0, 665, 591).data, painted = after.getImageData(0, 0, 665, 591).data;
+    // 以同一含泪眼神的无泪珠帧为背景，排除不同 DPI 下固定眼角和缩放采样造成的偏差。
+    if (captureTearBaseline) window.__sadTearBaseline = new Uint8ClampedArray(painted);
+    const tearBaseline = window.__sadTearBaseline || original;
     const eyes = artwork.eyes.map((eye) => {
       let changed = 0, signature = 0;
       for (let y = Math.ceil(eye.y / 2); y < (eye.y + eye.height) / 2; y += 1)
@@ -91,20 +97,22 @@ async function metrics() {
     }
     for (let y = 417; y < 451; y += 1) for (let x = 443; x < 459; x += 1) {
       const offset = (y * 665 + x) * 4;
-      const light = painted[offset + 2] - original[offset + 2] + (original[offset] - painted[offset]) * 0.3;
+      const light = painted[offset + 2] - tearBaseline[offset + 2] + (tearBaseline[offset] - painted[offset]) * 0.3;
       if (light > 8) { mass += light; tearY += light * y * 2; }
     }
     const matrix = new DOMMatrix(getComputedStyle(document.getElementById('character')).transform);
     return { eyes, mouthChanged, mouthDark, tear: { mass, y: mass ? tearY / mass : 0 },
       hidden: layers.every((canvas) => canvas.hidden), y: matrix.f, angle: Math.atan2(matrix.b, matrix.a) * 180 / Math.PI };
-  }, EYE_ARTWORK);
+  }, { artwork: EYE_ARTWORK, captureTearBaseline });
 }
 
 try {
   await fs.mkdir(artifacts, { recursive: true });
   const env = { ...process.env, DRAGONGIRL_TEST: '1', DRAGONGIRL_DATA_DIR: temporary };
   delete env.ELECTRON_RUN_AS_NODE; delete env.DRAGONGIRL_MONITOR_TEST;
-  application = await electron.launch({ ...(executablePath ? { executablePath } : {}), args: executablePath ? [] : [root], env });
+  // 显示密度仅用于验收，可在 macOS 上复现 Windows 普通屏的实际画布分辨率。
+  const args = [...(executablePath ? [] : [root]), ...(deviceScale ? [`--force-device-scale-factor=${deviceScale}`] : [])];
+  application = await electron.launch({ ...(executablePath ? { executablePath } : {}), args, env });
   await until(() => application.evaluate(() => globalThis.__dragonGirlTest?.ready.size === 2), '角色没有完成启动');
   page = application.windows().find((window) => window.url().endsWith('/character.html'));
   page.on('pageerror', (error) => errors.push(error.message));
@@ -137,6 +145,7 @@ try {
     assert.notEqual(eye.signature, flowing.eyes[index].signature, '眼内泪光只是静态贴图');
   }
   assert.equal(first.mouthChanged + first.mouthDark + flowing.mouthChanged + flowing.mouthDark, 0, '无口区域出现新图形');
+  await seek(1800); await metrics(true);
   await seek(2700); const early = await metrics();
   await seek(3550); const late = await metrics();
   assert.ok(early.tear.mass > 0 && late.tear.mass > 0 && late.tear.y > early.tear.y + 8, `泪珠没有实际下落：${JSON.stringify({ early: early.tear, late: late.tear })}`);
@@ -195,7 +204,7 @@ try {
   await until(() => page.locator('.eye-layer:not([hidden])').count().then((value) => value === 2), '伤心结束后没有恢复自然眨眼');
   assert.equal(await expression(), null);
   assert.deepEqual(errors, []);
-  await fs.writeFile(path.join(artifacts, 'sad-report.json'), JSON.stringify({ passed: true, first, flowing, early: early.tear, late: late.tear, body }, null, 2));
+  await fs.writeFile(path.join(artifacts, 'sad-report.json'), JSON.stringify({ passed: true, deviceScale: await page.evaluate(() => devicePixelRatio), first, flowing, early: early.tear, late: late.tear, body }, null, 2));
   console.log('伤心验证通过：正式失败通道、泪光流动、泪珠下落、无口造型、60% 大小和翻转、轻垂锚点、开关、隐藏、自定义图、表情互换和自然恢复。');
 } catch (error) {
   await page?.screenshot({ path: path.join(artifacts, 'sad-failure.png'), omitBackground: true }).catch(() => {});
