@@ -6,7 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+// Windows 目录结尾的反斜杠会转义启动参数的闭合引号，统一使用规范路径。
+const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const artifacts = path.join(root, '.artifacts/project-audit');
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-performance-'));
 const user = path.join(temporary, 'user');
@@ -51,14 +52,17 @@ async function measure(applicationRoot, name) {
     DRAGONGIRL_DATA_DIR: directory, DRAGONGIRL_FIXTURE_HOME: user };
   delete env.ELECTRON_RUN_AS_NODE;
   try {
+    console.log(`${name}：启动隔离性能验收`);
     // 发行验证可以直接运行解压后的成品，审查前源码对比仍使用各自入口。
     const executablePath = applicationRoot === root ? process.env.DRAGONGIRL_TEST_EXECUTABLE : null;
     application = await electron.launch({ ...(executablePath ? { executablePath } : {}),
-      args: [...(executablePath ? [] : [applicationRoot]), '--force-color-profile=srgb'], env });
+      args: [...(executablePath ? [] : [applicationRoot]), '--force-color-profile=srgb'], env, timeout: 30000 });
+    console.log(`${name}：应用已启动，等待统计与管理窗口`);
     await until(() => application.evaluate(() => !!globalThis.__dragonGirlApp?.monitor.indexedAt), '账本没有完成初始扫描');
     let page;
     await until(() => { page = application.windows().find((item) => item.url().endsWith('/dashboard.html')); return !!page; }, '管理窗口不存在');
     const errors = [];
+    page.setDefaultTimeout(15000);
     page.on('pageerror', (error) => errors.push(error.message));
     await page.clock.setFixedTime(timestamp);
     await application.evaluate(async (_, now) => {
@@ -86,6 +90,7 @@ async function measure(applicationRoot, name) {
     await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.window.focus());
     await page.mouse.move(0, 0);
     const screenshot = await stableScreenshot(page, path.join(artifacts, `${name}-overview.png`));
+    console.log(`${name}：固定画面已稳定`);
     const pixels = createHash('sha256').update(screenshot).digest('hex');
 
     // 连续相同推送应保留卡片、指标和图表节点，不能依赖降低推送频率来通过。
@@ -115,6 +120,7 @@ async function measure(applicationRoot, name) {
       c.buildMenu = build;
       return count;
     });
+    console.log(`${name}：重复推送和菜单复用检查完成`);
 
     // 只更新额度，不改变角色外观，常驻气泡也必须拿到新读数。
     const bubbleUpdated = await application.evaluate(async () => {
@@ -132,17 +138,21 @@ async function measure(applicationRoot, name) {
       c.hideBubble();
       return updated;
     });
+    console.log(`${name}：常驻气泡检查完成`);
     // 配额时间不变、只有进程上线时，测智页仍应及时更新运行状态。
     await page.locator('.main-nav [data-tab="account-tests"]').click();
     await until(() => page.locator('.test-account').count().then((count) => count === 1), '账号测智列表未加载');
+    const received = await page.evaluate(() => window.__performance.updates);
     await application.evaluate(async () => {
       const { monitor: m, dashboard: d } = globalThis.__dragonGirlApp;
       m.processes = [{ pid: 777777, home: m.instances[0].home, frontmost: true, windows: [] }];
       m.emit('update', m.snapshot());
       await d.updatePets();
     });
-    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    // 等待真实消息被界面消费，不依赖后台或 CI 会话中可能暂停的动画帧。
+    await until(() => page.evaluate((before) => window.__performance.updates > before, received), '账号运行状态推送未送达');
     const accountUpdated = /(?:^|\s)运行中/.test(await page.locator('.test-account-copy > .hint').textContent());
+    console.log(`${name}：账号状态检查完成`);
     assert.deepEqual(errors, []);
     return { pixels, dom, menuBuilds, bubbleUpdated, accountUpdated };
   } finally {

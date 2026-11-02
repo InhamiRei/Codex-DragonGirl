@@ -27,6 +27,12 @@ jobs:
         run: npm run check
       - name: 准备隔离音效测试缓存
         run: node scripts/fetch-reference-audio.mjs
+      - name: 验证后台刷新与常驻信息更新
+        run: npm run test:performance
+        timeout-minutes: 3
+      - name: 验证原生菜单与表情预览入口
+        run: npm run test:menu
+        timeout-minutes: 3
       - name: 验证统计、交互与真实 Windows 窗口
         run: npm test
       - name: 验证桌面应用
@@ -56,12 +62,6 @@ jobs:
       - name: 验证账号测智界面与本地协议
         run: npm run test:accounts
         timeout-minutes: 3
-      - name: 验证后台刷新与常驻信息更新
-        run: npm run test:performance
-        timeout-minutes: 3
-      - name: 验证原生菜单与表情预览入口
-        run: npm run test:menu
-        timeout-minutes: 3
       - name: 构建 Windows 便携包
         run: npm run package:win
       - name: 验证解压后的安装包
@@ -74,6 +74,14 @@ jobs:
             output/release-manifest-Windows-x64.json
             output/verification-Windows-x64.json
           if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Windows-performance-validation
+          path: .artifacts/project-audit/
+          include-hidden-files: true
+          if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@v4
         if: always()
