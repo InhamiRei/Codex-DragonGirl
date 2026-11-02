@@ -126,7 +126,7 @@ try {
     tracker.blinkStarted = performance.now() - 70;
     tracker.blink = 0.8;
     const started = tracker.blinkStarted;
-    tracker.showHappy();
+    tracker.showExpression('happy');
     const preserved = tracker.blink === 0.8 && tracker.blinkStarted === started;
     tracker.blink = 0.5;
     tracker.configure(image, model, pose, false, true);

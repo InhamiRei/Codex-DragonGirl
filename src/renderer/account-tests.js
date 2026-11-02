@@ -124,7 +124,8 @@ export class AccountTestsView {
     const instances = this.getState()?.instances || [];
     const removed = [...this.selected].some((id) => !instances.some((i) => i.id === id));
     for (const id of this.selected) if (!instances.some((i) => i.id === id)) this.selected.delete(id);
-    const signature = JSON.stringify(instances.map((i) => [i.id, i.name, i.account, i.identity, i.quota?.capturedAt]));
+    const signature = JSON.stringify(instances.map((i) => [i.id, instanceLabel(i, this.getState().settings),
+      i.account, i.identity, i.running, i.stale, i.quota?.buckets]));
     if (signature !== this.accountSignature) { this.accountSignature = signature; this.accounts(); }
     if (removed) this.selectionChanged();
     this.controls();

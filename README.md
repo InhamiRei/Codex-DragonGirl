@@ -21,6 +21,7 @@
 - **视线与眨眼**：默认角色的眼睛、眼眶和睫毛跟随全屏鼠标，身体稍慢地轻微配合；静止时也会不定时轻眨双眼，快速闭合、稍慢睁开。「偏好设置 → 外观」中的「眼睛跟随」与「自然眨眼」可分别开关，「动画反馈」可关闭身体配合。隐藏、拖动时暂停眨眼；自定义图片保持原样，系统减少动态效果时暂停联动。
 - **开心星光**：轻点默认角色或主任务完成时，紫色虹膜内的星芒和柔光会缓慢漂移、明暗变化，配合一次轻弹，约两秒后恢复。保留原来的无口造型；拖动、取消和错误任务不会触发，静音时仍可显示，可在「偏好设置 → 外观 → 动态表情」关闭。
 - **伤心含泪**：主任务失败时，眼皮轻垂、泪光流动，一小滴泪珠缓缓滑落，约六秒后恢复。继续保持无口造型；取消任务、子任务失败及额度查询异常不会触发伤心。
+- **表情预览**：右键角色或打开托盘菜单，选择「表情 → 开心 / 伤心」即可播放一次，结束后自动恢复。需使用默认角色并开启「动态表情」。
 - **窗口跟随**：跟随当前 Codex 窗口，多开时可设置每个运行实例一只；最小化后自动隐藏关联角色。macOS 打开文件或文件夹选择框时暂时收起角色与气泡，关闭后恢复原位置。
 - **启动联动**：首次开启「随 Codex 启动」后，照常打开 Codex，龙娘就会自动出现；自动启动不弹管理窗口。
 - **额度气泡**：查看实际剩余额度、重置时间和今日 Tokens，用量窗口按服务返回结果展示。
@@ -36,9 +37,9 @@
 
 | 电脑 | 下载文件 | 打开方法 |
 | --- | --- | --- |
-| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-1.4.0-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
-| macOS 15+，Apple Silicon | `Codex-DragonGirl-1.4.0-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
-| 同上，偏好 ZIP | `Codex-DragonGirl-1.4.0-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
+| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-1.4.1-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
+| macOS 15+，Apple Silicon | `Codex-DragonGirl-1.4.1-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
+| 同上，偏好 ZIP | `Codex-DragonGirl-1.4.1-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
 
 Windows 请保留解压后的整个文件夹，程序需要旁边的运行时文件。当前暂未提供 Windows ARM 原生版和 Intel Mac 版。
 
@@ -73,6 +74,13 @@ Windows 和 macOS 的助手均随安装包附带，无需安装 Node.js。关闭
 Windows 跟随针对同一系统用户运行的 Codex / ChatGPT 桌面窗口。受系统权限保护或以其他用户运行的进程可能无法识别，可切换独立桌面模式，并手动添加目录。WSL 内部的独立账户和 Linux 窗口暂不作自动映射。
 
 ## 更新内容
+
+### v1.4.1
+
+- 右键与托盘菜单新增开心 / 伤心预览，修复 macOS 小型透明窗口中菜单展开和二级项输入。
+- 复用未变化的账户卡片、图表、统计汇总与托盘菜单；保留原图、视线、眨眼、星光和含泪效果。
+- 修复常驻气泡与账号运行状态滞后、更新时提示与键盘焦点丢失，以及首次启动贴边同步。
+- 完善日志读取、中文协议解码、统计进程异常与退出清理；新增一键完整项目验收。
 
 ### v1.4.0
 
@@ -151,6 +159,9 @@ node scripts/fetch-reference-audio.mjs
 npm run check
 npm test
 
+# 完整项目验收（在真实桌面会话运行，测试应用与数据均隔离）
+npm run verify:project
+
 # Windows x64：在 Windows 或 GitHub Actions 中执行
 npm run test:windows
 npm run package:win
@@ -165,6 +176,8 @@ npm run test:bubble
 npm run test:eyes
 npm run test:blink
 npm run test:expression
+npm run test:menu
+npm run test:performance
 npm run test:sad
 npm run test:accounts
 npm run package:mac
@@ -172,6 +185,8 @@ npm run verify:package
 ```
 
 声音测试使用隔离目录中的原声音效；首次运行测试前需准备上述音效缓存。构建输出位于 `output/`，测试报告位于 `.artifacts/`，两者均不进入源码仓库。Windows Actions 验证原生窗口、统计和解压后的独立应用，并保留构建产物。
+
+`verify:project` 串行检查语法、单元测试和当前系统的桌面功能，覆盖窗口跟随、启动、位置恢复、声音、气泡、视线、眨眼、开心、伤心、菜单和账号测智。性能回归检查重复推送不重建未变化的卡片、图表和托盘菜单，以及常驻气泡和账号运行状态的及时更新。汇总报告与各项日志位于 `.artifacts/project-audit/`，任意检查失败会返回非零退出码。
 
 ## 素材与致谢
 

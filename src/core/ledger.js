@@ -18,6 +18,7 @@ export class Ledger {
       CREATE TABLE IF NOT EXISTS events(key TEXT PRIMARY KEY,home TEXT,account TEXT,thread TEXT,parent TEXT,turn TEXT,time INTEGER,model TEXT,tier TEXT,project TEXT,source TEXT,kind TEXT,input_tokens INTEGER,cached_input_tokens INTEGER,cache_write_input_tokens INTEGER,output_tokens INTEGER,reasoning_output_tokens INTEGER,total_tokens INTEGER);
       CREATE INDEX IF NOT EXISTS events_time ON events(time); CREATE INDEX IF NOT EXISTS events_turn ON events(thread,turn,kind); CREATE INDEX IF NOT EXISTS events_home ON events(home); CREATE INDEX IF NOT EXISTS events_canonical ON events(thread,account,kind,turn,time);
       CREATE TABLE IF NOT EXISTS origins(file TEXT,key TEXT,PRIMARY KEY(file,key));
+      CREATE INDEX IF NOT EXISTS origins_key ON origins(key);
       CREATE TABLE IF NOT EXISTS tasks(home TEXT,thread TEXT,turn TEXT,status TEXT,time INTEGER,model TEXT,project TEXT,parent TEXT,source TEXT,PRIMARY KEY(home,thread,turn));
       CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);`);
     // 解析规则升级先备份旧索引，再重建文件检查点，禁止沿用旧去重规则。
@@ -34,6 +35,10 @@ export class Ledger {
     this.insert = this.db.prepare(
       `INSERT OR IGNORE INTO events VALUES (${Array(18).fill('?').join(',')})`,
     );
+    // 增量扫描反复使用同一组语句，避免每份日志、每个任务都重新编译 SQL。
+    this.findFile = this.db.prepare('SELECT * FROM files WHERE path=?');
+    this.saveFile = this.db.prepare('INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?)');
+    this.saveTask = this.db.prepare('INSERT OR REPLACE INTO tasks VALUES (?,?,?,?,?,?,?,?,?)');
   }
   // 流式发现历史记录；同一路径的明文副本优先于压缩副本。
   async filesFor(home) {
@@ -64,11 +69,11 @@ export class Ledger {
     this.db.prepare('DELETE FROM files WHERE path=?').run(file);
   }
   // 增量读取完整行；最后半行不提交偏移，下次追加后再解析。
-  async scanFile(file, homeId, onTask = () => {}) {
+  async scanFile(file, homeId, onTask = () => {}, signal) {
     const stat = await fsp.stat(file),
       inode = `${stat.dev}:${stat.ino}`,
       compressed = file.endsWith('.zst');
-    let saved = this.db.prepare('SELECT * FROM files WHERE path=?').get(file);
+    let saved = this.findFile.get(file);
     if (
       saved &&
       ((compressed && saved.size !== stat.size) ||
@@ -88,8 +93,11 @@ export class Ledger {
     const stream = fs.createReadStream(file, {
       start: compressed ? 0 : offset,
       highWaterMark: 256 * 1024,
+      signal,
     });
     const input = compressed ? stream.pipe(createZstdDecompress()) : stream;
+    // pipe 不会自动转发源流错误；文件被移走或无法读取时必须结束解压等待。
+    if (compressed) stream.on('error', (error) => input.destroy(error));
     this.db.exec('BEGIN');
     try {
       for await (const chunk of input) {
@@ -137,9 +145,7 @@ export class Ledger {
           }
           if (parsed.task) {
             const t = parsed.task;
-            this.db
-              .prepare('INSERT OR REPLACE INTO tasks VALUES (?,?,?,?,?,?,?,?,?)')
-              .run(homeId, t.thread, t.turn, t.status, t.time, t.model, t.project, t.parent, t.source);
+            this.saveTask.run(homeId, t.thread, t.turn, t.status, t.time, t.model, t.project, t.parent, t.source);
             if (saved && t.time > Date.now() - 120000) onTask({ ...t, home: homeId });
           }
           if (++records % 1500 === 0) {
@@ -151,22 +157,24 @@ export class Ledger {
         pending = pending.subarray(start);
         if (pending.length > 32 * 1024 * 1024) throw new Error('单条日志超过 32 MiB，已停止该文件扫描');
       }
-      this.db
-        .prepare('INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?)')
-        .run(
-          file,
-          homeId,
-          inode,
-          compressed ? stat.size : offset,
-          JSON.stringify(state),
-          stat.mtimeMs,
-          stat.size,
-        );
+      this.saveFile.run(
+        file,
+        homeId,
+        inode,
+        compressed ? stat.size : offset,
+        JSON.stringify(state),
+        stat.mtimeMs,
+        stat.size,
+      );
       this.db.exec('COMMIT');
       return state;
     } catch (e) {
       this.db.exec('ROLLBACK');
       throw e;
+    } finally {
+      // 解析失败也关闭两个流，避免损坏的归档留下文件句柄或继续读取。
+      input.destroy();
+      stream.destroy();
     }
   }
   // 以请求明细覆盖同轮累计快照；两种格式同时存在时不重复入账。
@@ -199,7 +207,8 @@ export class Ledger {
   report(filter = {}, settings = {}) {
     const rows = this.rows(filter),
       daily = {},
-      models = {},
+      // 模型名来自日志，不能把 constructor、__proto__ 等名称当成对象原型成员。
+      models = Object.create(null),
       homes = {},
       threads = {};
     let total = 0,

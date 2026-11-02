@@ -56,7 +56,7 @@ export class Dashboard {
       this.latest = snapshot;
       if (this.window && !this.window.isDestroyed())
         this.window.webContents.send('dg:monitor', snapshot);
-      this.updatePets();
+      void this.updatePets().catch((error) => console.error('同步角色失败：', error.message));
     });
     monitor.on('windows', () => this.follow());
     monitor.on('notice', (notice) => {
@@ -76,6 +76,7 @@ export class Dashboard {
   }
   // 设置与详情需要可聚焦的正常窗口，不改变桌宠的鼠标穿透策略。
   async open() {
+    if (this.stopping) return;
     this.startup?.retain();
     if (this.window && !this.window.isDestroyed()) {
       this.window.show();
@@ -105,7 +106,7 @@ export class Dashboard {
       if (event.isMainFrame || !event.url.startsWith('dragon-preview://test/')) event.preventDefault();
     });
     await this.window.loadURL(DASHBOARD_URL);
-    this.window.show();
+    if (!this.stopping && !this.window.isDestroyed()) this.window.show();
   }
   // 选定目录优先；未固定时跟随当前前台 Codex，切到其他应用时保留最近实例。
   selected() {
@@ -180,73 +181,87 @@ export class Dashboard {
     };
   }
   // 一个运行进程一个跟随角色，统计仍按规范目录和账户去重。
-  async updatePets() {
-    if (this.updating || this.monitor.stopped) return;
-    this.updating = true;
-    try {
-      const settings = this.monitor.settings,
-        selected = this.selected();
-      this.primary.instanceId = selected?.id;
-      this.primary.instanceName = selected ? instanceLabel(selected, settings) : undefined;
-      this.primary.home = selected?.home;
-      const primaryProcess =
-        this.monitor.processes.find((p) => p.home === selected?.home && p.frontmost) ||
-        this.monitor.processes.find((p) => p.home === selected?.home);
-      this.primary.followPID = primaryProcess?.pid;
-      const extra =
-        settings.multiplePets && settings.mode === 'follow'
-          ? this.monitor.processes.filter(
-              (p) =>
-                p.pid !== primaryProcess?.pid && this.latest?.instances.some((i) => i.home === p.home),
-            )
-          : [];
-      for (const [pid, pet] of this.pets)
-        if (!extra.some((p) => p.pid === pid)) {
-          await pet.stop();
-          this.pets.delete(pid);
-        }
-      for (const process of extra)
-        if (!this.pets.has(process.pid)) {
-          const i = this.latest.instances.find((i) => i.home === process.home);
-          const pet = new Companion(path.join(this.monitor.directory, 'pets', i.id), {
-            secondary: true,
-            initiallySuppressed: true,
-            delegate: this.delegate,
-          });
-          pet.instanceId = i.id;
-          pet.instanceName = instanceLabel(i, settings);
-          pet.home = i.home;
-          pet.followPID = process.pid;
-          this.pets.set(process.pid, pet);
-          await pet.start();
-        }
-      for (const pet of [this.primary, ...this.pets.values()]) {
-        const i = this.latest?.instances.find((i) => i.id === pet.instanceId);
-        const asset = settings.characterAsset
-          ? `dragon://app/user-assets/${settings.characterAsset}`
-          : 'dragon://app/assets/characters/codex-dragon-girl.png';
-        const appearance = {
-          settings,
-          asset,
-          assetPath: settings.characterAsset
-            ? path.join(this.assetDirectory, settings.characterAsset)
-            : path.join(ROOT, 'assets/characters/codex-dragon-girl.png'),
-          status: i?.taskState || 'idle',
-        };
-        const key = JSON.stringify(appearance);
-        if (key !== pet.appearanceKey) {
-          pet.appearanceKey = key;
-          pet.setAppearance(appearance);
-        }
-        pet.updateMenu();
-      }
-      this.follow();
-    } finally {
-      this.updating = false;
+  updatePets() {
+    if (this.stopping || this.monitor.stopped) return Promise.resolve();
+    if (this.petUpdate) {
+      this.petUpdateAgain = true;
+      return this.petUpdate;
     }
+    this.petUpdate = (async () => {
+      do {
+        this.petUpdateAgain = false;
+        await this.syncPets();
+      } while (this.petUpdateAgain && !this.stopping && !this.monitor.stopped);
+    })().finally(() => { this.petUpdate = null; });
+    return this.petUpdate;
+  }
+
+  // 串行创建和回收角色；创建期间到达的新快照在下一轮使用，不会丢失。
+  async syncPets() {
+    const settings = this.monitor.settings,
+      selected = this.selected();
+    this.primary.instanceId = selected?.id;
+    this.primary.instanceName = selected ? instanceLabel(selected, settings) : undefined;
+    this.primary.home = selected?.home;
+    const primaryProcess =
+      this.monitor.processes.find((p) => p.home === selected?.home && p.frontmost) ||
+      this.monitor.processes.find((p) => p.home === selected?.home);
+    this.primary.followPID = primaryProcess?.pid;
+    const extra =
+      settings.multiplePets && settings.mode === 'follow'
+        ? this.monitor.processes.filter(
+            (p) =>
+              p.pid !== primaryProcess?.pid && this.latest?.instances.some((i) => i.home === p.home),
+          )
+        : [];
+    for (const [pid, pet] of this.pets)
+      if (!extra.some((p) => p.pid === pid)) {
+        await pet.stop();
+        this.pets.delete(pid);
+      }
+    for (const process of extra)
+      if (!this.pets.has(process.pid)) {
+        if (this.stopping || this.monitor.stopped) return;
+        const i = this.latest.instances.find((i) => i.home === process.home);
+        const pet = new Companion(path.join(this.monitor.directory, 'pets', i.id), {
+          secondary: true,
+          initiallySuppressed: true,
+          delegate: this.delegate,
+        });
+        pet.instanceId = i.id;
+        pet.instanceName = instanceLabel(i, settings);
+        pet.home = i.home;
+        pet.followPID = process.pid;
+        this.pets.set(process.pid, pet);
+        await pet.start();
+      }
+    if (this.stopping || this.monitor.stopped) return;
+    for (const pet of [this.primary, ...this.pets.values()]) {
+      const i = this.latest?.instances.find((i) => i.id === pet.instanceId);
+      const asset = settings.characterAsset
+        ? `dragon://app/user-assets/${settings.characterAsset}`
+        : 'dragon://app/assets/characters/codex-dragon-girl.png';
+      const appearance = {
+        settings,
+        asset,
+        assetPath: settings.characterAsset
+          ? path.join(this.assetDirectory, settings.characterAsset)
+          : path.join(ROOT, 'assets/characters/codex-dragon-girl.png'),
+        status: i?.taskState || 'idle',
+      };
+      const key = JSON.stringify(appearance);
+      if (key !== pet.appearanceKey) {
+        pet.appearanceKey = key;
+        pet.setAppearance(appearance);
+      }
+      pet.updateMenu();
+      pet.refreshUsageBubble();
+    }
+    this.follow();
   }
   // 选择文件等模态弹窗、最小化或不可见时隐藏关联角色；恢复后沿用相对位置。
   follow() {
+    if (this.stopping || this.monitor.stopped) return;
     const settings = this.monitor.settings;
     if (!settings) return;
     for (const pet of [this.primary, ...this.pets.values()]) {
@@ -379,6 +394,7 @@ export class Dashboard {
   }
   // 固定命令表只暴露统计和本应用设置，禁止渲染层调用任意命令或修改 Codex 资料。
   async command(command, value) {
+    if (this.stopping) throw new Error('应用正在退出');
     if (command === 'test-models') return this.tests.models(value);
     if (command === 'test-start') return this.tests.start(value);
     if (command === 'test-cancel') return this.tests.cancel(value);
@@ -512,8 +528,11 @@ export class Dashboard {
   }
   // 退出前关闭所有附属角色，取消后台窗口资源。
   async stop() {
-    await this.tests.stop();
-    for (const pet of this.pets.values()) await pet.stop();
+    this.stopping = true;
+    await this.petUpdate?.catch(() => {});
+    await this.tests.stop().catch((error) => console.error('结束账号测试失败：', error.message));
+    for (const pet of this.pets.values())
+      await pet.stop().catch((error) => console.error('关闭附属角色失败：', error.message));
     this.pets.clear();
     if (this.window && !this.window.isDestroyed()) this.window.destroy();
     ipcMain.removeHandler('dg:command');

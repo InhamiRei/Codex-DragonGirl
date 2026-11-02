@@ -15,7 +15,6 @@ let state,
   report,
   filter = {},
   toastTimer,
-  dirty = false,
   replaceSettings = false,
   reportLoading = false,
   reportRequest = 0,
@@ -25,7 +24,9 @@ let state,
   refreshing = false,
   tooltipTarget;
 const THREAD_PAGE_SIZE = 20;
+const accountCards = new Map();
 let accountTests;
+let indexedReport, threadChildren;
 const $ = (selector) => document.querySelector(selector);
 const names = {
   press: '按下',
@@ -172,7 +173,6 @@ function switchSettingsTab(tab) {
 
 // 所有修改通过同一入口标记，底部保存栏准确反映草稿状态。
 function markDirty() {
-  dirty = true;
   $('#dirty-hint').textContent = '有未保存的修改';
   $('#dirty-hint').dataset.dirty = 'true';
 }
@@ -192,6 +192,9 @@ function updateRange(input) {
 }
 // 指标卡复用同一数据结构，空值不会被格式化成费用零。
 function metrics(target, items) {
+  const signature = JSON.stringify(items);
+  if (target.dataset.metrics === signature) return;
+  target.dataset.metrics = signature;
   target.replaceChildren(
     ...items.map(([label, value, note]) => {
       const card = node('article', 'metric');
@@ -210,6 +213,9 @@ function chart(target, daily, limit = 30) {
       .sort(([a], [b]) => a.localeCompare(b))
       .slice(-limit),
     max = Math.max(1, ...entries.map(([, v]) => v));
+  const signature = JSON.stringify(entries);
+  if (target.dataset.chart === signature) return;
+  target.dataset.chart = signature;
   target.replaceChildren();
   if (!entries.length) {
     target.append(node('p', 'empty', '暂无本机用量记录'));
@@ -437,6 +443,67 @@ function accountCard(instance) {
   card.append(foot);
   return card;
 }
+// 更新读数时保留重置卡的真实节点，原生指针与键盘焦点不会随正文替换而丢失。
+function updateAccountCard(current, next) {
+  const header = current.firstElementChild, nextHeader = next.firstElementChild;
+  const badge = header.querySelector('.reset-credits'), nextBadge = nextHeader.querySelector('.reset-credits');
+  const focused = current.querySelector('.account-footer button') === document.activeElement;
+  if (badge && nextBadge) {
+    for (const selector of ['.account-name', '.plan', '.reset-credits']) {
+      const before = header.querySelector(selector), after = nextHeader.querySelector(selector);
+      if (before.textContent !== after.textContent) before.textContent = after.textContent;
+    }
+    badge.dataset.tooltip = nextBadge.dataset.tooltip;
+    badge.setAttribute('aria-label', nextBadge.getAttribute('aria-label'));
+    for (const child of [...current.children].slice(1)) child.remove();
+    current.append(...[...next.children].slice(1));
+  } else current.replaceChildren(...next.children);
+  if (focused) current.querySelector('.account-footer button')?.focus({ preventScroll: true });
+}
+// 按账号复用未变化的卡片；窗口移动不重建 DOM，保留悬停、焦点和进度条动画。
+function renderAccounts(instances) {
+  const target = $('#accounts');
+  const peers = instances.map((i) => [i.id, i.identity, instanceLabel(i, state.settings)]);
+  const hint = tooltipTarget?.dataset.tooltipKey ? {
+    key: tooltipTarget.dataset.tooltipKey,
+    focused: document.activeElement === tooltipTarget,
+    rect: tooltipTarget.getBoundingClientRect(),
+  } : null;
+  for (const [id, entry] of accountCards) if (!instances.some((i) => i.id === id)) {
+    entry.card.remove();
+    accountCards.delete(id);
+  }
+  if (instances.length) target.querySelector('.empty')?.remove();
+  for (const [index, instance] of instances.entries()) {
+    // 倒计时和重置卡到期可独立变化，不能被数据复用冻结。
+    const clocks = (instance.quota?.buckets || []).flatMap((b) => b.windows.map((w) =>
+      w.resetsAt ? Math.max(0, Math.ceil((w.resetsAt - Date.now()) / 60000)) : null));
+    const expired = instance.quota?.resetCredits?.details?.map((c) => !!c.expiresAt && c.expiresAt <= Date.now());
+    const key = JSON.stringify([instance, peers, state.today?.homes[instance.id], !!state.today,
+      state.settings.timezone, clocks, expired]);
+    let entry = accountCards.get(instance.id);
+    if (entry?.key !== key) {
+      const card = accountCard(instance);
+      if (entry) updateAccountCard(entry.card, card);
+      entry = { key, card: entry?.card || card };
+      accountCards.set(instance.id, entry);
+    }
+    if (target.children[index] !== entry.card) target.insertBefore(entry.card, target.children[index] || null);
+  }
+  if (!instances.length && !target.children.length)
+    target.append(node('div', 'panel empty', '尚未发现数据目录，可以手动添加。'));
+  // 只有提示对应的卡片发生变化时才重新绑定，正常后台推送保持原来的节点。
+  if (hint && tooltipTarget?.isConnected) showTooltip(tooltipTarget);
+  else if (hint) {
+    const next = [...target.querySelectorAll('[data-tooltip-key]')].find((item) => item.dataset.tooltipKey === hint.key);
+    if (next && hint.focused) next.focus({ preventScroll: true });
+    else if (next) {
+      const rect = next.getBoundingClientRect();
+      if (Math.abs(rect.x - hint.rect.x) < 1 && Math.abs(rect.y - hint.rect.y) < 1) showTooltip(next);
+      else hideChartTooltip();
+    } else hideChartTooltip();
+  }
+}
 // 概览仅按索引已完成的实际数据展示，并持续报告首次扫描进度。
 function renderOverview() {
   const instances = state.instances || [],
@@ -462,28 +529,7 @@ function renderOverview() {
     ],
     ['今日参考费用', money(today?.cost), `定价覆盖 ${Math.round((today?.coverage || 0) * 100)}%`],
   ]);
-  // 后台会频繁推送状态；按实例恢复原提示，避免读卡片详情时被重绘打断。
-  const hint = tooltipTarget?.dataset.tooltipKey
-    ? {
-        key: tooltipTarget.dataset.tooltipKey,
-        focused: document.activeElement === tooltipTarget,
-        rect: tooltipTarget.getBoundingClientRect(),
-      }
-    : null;
-  $('#accounts').replaceChildren(...instances.map(accountCard));
-  if (hint) {
-    const next = [...document.querySelectorAll('#accounts [data-tooltip-key]')].find(
-      (element) => element.dataset.tooltipKey === hint.key,
-    );
-    if (next && hint.focused) next.focus({ preventScroll: true });
-    else if (next) {
-      const rect = next.getBoundingClientRect();
-      if (Math.abs(rect.x - hint.rect.x) < 1 && Math.abs(rect.y - hint.rect.y) < 1) showTooltip(next);
-      else hideChartTooltip();
-    } else hideChartTooltip();
-  }
-  if (!instances.length)
-    $('#accounts').append(node('div', 'panel empty', '尚未发现数据目录，可以手动添加。'));
+  renderAccounts(instances);
   chart($('#overview-chart'), state.summary?.daily, 14);
   $('#updated').textContent = state.indexedAt
     ? `索引更新 ${new Date(state.indexedAt).toLocaleTimeString()}`
@@ -533,7 +579,13 @@ function receive(next) {
       .map((m) => [m, m]),
     '全部模型',
   );
-  if (activeTab === 'usage' && !reportLoading && next.indexedAt !== report?.indexedAt) void loadReport();
+  if (activeTab === 'usage' && !reportLoading && reportKey() !== report?.revision) void loadReport();
+}
+// 数据版本与显示偏好共同决定账本是否需要更新，空闲索引不重建热力图。
+function reportKey() {
+  return JSON.stringify([state.dataRevision ?? state.indexedAt, state.settings.timezone,
+    state.settings.currency, state.settings.exchangeRate, state.settings.prices,
+    dayKey(Date.now(), state.settings.timezone)]);
 }
 // 筛选面板只是草稿；按钮标记仅由已经提交的条件决定。
 function updateFilterButton() {
@@ -595,32 +647,38 @@ async function loadReport() {
   const request = ++reportRequest;
   const query = { ...filter };
   const indexedAt = state.indexedAt;
+  const revision = reportKey();
+  let loaded = false;
   reportLoading = true;
   $('#apply-filter').disabled = true;
   try {
     const next = await call('report', query);
     if (request !== reportRequest) return;
-    report = { ...next, indexedAt, filter: query };
+    report = { ...next, indexedAt, revision, filter: query };
     renderReport();
+    loaded = true;
   } catch {
   } finally {
     if (request === reportRequest) {
       reportLoading = false;
       $('#apply-filter').disabled = false;
+      if (loaded && activeTab === 'usage' && reportKey() !== revision) void loadReport();
     }
   }
 }
 // 子树合计只计算显式父子关系，并通过 visited 防止损坏关系形成循环。
-function subtree(thread, all, visited = new Set()) {
-  const id = thread.home + thread.thread;
-  if (visited.has(id)) return 0;
-  visited.add(id);
-  return (
-    thread.tokens +
-    all
-      .filter((t) => t.home === thread.home && t.parent === thread.thread)
-      .reduce((sum, t) => sum + subtree(t, all, visited), 0)
-  );
+function subtree(thread, children) {
+  const visited = new Set(), pending = [thread];
+  let total = 0;
+  // 显式栈同时覆盖很深的派生链与循环关系，避免会话多时耗尽调用栈。
+  while (pending.length) {
+    const current = pending.pop(), id = `${current.home}:${current.thread}`;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    total += current.tokens;
+    for (const child of children.get(id) || []) pending.push(child);
+  }
+  return total;
 }
 // 账本模型分布、图表与表格都来自同一次筛选后的聚合。
 function renderReport() {
@@ -655,6 +713,16 @@ function renderReport() {
 }
 // 搜索只展示项目名与会话标识，账本从不存储提示词或模型回答。
 function renderThreads() {
+  // 每份报告建立一次父子索引，分页和搜索不再为每个子节点扫描完整会话列表。
+  if (indexedReport !== report) {
+    threadChildren = new Map();
+    for (const thread of report.threads) {
+      const key = `${thread.home}:${thread.parent}`;
+      if (!threadChildren.has(key)) threadChildren.set(key, []);
+      threadChildren.get(key).push(thread);
+    }
+    indexedReport = report;
+  }
   const search = $('#thread-search').value.toLowerCase(),
     threads = report.threads.filter((t) => `${t.project} ${t.thread}`.toLowerCase().includes(search));
   const body = $('#thread-rows');
@@ -679,7 +747,7 @@ function renderThreads() {
       ),
       node('td', '', t.source),
       node('td', '', compact(t.tokens)),
-      node('td', '', compact(subtree(t, report.threads))),
+      node('td', '', compact(subtree(t, threadChildren))),
       node('td', '', t.pricedTokens ? t.cost.toFixed(4) : '未定价'),
       node('td', '', new Date(t.lastAt).toLocaleDateString('zh-CN')),
     );
@@ -701,7 +769,6 @@ function renderThreads() {
 // 表单草稿与已保存设置分离，试听不会提前保存。
 function fillSettings(settings) {
   draft = structuredClone(settings);
-  dirty = false;
   replaceSettings = false;
   const form = $('#settings-form');
   for (const [key, value] of Object.entries(draft)) {
@@ -1050,7 +1117,8 @@ async function start() {
       toast('请填写模型名及三项有效价格');
       return;
     }
-    draft.prices[model] = {
+    // 计算属性作为自有字段保存，模型名不能触发 __proto__ 的特殊赋值行为。
+    draft.prices = { ...draft.prices, [model]: {
       input: Number(values[0]),
       cached: Number(values[1]),
       output: Number(values[2]),
@@ -1063,7 +1131,7 @@ async function start() {
       effective: $('#price-effective').value
         ? new Date(midnight($('#price-effective').value, state.settings.timezone)).toISOString()
         : '',
-    };
+    } };
     markDirty();
     renderPrices();
   });

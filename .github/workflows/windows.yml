@@ -56,6 +56,12 @@ jobs:
       - name: 验证账号测智界面与本地协议
         run: npm run test:accounts
         timeout-minutes: 3
+      - name: 验证后台刷新与常驻信息更新
+        run: npm run test:performance
+        timeout-minutes: 3
+      - name: 验证原生菜单与表情预览入口
+        run: npm run test:menu
+        timeout-minutes: 3
       - name: 构建 Windows 便携包
         run: npm run package:win
       - name: 验证解压后的安装包

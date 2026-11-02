@@ -56,11 +56,11 @@ if (!hasLock) {
     closing = true;
     void (async () => {
       await startup.prepareQuit().catch((error) => console.error('暂停自动启动失败：', error.message));
-      await dashboard?.stop();
-      await monitor?.stop();
-      await companion?.stop();
+      // 某一模块清理失败仍继续回收其他模块，避免后台进程和位置保存被跳过。
+      for (const [name, controller] of [['管理窗口', dashboard], ['统计采集', monitor], ['桌面角色', companion]])
+        await controller?.stop().catch((error) => console.error(`结束${name}失败：`, error.message));
     })().finally(() => {
-      void startup.stop().finally(() => {
+      void startup.stop().catch((error) => console.error('结束启动联动失败：', error.message)).finally(() => {
         quitAfterSave = true;
         app.quit();
       });

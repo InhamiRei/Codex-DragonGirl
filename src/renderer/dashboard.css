@@ -1185,10 +1185,6 @@ input[type='range']::-webkit-slider-thumb {
   border-bottom: 0;
   padding-bottom: 0;
 }
-.sound-row .sound-actions {
-  display: flex;
-  gap: 8px;
-}
 .sound-row button {
   width: 64px;
   height: 36px;

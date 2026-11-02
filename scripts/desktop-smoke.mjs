@@ -35,7 +35,7 @@ async function launch() {
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   });
   application = instance;
-  await until(async () => (await snapshot()).ready.length === 2, '角色或气泡窗口未完成初始化。');
+  await until(() => application.evaluate(() => globalThis.__dragonGirlTest?.started === true), '角色或气泡窗口未完成初始化。');
   // CDP 输入不移动系统光标；暂停原生光标兜底，避免真实光标干扰受控的自动化输入。
   await application.evaluate(() => {
     const companion = globalThis.__dragonGirlTest;
@@ -182,10 +182,14 @@ try {
   await bubble.emulateMedia({ reducedMotion: 'reduce' });
 
   // 检查真实窗口与角色局部坐标的组合，防止系统收回透明留白后出现底部空隙。
-  const initial = await snapshot();
-  const workArea = await application.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea);
-  const initialLayout = await page.evaluate(() => window.dragonGirl.bootstrap());
-  assert.equal(initial.windows.character.y + initialLayout.rect.y + initialLayout.rect.height, workArea.y + workArea.height);
+  // 窗口边界与局部布局在同一快照读取，避免首次显示期间跨两次消息拼出一像素误差。
+  const initial = await application.evaluate(({ screen }) => {
+    const companion = globalThis.__dragonGirlTest;
+    return { ...companion.snapshot(), layout: companion.characterModel(), workArea: screen.getPrimaryDisplay().workArea };
+  });
+  const workArea = initial.workArea;
+  const initialLayout = initial.layout;
+  assert.equal(initial.windows.character.y + initialLayout.rect.y + initialLayout.rect.height, workArea.y + workArea.height, JSON.stringify(initial));
   assert.equal(initial.windows.character.x + initialLayout.rect.x + initialLayout.rect.width, workArea.x + workArea.width);
   await until(() => page.evaluate(async () => {
     const model = await window.dragonGirl.bootstrap();

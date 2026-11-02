@@ -29,7 +29,9 @@ export async function readAccount(
   home,
   { appPath, networkEnv = {}, timeout = 15000, signal, executable, prefixArgs = [], details = false } = {},
 ) {
+  if (signal?.aborted) throw new Error('查询已取消');
   const cli = executable || (await locateCodex(appPath));
+  if (signal?.aborted) throw new Error('查询已取消');
   return new Promise((resolve, reject) => {
     const env = accountEnvironment(home, networkEnv);
     // 运行时前缀兼容脚本形式的 CLI，始终使用参数数组且不启用 shell。
@@ -77,8 +79,10 @@ export async function readAccount(
     child.on('exit', () => {
       if (!finished) finish(new Error('Codex 查询服务提前退出'));
     });
+    // 流式解码保留跨数据块的中文套餐与额度桶名称。
+    child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
-      buffer += chunk.toString();
+      buffer += chunk;
       if (buffer.length > 4 * 1024 * 1024) {
         finish(new Error('异常响应过大'));
         return;

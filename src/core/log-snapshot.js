@@ -55,6 +55,9 @@ export async function readRecentQuota(home) {
         if (meta.payload?.creator_account_id) account = digest(meta.payload.creator_account_id);
       } catch {}
       if (!result || quota.capturedAt > result.quota.capturedAt) result = { quota, account };
+    } catch {
+      // 日志可能在枚举后被归档或删除，单份文件失效不能挡住其他新鲜读数。
+      continue;
     } finally {
       await handle?.close();
     }

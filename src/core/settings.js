@@ -157,7 +157,9 @@ export function normalizeSettings(value = {}) {
         ([k, p]) =>
           k.length < 120 &&
           p &&
-          ['input', 'cached', 'output'].every((x) => Number.isFinite(p[x]) && p[x] >= 0),
+          ['input', 'cached', 'output'].every((x) => Number.isFinite(p[x]) && p[x] >= 0) &&
+          // 生效日期必须可解析，损坏导入不能使整个账本汇总异常或误用历史价格。
+          (!p.effective || (typeof p.effective === 'string' && Number.isFinite(Date.parse(p.effective)))),
       )
       .map(([k, p]) => [
         k,

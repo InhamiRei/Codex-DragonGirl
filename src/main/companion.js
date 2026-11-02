@@ -27,7 +27,7 @@ import {
 import { DragGesture } from '../shared/gesture.js';
 import { StateStore } from './state-store.js';
 import { dialogueLine } from '../shared/dialogue.js';
-import { eyeTrackingEnabled } from '../shared/gaze.js';
+import { DEFAULT_CHARACTER_ASSET, eyeTrackingEnabled } from '../shared/gaze.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const ORIGIN = 'dragon://app';
@@ -126,9 +126,14 @@ export class Companion {
     };
     powerMonitor.on('suspend', this.onSuspend);
     powerMonitor.on('resume', this.onResume);
+    // 素材加载期间工作区可能变化；监听建立后再同步一次，避免沿用启动前的边界。
+    this.restore();
+    this.applyCharacter();
     this.shortcutRegistered =
       !this.secondary && globalShortcut.register(SHORTCUT, () => this.toggleVisibility());
+    this.updateMenu();
     this.pollCursor();
+    this.started = true;
   }
 
   // 只创建角色附近的小窗口，气泡不占用角色窗口的几何范围。
@@ -239,9 +244,9 @@ export class Companion {
       if (c?.validPoint(point)) c.endGesture(point);
     });
     ipcMain.on('dg:gesture-cancel', (event) => locate(event, 'character')?.cancelGesture());
-    ipcMain.on('dg:menu', (event) => {
+    ipcMain.on('dg:menu', (event, point) => {
       const c = locate(event, 'character');
-      if (c) c.buildMenu().popup({ window: c.windows.get('character') });
+      if (c) c.showMenu(point);
     });
     ipcMain.on('dg:close-bubble', (event) => locate(event, 'bubble')?.hideBubble());
     ipcMain.on('dg:bubble-measured', (event, measurement) =>
@@ -303,7 +308,7 @@ export class Companion {
   applyCharacter() {
     const window = this.windows.get('character');
     if (!window || window.isDestroyed()) return;
-    window.setBounds(stageBounds(this.character), false);
+    if (!this.contextMenu) window.setBounds(stageBounds(this.character), false);
     this.sendCharacterLayout();
     if (this.bubbleVisible) this.positionBubble();
     this.pollCursor(true);
@@ -467,11 +472,12 @@ export class Companion {
     this.windows.get('bubble')?.hide();
   }
 
-  // 点击穿透在原生窗口层切换；手势进行中必须保留输入直到松手。
+  // 手势和原生菜单展开期间保留输入，移出角色后仍能悬停子菜单。
   setInteractive(view, enabled) {
     const window = this.windows.get(view);
     if (!window || window.isDestroyed()) return;
-    const next = view === 'character' && this.gesture.active ? true : enabled;
+    const next = view === 'character' && (this.gesture.active
+      || (this.contextMenu && this.visible && !this.suppressedByFollow && !this.stopping)) ? true : enabled;
     if (this.interactive.get(view) === next) return;
     this.interactive.set(view, next);
     window.setIgnoreMouseEvents(!next, { forward: true });
@@ -483,6 +489,8 @@ export class Companion {
   pollCursor(force = false) {
     if (this.stopping) return;
     clearTimeout(this.cursorTimer);
+    // 菜单自行追踪鼠标；全局轮询此时不能把所属窗口重新设为穿透。
+    if (this.contextMenu) return;
     const point = screen.getCursorScreenPoint();
     let nearby = false;
     let followingEyes = false;
@@ -518,6 +526,37 @@ export class Companion {
     });
   }
 
+  // 在实际右击位置打开菜单，整个生命周期保留菜单对象与鼠标输入。
+  showMenu(point = screen.getCursorScreenPoint()) {
+    const window = this.windows.get('character');
+    if (this.stopping || this.contextMenu || !this.validPoint(point)
+      || !window || window.isDestroyed() || !window.isVisible()) return;
+    const menu = this.buildMenu();
+    // 关闭后恢复紧贴角色的小窗口和光标轮询，透明区域重新穿透。
+    const closed = () => {
+      if (this.contextMenu !== menu) return;
+      this.contextMenu = null;
+      this.applyCharacter();
+    };
+    this.contextMenu = menu;
+    clearTimeout(this.cursorTimer);
+    try {
+      // macOS 小型透明窗口会使菜单折叠；临时提供整块工作区，角色屏幕位置保持不变。
+      if (process.platform === 'darwin') {
+        window.setBounds(screen.getDisplayNearestPoint(point).workArea, false);
+        this.sendCharacterLayout();
+      }
+      const bounds = window.getContentBounds();
+      this.setInteractive('character', true);
+      // 指定所属网页框架，让系统使用原生上下文菜单的事件路由。
+      menu.popup({ window, frame: window.webContents.mainFrame,
+        x: Math.round(point.x - bounds.x), y: Math.round(point.y - bounds.y), callback: closed });
+    } catch (error) {
+      closed();
+      throw error;
+    }
+  }
+
   // 原生菜单让透明挂件不必常驻额外按钮，角色本体和设置入口保持分离。
   buildMenu() {
     return Menu.buildFromTemplate([
@@ -533,6 +572,19 @@ export class Companion {
       {
         label: '说句话',
         click: () => this.speak(),
+      },
+      // 手动预览复用现有动画并自动恢复；托盘操作先叫出角色，自定义图片和关闭动态表情时禁用。
+      {
+        label: '表情',
+        enabled: (!this.appearance.asset || this.appearance.asset === DEFAULT_CHARACTER_ASSET)
+          && this.appearance.settings?.expressionsEnabled !== false,
+        submenu: [['开心', 'happy'], ['伤心', 'sad']].map(([label, name]) => ({
+          label,
+          click: () => {
+            this.show();
+            this.showExpression(name);
+          },
+        })),
       },
       {
         label: '大小',
@@ -585,10 +637,15 @@ export class Companion {
     ]);
   }
 
-  // 每次设置变化后重建菜单，托盘和右键看到的都是当前值。
+  // 仅菜单内容变化时重建托盘菜单，频繁窗口快照不会打断正在展开的菜单。
   updateMenu() {
-    if (!this.stopping && this.tray && !this.tray.isDestroyed())
-      this.tray.setContextMenu(this.buildMenu());
+    if (this.stopping || !this.tray || this.tray.isDestroyed()) return;
+    const key = JSON.stringify([this.instanceName, !!this.delegate, this.visible, this.state.scale,
+      this.state.snapEnabled, this.state.speechEnabled, this.shortcutRegistered,
+      this.appearance.asset, this.appearance.settings?.expressionsEnabled]);
+    if (key === this.menuKey) return;
+    this.tray.setContextMenu(this.buildMenu());
+    this.menuKey = key;
   }
 
   // 重置只影响位置，大小、气泡与吸附偏好继续保留。
@@ -615,6 +672,7 @@ export class Companion {
   // 主动收起同时取消未完成手势，避免恢复时仍然跟随鼠标。
   hide() {
     if (this.stopping) return;
+    this.contextMenu?.closePopup(this.windows.get('character'));
     this.cancelGesture();
     this.visible = false;
     this.hideBubble();
@@ -643,17 +701,28 @@ export class Companion {
       }
     }
     this.applyCharacter();
-    if (this.bubbleVisible && this.bubbleKind === 'usage') {
-      this.setBubbleContent(this.delegate?.bubbleFor?.(this) || this.bubbleModel.text);
-      this.positionBubble();
-    }
+    this.refreshUsageBubble();
+  }
+
+  // 常驻用量气泡跟随最新读数更新，内容不变时不重排，也不重置自动收起时间。
+  refreshUsageBubble() {
+    if (this.stopping || !this.bubbleVisible || this.bubbleKind !== 'usage') return;
+    const content = this.delegate?.bubbleFor?.(this) || this.bubbleModel.text;
+    const text = typeof content === 'string' ? content : content.text;
+    const usage = typeof content === 'string' ? null : content.usage;
+    if (text === this.bubbleModel.text && JSON.stringify(usage) === JSON.stringify(this.bubbleModel.usage)) return;
+    this.setBubbleContent(content);
+    this.positionBubble();
   }
 
   // 跟随只改变显示位置，不覆盖独立桌面模式保存的位置意图。
   followFrame(frame, offset = { x: 1, y: 1 }) {
+    // 菜单展开时固定窗口位置，让二级菜单持续接收悬停；宿主隐藏时仍正常收起。
+    if (this.contextMenu && frame) return;
     this.followTarget = frame;
     this.suppressedByFollow = !frame;
     if (!frame) {
+      this.contextMenu?.closePopup(this.windows.get('character'));
       // 弹窗或最小化期间同时释放拖拽和鼠标命中，恢复时不改变用户主动隐藏的状态。
       this.cancelGesture();
       this.hideBubble();
@@ -712,6 +781,8 @@ export class Companion {
   // 退出前停止轮询、注销快捷键并等待保存，避免留下后台观察进程。
   async stop() {
     this.stopping = true;
+    this.started = false;
+    this.contextMenu?.closePopup(this.windows.get('character'));
     Companion.registry.delete(this);
     clearTimeout(this.cursorTimer);
     clearTimeout(this.bubbleTimer);

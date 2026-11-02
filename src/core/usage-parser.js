@@ -144,9 +144,8 @@ export function parseUsageEvent(event, state, homeId) {
 }
 // 费用是明示价格下的 API 等价估算，未知模型保留 null。
 export function estimateCost(row, prices = {}) {
-  const price = prices[row.model]
-    ? { ...BUILTIN_PRICES[row.model], ...prices[row.model] }
-    : BUILTIN_PRICES[row.model];
+  const builtin = Object.hasOwn(BUILTIN_PRICES, row.model) ? BUILTIN_PRICES[row.model] : null;
+  const price = Object.hasOwn(prices, row.model) ? { ...builtin, ...prices[row.model] } : builtin;
   if (!price) return null;
   if (price.effective && row.time < Date.parse(price.effective)) return null;
   const multiplier =

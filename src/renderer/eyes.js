@@ -174,11 +174,6 @@ export class EyeTracker {
     this.blink = 0;
   }
 
-  // 保留开心入口，轻点与完成使用同一套表情状态机。
-  showHappy() {
-    return this.showExpression('happy');
-  }
-
   // 新事件替换上一种表情，同类事件续接亮度；隐藏、拖动和未准备好的素材不积压事件。
   showExpression(name) {
     if (!['happy', 'sad'].includes(name) || !this.enabled || !this.expressionAllowed

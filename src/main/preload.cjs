@@ -24,7 +24,7 @@ contextBridge.exposeInMainWorld(
     moveGesture: (point) => ipcRenderer.send('dg:gesture-move', point),
     endGesture: (point) => ipcRenderer.send('dg:gesture-end', point),
     cancelGesture: () => ipcRenderer.send('dg:gesture-cancel'),
-    menu: () => ipcRenderer.send('dg:menu'),
+    menu: (point) => ipcRenderer.send('dg:menu', point),
     closeBubble: () => ipcRenderer.send('dg:close-bubble'),
     measureBubble: (measurement) => ipcRenderer.send('dg:bubble-measured', measurement),
     assetError: () => ipcRenderer.send('dg:asset-error'),

@@ -10,6 +10,7 @@ import { discoverHomes } from '../src/core/instances.js';
 import { normalizeSettings, isQuiet } from '../src/core/settings.js';
 import { dayKey, midnight, nextDay } from '../src/shared/time.js';
 import { readAccount } from '../src/core/rpc.js';
+import { readRecentQuota } from '../src/core/log-snapshot.js';
 
 // 测试事件保留真实协议关键字段，不依赖任何用户历史内容。
 const event = (type, payload, sec = 1) => ({
@@ -228,7 +229,11 @@ test('设置校验拒绝异常路径、错误价格和高频轮询', () => {
   const settings = normalizeSettings({
     refreshSeconds: 0,
     characterAsset: '../../secret.png',
-    prices: { bad: { input: -1, cached: 1, output: 1 } },
+    prices: {
+      bad: { input: -1, cached: 1, output: 1 },
+      invalidDate: { input: 1, cached: 1, output: 1, effective: '不是日期' },
+      invalidType: { input: 1, cached: 1, output: 1, effective: { toString: '无效' } },
+    },
   });
   assert.equal(settings.refreshSeconds, 30);
   assert.equal(settings.characterAsset, '');
@@ -331,4 +336,82 @@ test('默认气泡移除实例名与状态行、升级 Tokens 单位并保留自
   assert.equal(normalizeSettings({ bubbleTemplate: custom }).bubbleTemplate, custom);
   const customStatus = '自定义状态：{任务状态}';
   assert.equal(normalizeSettings({ bubbleTemplate: customStatus }).bubbleTemplate, customStatus);
+});
+
+// 未知模型名即使与对象原型重名，也只能显示未定价，不能污染金额和模型分布。
+test('原型同名模型保持未定价并正常汇总', async (t) => {
+  const { dir, ledger } = await fixture(t);
+  for (const [index, model] of ['constructor', '__proto__', 'toString'].entries()) {
+    const row = { type: 'token_usage_record', timestamp: '2026-10-30T01:00:00Z',
+      payload: { response_id: `prototype-${index}`, usage: { input_tokens: 10, total_tokens: 10 } } };
+    const file = path.join(dir, `${index}.jsonl`);
+    await fs.writeFile(file, [event('session_meta', { id: `prototype-${index}` }),
+      event('turn_context', { model }), row].map(JSON.stringify).join('\n') + '\n');
+    await ledger.scanFile(file, 'fixture');
+    assert.equal(estimateCost({ model, time: Date.now() }), null);
+  }
+  const report = ledger.report();
+  assert.equal(report.total, 30);
+  assert.equal(report.cost, null);
+  for (const model of ['constructor', '__proto__', 'toString']) assert.equal(report.models[model], 10);
+});
+
+// 账户协议与生成协议一样需要跨块解码；取消发生在启动之前时不得创建子进程。
+test('账户 RPC 保留跨块中文并在启动前响应取消', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-rpc-utf8-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const executable = path.join(dir, 'fixture.cjs');
+  await fs.writeFile(executable, `const readline = require('node:readline');
+let queue = Promise.resolve();
+// 将中文字符的 UTF-8 字节拆开，模拟真实管道的任意边界。
+readline.createInterface({ input: process.stdin }).on('line', line => { queue = queue.then(() => new Promise(resolve => {
+  const m = JSON.parse(line); if (!m.id) { resolve(); return; }
+  const result = m.id === 1 ? {} : m.id === 2 ? { account: { planType: '测试中文套餐' } } : { rateLimits: {} };
+  const bytes = Buffer.from(JSON.stringify({ id: m.id, result }) + String.fromCharCode(10));
+  const index = bytes.indexOf(Buffer.from('中'));
+  if (index < 0) { process.stdout.write(bytes); resolve(); }
+  else { process.stdout.write(bytes.subarray(0, index + 1)); setTimeout(() => { process.stdout.write(bytes.subarray(index + 1)); resolve(); }, 20); }
+})); });`);
+  const result = await readAccount(dir, { executable: process.execPath, prefixArgs: [executable] });
+  assert.equal(result.account.planType, '测试中文套餐');
+  await assert.rejects(readAccount(dir, { executable: path.join(dir, 'must-not-start'),
+    signal: AbortSignal.abort() }), /查询已取消/);
+});
+
+// 文件轮转可能发生在枚举与打开之间，仍要继续读取其他有效日志。
+test('近期额度跳过已被归档的文件并保留其他新鲜读数', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-recent-quota-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const folder = path.join(directory, 'sessions');
+  await fs.mkdir(folder);
+  const timestamp = new Date().toISOString();
+  const lines = [
+    { type: 'session_meta', timestamp, payload: { creator_account_id: 'fixture' } },
+    { type: 'event_msg', timestamp, payload: { type: 'token_count', rate_limits: {
+      primary: { used_percent: 30, window_minutes: 300 } } } },
+  ].map(JSON.stringify).join('\n') + '\n';
+  const missing = path.join(folder, 'rotated.jsonl');
+  const valid = path.join(folder, 'valid.jsonl');
+  await fs.writeFile(valid, lines);
+  await fs.writeFile(missing, lines);
+  await fs.utimes(missing, new Date(), new Date(Date.now() + 1000));
+  const open = fs.open.bind(fs);
+  t.mock.method(fs, 'open', async (file, ...args) => {
+    if (file === missing) throw Object.assign(new Error('已轮转'), { code: 'ENOENT' });
+    return open(file, ...args);
+  });
+  const result = await readRecentQuota(directory);
+  assert.equal(result.quota.buckets[0].windows[0].remaining, 70);
+  assert.equal(result.quota.source, '会话快照');
+});
+
+// 退出中断读取时回滚当前事务，之后仍能重新扫描同一份文件。
+test('中断日志读取会关闭流并允许后续重新扫描', async (t) => {
+  const { dir, ledger } = await fixture(t);
+  const file = path.join(dir, 'aborted.jsonl');
+  await fs.writeFile(file, [event('session_meta', { id: 'abort' }), count(100, 2)].map(JSON.stringify).join('\n') + '\n');
+  await assert.rejects(ledger.scanFile(file, 'fixture', () => {}, AbortSignal.abort()), /aborted/i);
+  assert.equal(ledger.report().total, 0);
+  await ledger.scanFile(file, 'fixture');
+  assert.equal(ledger.report().total, 100);
 });

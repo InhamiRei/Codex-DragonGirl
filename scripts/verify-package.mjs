@@ -92,7 +92,7 @@ try {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
   // 从解压后的真实安装包验证两类表情，确认含泪素材和新渲染模块都已随包发布。
-  for (const script of ['expression-smoke.mjs', 'sad-smoke.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
+  for (const script of ['menu-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'performance-smoke.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
   const result = {
@@ -112,6 +112,8 @@ try {
       '位置保存与重启恢复、内置音效离线可用',
       '四档显示比例下双额度完整且无原生滚动条',
       '安装包成功与失败表情、素材加载和自动恢复',
+      '原生菜单完整展开、二级输入与关闭后窗口恢复',
+      '后台刷新复用节点与菜单、常驻气泡和账号状态及时更新',
     ],
   };
   await fs.writeFile(

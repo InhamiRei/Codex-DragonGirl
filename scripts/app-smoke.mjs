@@ -189,8 +189,13 @@ async function verifyAccountHeader() {
   await hoverHint(first, '重置卡悬停未显示详情');
   assert.match(await tooltip.textContent(), /可用重置卡 2 张\n第 1 张 · .+ 到期\n第 2 张 · 无到期限制/);
   await first.evaluate((element) => { element.dataset.beforeRefresh = 'true'; });
-  await application.evaluate(() => globalThis.__dragonGirlApp.monitor.publish());
-  await until(() => first.getAttribute('data-before-refresh').then((value) => value === null), '后台状态未推送到卡片');
+  await application.evaluate(() => {
+    const m = globalThis.__dragonGirlApp.monitor;
+    m.readings.get(m.instances[0].id).quota.resetCredits.count++;
+    m.publish();
+  });
+  await until(() => first.textContent().then((value) => value === '重置卡 3 张'), '后台状态未推送到卡片');
+  assert.equal(await first.getAttribute('data-before-refresh'), 'true', '额度更新替换了正在悬停的节点');
   assert.equal(await first.getAttribute('aria-describedby'), 'chart-tooltip', '后台重绘打断了重置卡提示');
   assert.equal(await tooltip.isVisible(), true);
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
@@ -202,8 +207,13 @@ async function verifyAccountHeader() {
   await missing.focus();
   await until(() => tooltip.textContent().then((text) => /服务未返回到期明细/.test(text)), '键盘聚焦未显示缺失明细提示');
   await missing.evaluate((element) => { element.dataset.beforeRefresh = 'true'; });
-  await application.evaluate(() => globalThis.__dragonGirlApp.monitor.publish());
-  await until(() => missing.getAttribute('data-before-refresh').then((value) => value === null), '后台状态未推送到卡片');
+  await application.evaluate(() => {
+    const m = globalThis.__dragonGirlApp.monitor;
+    m.readings.get(m.instances[1].id).quota.resetCredits.count++;
+    m.publish();
+  });
+  await until(() => missing.textContent().then((value) => value === '重置卡 3 张'), '后台状态未推送到卡片');
+  assert.equal(await missing.getAttribute('data-before-refresh'), 'true', '额度更新替换了键盘聚焦节点');
   assert.equal(await missing.evaluate((element) => document.activeElement === element), true, '后台重绘丢失了重置卡焦点');
   await missing.evaluate((element) => element.blur());
   const empty = page.locator('.account').nth(2).locator('.reset-credits');

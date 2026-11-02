@@ -40,6 +40,7 @@ export class Monitor extends EventEmitter {
   // 加载本应用缓存后立即发现实例，历史索引在 Worker 中执行。
   async start() {
     this.settings = await this.settingsStore.load();
+    if (this.stopped) return;
     try {
       const saved = JSON.parse(await fs.readFile(path.join(this.directory, 'snapshots.json'), 'utf8'));
       // 缓存仅恢复仍在使用的账户字段，旧版废弃统计不会继续发布或保存。
@@ -54,18 +55,16 @@ export class Monitor extends EventEmitter {
         });
       this.alerts = new AlertTracker(saved.alerts || []);
     } catch {}
+    if (this.stopped) return;
     this.worker = new Worker(new URL('../workers/usage-worker.js', import.meta.url), {
       workerData: { file: path.join(this.directory, 'usage.sqlite') },
     });
     this.worker.on('message', (message) => this.workerMessage(message));
-    this.worker.on('error', () => {
-      this.indexError = '统计进程异常，请重新打开应用';
-      for (const pending of this.pending.values()) pending.reject(new Error(this.indexError));
-      this.pending.clear();
-      this.publish();
-    });
+    this.worker.on('error', () => this.workerFailed());
+    this.worker.on('exit', () => { if (!this.stopped) this.workerFailed(); });
     if (!this.testMode) this.startNative();
     await this.discover();
+    if (this.stopped) return;
     this.discoveryTimer = setInterval(() => this.discover().catch(() => {}), 5000);
     this.scanTimer = setInterval(() => {
       if (!this.scanning) this.worker.postMessage({ type: 'scan' });
@@ -79,14 +78,17 @@ export class Monitor extends EventEmitter {
   }
   // Native 桥只发送几何与必要连接信息，stderr 不保存潜在进程环境。
   startNative() {
+    if (this.stopped) return;
     this.native = spawn(nativeBridgePath(ROOT), [], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     const bridge = this.native;
     let buffer = '';
+    // 中文目录和代理值可能跨管道数据块，使用流式 UTF-8 解码。
+    this.native.stdout.setEncoding('utf8');
     this.native.stdout.on('data', (chunk) => {
-      buffer += chunk.toString();
+      buffer += chunk;
       if (buffer.length > 2e6) {
         buffer = '';
         return;
@@ -143,6 +145,7 @@ export class Monitor extends EventEmitter {
         ? process.env.DRAGONGIRL_FIXTURE_HOME || path.join(this.directory, 'empty-home')
         : undefined,
     );
+    if (this.stopped) return;
     const changed = next.map((i) => i.home).join('|') !== this.instances.map((i) => i.home).join('|');
     this.instances = next;
     if (changed || !this.configured) {
@@ -161,6 +164,7 @@ export class Monitor extends EventEmitter {
     this.readingLogs = true;
     try {
       for (const i of this.instances) {
+        if (this.stopped) return;
         const recent = await readRecentQuota(i.home).catch(() => null);
         if (recent) this.logs.set(i.id, recent);
       }
@@ -331,6 +335,7 @@ export class Monitor extends EventEmitter {
 
   // Worker 推送使用固定字段，初始扫描的历史事件不触发声音。
   workerMessage(m) {
+    if (this.stopped) return;
     if (m.id) {
       const promise = this.pending.get(m.id);
       if (promise) {
@@ -344,8 +349,12 @@ export class Monitor extends EventEmitter {
       this.scanning = !m.complete;
     }
     if (m.type === 'log-quota') this.logs.set(m.home, { quota: m.quota, account: m.account });
-    if (m.type === 'thread-state') {
-      this.activeTasks.set(`${m.home}:${m.thread}`, m);
+    if (m.type === 'thread-state') this.activeTasks.set(`${m.home}:${m.thread}`, m);
+    if (m.type === 'thread-states')
+      this.activeTasks = new Map(m.states.map((state) => [`${state.home}:${state.thread}`, state]));
+    if (m.type === 'index-error') {
+      this.scanning = false;
+      this.indexError = '本机账本扫描失败，请重试刷新';
     }
     if (m.type === 'task') {
       const i = this.instances.find((i) => i.id === m.task.home);
@@ -363,7 +372,14 @@ export class Monitor extends EventEmitter {
     }
     if (m.type === 'indexed') {
       this.indexedAt = m.at;
-      this.summaryPromise = this.updateSummary();
+      this.dataRevision = m.revision;
+      const today = dayKey(Date.now(), this.settings.timezone);
+      // 空闲扫描不重复汇总全部历史；跨日、价格或时区变化仍会更新。
+      if (m.revision === undefined || m.revision !== this.summaryRevision || today !== this.summaryDay) {
+        this.summaryRevision = m.revision;
+        this.summaryDay = today;
+        this.summaryPromise = (this.summaryPromise || Promise.resolve()).then(() => this.updateSummary());
+      }
     }
     this.publish();
   }
@@ -400,6 +416,7 @@ export class Monitor extends EventEmitter {
       }
       this.publish();
     } catch {
+      this.summaryRevision = null;
       this.indexError = '本机账本汇总失败，请重试刷新';
       this.publish();
     }
@@ -420,11 +437,22 @@ export class Monitor extends EventEmitter {
   // 统一查询请求 ID，关闭和错误时拒绝待处理承诺。
   request(type, params = {}) {
     if (this.stopped) return Promise.reject(new Error('应用正在退出'));
+    if (this.workerUnavailable) return Promise.reject(new Error('统计进程异常，请重新打开应用'));
     const id = ++this.requestId;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.worker.postMessage({ id, type, ...params });
+      try { this.worker.postMessage({ id, type, ...params }); }
+      catch (error) { this.pending.delete(id); reject(error); }
     });
+  }
+  // 统计进程意外退出后同时结束当前和后续请求，避免刷新按钮永久等待。
+  workerFailed() {
+    this.workerUnavailable = true;
+    this.scanning = false;
+    this.indexError = '统计进程异常，请重新打开应用';
+    for (const pending of this.pending.values()) pending.reject(new Error(this.indexError));
+    this.pending.clear();
+    this.publish();
   }
   // 按实际新鲜度选择数据，不将几小时前的日志当作实时额度。
   snapshot() {
@@ -459,6 +487,7 @@ export class Monitor extends EventEmitter {
       }),
       progress: this.progress,
       indexedAt: this.indexedAt,
+      dataRevision: this.dataRevision,
       refreshState: this.refreshState,
       indexError: this.indexError,
       nativeError: this.nativeError,
@@ -488,6 +517,8 @@ export class Monitor extends EventEmitter {
   async saveSettings(value) {
     this.settings = await this.settingsStore.save(value);
     if (this.stopped) return this.settings;
+    // 修改预算等偏好后重新评估提醒，即使日志本身没有新增也要生效。
+    this.summaryRevision = null;
     clearInterval(this.scanTimer);
     this.scanTimer = setInterval(() => {
       if (!this.scanning) this.worker.postMessage({ type: 'scan' });
@@ -537,11 +568,15 @@ export class Monitor extends EventEmitter {
     for (const p of this.pending.values()) p.reject(new Error('应用正在退出'));
     this.pending.clear();
     if (this.worker) {
-      this.worker.postMessage({ type: 'close' });
-      await Promise.race([
-        new Promise((r) => this.worker.once('exit', r)),
-        new Promise((r) => setTimeout(r, 4000)),
-      ]);
+      let deadline;
+      if (!this.workerUnavailable) {
+        // 正常退出立即移除兜底计时器，不额外拖延进程结束。
+        const exited = new Promise((resolve) => this.worker.once('exit', resolve));
+        this.worker.postMessage({ type: 'close' });
+        try {
+          await Promise.race([exited, new Promise((resolve) => { deadline = setTimeout(resolve, 4000); })]);
+        } finally { clearTimeout(deadline); }
+      }
       await this.worker.terminate();
     }
   }

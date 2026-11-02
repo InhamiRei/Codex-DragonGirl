@@ -253,7 +253,8 @@ async function start() {
   });
   stage.addEventListener('contextmenu', (event) => {
     event.preventDefault();
-    if (isCharacterHit({ x: event.clientX, y: event.clientY })) bridge.menu();
+    // 右键菜单使用本次事件的屏幕坐标，不依赖透明窗口缓存的旧鼠标位置。
+    if (isCharacterHit({ x: event.clientX, y: event.clientY })) bridge.menu(screenPoint(event));
   });
   window.addEventListener('blur', () => finishPointer(null, true));
   reducedMotion.addEventListener('change', configureEyes);

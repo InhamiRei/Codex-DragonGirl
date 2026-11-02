@@ -60,3 +60,70 @@ test('手动刷新串接正在进行的批次，合并重复操作并等待账�
   assert.equal(result.indexError, null);
   assert.ok(result.finishedAt >= result.startedAt);
 });
+
+// 意外退出必须结束已发出的查询，并拒绝后续查询，刷新按钮不能永久挂起。
+test('统计进程退出同时拒绝当前和后续请求', async (t) => {
+  const monitor = new Monitor(os.tmpdir(), { testMode: true });
+  t.after(() => { monitor.stopped = true; clearTimeout(monitor.publishTimer); });
+  monitor.worker = { postMessage() {} };
+  const pending = monitor.request('report');
+  monitor.workerFailed();
+  await assert.rejects(pending, /统计进程异常/);
+  await assert.rejects(monitor.request('scan'), /统计进程异常/);
+  assert.equal(monitor.pending.size, 0);
+  assert.equal(monitor.scanning, false);
+});
+
+// 没有新增日志时复用汇总，价格与预算设置变化后仍能重新计算。
+test('空闲扫描不重复汇总，新增日志和偏好变化会更新数据', { timeout: 15000 }, async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-index-cache-'));
+  const home = path.join(directory, 'fixture-home');
+  const folder = path.join(home, 'sessions');
+  await fs.mkdir(folder, { recursive: true });
+  const monitor = new Monitor(directory, { testMode: true });
+  t.after(async () => { await monitor.stop(); await fs.rm(directory, { recursive: true, force: true }); });
+  await monitor.settingsStore.save({ manualHomes: [home] });
+  // 多份历史和一份近期日志用于核对通信数量与状态回收，不接触真实账号。
+  const stamp = new Date().toISOString();
+  const historical = new Date(Date.now() - 86400000).toISOString();
+  for (let index = 0; index < 65; index++) {
+    const timestamp = index === 64 ? stamp : historical;
+    await fs.writeFile(path.join(folder, `${index}.jsonl`), [
+      { type: 'session_meta', timestamp, payload: { id: `thread-${index}` } },
+      { type: 'turn_context', timestamp, payload: { model: 'fixture-model' } },
+      { type: 'event_msg', timestamp, payload: { type: 'task_started', turn_id: 'turn' } },
+      { type: 'token_usage_record', timestamp, payload: { response_id: `response-${index}`, usage: { input_tokens: 100, total_tokens: 100 } } },
+    ].map(JSON.stringify).join('\n') + '\n');
+  }
+  let reports = 0;
+  const request = monitor.request.bind(monitor);
+  monitor.request = (type, value) => { if (type === 'report') reports++; return request(type, value); };
+  await monitor.start();
+  await monitor.request('scan');
+  await monitor.summaryPromise;
+  assert.equal(monitor.summary.total, 6500);
+  assert.equal(monitor.activeTasks.size, 1);
+  const revision = monitor.dataRevision;
+  const initialReports = reports;
+  const messages = [];
+  monitor.worker.on('message', (message) => messages.push(message));
+  await monitor.request('scan');
+  await monitor.summaryPromise;
+  assert.equal(reports, initialReports, '空闲扫描仍然重复查询全部历史');
+  assert.equal(monitor.dataRevision, revision);
+  assert.equal(messages.filter((m) => m.type === 'thread-states').length, 1);
+  assert.equal(messages.filter((m) => m.type === 'thread-state').length, 0);
+  await fs.appendFile(path.join(folder, '64.jsonl'), JSON.stringify({ type: 'token_usage_record', timestamp: stamp,
+    payload: { response_id: 'appended', usage: { input_tokens: 50, total_tokens: 50 } } }) + '\n');
+  await monitor.request('scan');
+  await monitor.summaryPromise;
+  assert.equal(monitor.summary.total, 6550);
+  assert.ok(monitor.dataRevision > revision);
+  await monitor.saveSettings({ ...monitor.settings, prices: { 'fixture-model': { input: 1, cached: 0, output: 1 } } });
+  await monitor.request('scan');
+  await monitor.summaryPromise;
+  assert.ok(Math.abs(monitor.summary.cost - 0.00655) < 1e-12);
+  await fs.rm(path.join(folder, '64.jsonl'));
+  await monitor.request('scan');
+  assert.equal(monitor.activeTasks.size, 0, '已移除日志的任务状态没有释放');
+});
