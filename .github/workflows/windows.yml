@@ -27,6 +27,9 @@ jobs:
         run: npm run check
       - name: 准备隔离音效测试缓存
         run: node scripts/fetch-reference-audio.mjs
+      - name: 验证跟随窗口的遮挡层级与恢复
+        run: npm run test:follow
+        timeout-minutes: 3
       - name: 验证后台刷新与常驻信息更新
         run: npm run test:performance
         timeout-minutes: 3
@@ -43,9 +46,6 @@ jobs:
         timeout-minutes: 3
       - name: 验证位置和音效重启恢复
         run: npm run test:position
-        timeout-minutes: 3
-      - name: 验证跟随窗口的遮挡层级与恢复
-        run: npm run test:follow
         timeout-minutes: 3
       - name: 验证气泡缩放与原生滚动条
         run: npm run test:bubble

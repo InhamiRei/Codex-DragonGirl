@@ -152,6 +152,12 @@ try {
   const original = (await companionState()).character;
   await raise(host, cover);
   await expectStack(host, cover, false);
+  // Windows CI 另用真实输入激活宿主，覆盖普通窗口置前权限限制，不能只验收后台窗口之间的排序。
+  if (!isMac && process.env.GITHUB_ACTIONS === 'true') {
+    await send(host, 'click');
+    await until(() => systemState(host.child.pid).host?.frontmost, '标题栏点击没有实际激活测试宿主');
+    await expectStack(host, cover, false);
+  }
   // 点击前台宿主会重新排列普通窗口；连续采样必须始终看见角色与气泡，不能容许先消失再补回。
   if (isMac) {
     await raise(host, cover);
