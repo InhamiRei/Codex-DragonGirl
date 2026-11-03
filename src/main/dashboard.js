@@ -265,6 +265,7 @@ export class Dashboard {
     const settings = this.monitor.settings;
     if (!settings) return;
     for (const pet of [this.primary, ...this.pets.values()]) {
+      pet.setFollowMode(settings.mode === 'follow');
       if (settings.mode === 'desktop') {
         if (pet.suppressedByFollow || pet.followTarget) {
           pet.suppressedByFollow = false;
@@ -277,10 +278,12 @@ export class Dashboard {
       }
       const process = this.monitor.processes.find((p) => p.pid === pet.followPID);
       let frame = followWindowFrame(process);
-      // Windows 原生窗口使用物理像素，转换为 Electron 的逻辑坐标后再跟随。
+      // Windows 转换为逻辑坐标时保留原生窗口编号，位置与前后层级都绑定到同一宿主。
       if (frame && process.coordinateSpace === 'physical' && globalThis.process.platform === 'win32')
-        frame = screen.screenToDipRect(null, frame);
-      pet.followFrame(frame, settings.followOffsets[pet.home] || { x: 1, y: 1 });
+        frame = { ...frame, ...screen.screenToDipRect(null, frame) };
+      pet.followFrame(frame, settings.followOffsets[pet.home] || { x: 1, y: 1 }, {
+        order: this.monitor.windowOrder, topmost: this.monitor.topmostWindows, normalWindows: this.monitor.normalWindows,
+      });
     }
   }
   // 跟随模式中的拖拽保存窗口内相对锚点，屏幕缩放不会破坏用户意图。

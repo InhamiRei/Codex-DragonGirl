@@ -44,6 +44,9 @@ jobs:
       - name: 验证位置和音效重启恢复
         run: npm run test:position
         timeout-minutes: 3
+      - name: 验证跟随窗口的遮挡层级与恢复
+        run: npm run test:follow
+        timeout-minutes: 3
       - name: 验证气泡缩放与原生滚动条
         run: npm run test:bubble
         timeout-minutes: 3
@@ -80,6 +83,16 @@ jobs:
             output/release-manifest-Windows-x64.json
             output/verification-Windows-x64.json
           if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Windows-window-validation
+          path: |
+            .artifacts/follow-report.json
+            .artifacts/menu-report.json
+          include-hidden-files: true
+          if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@v4
         if: always()

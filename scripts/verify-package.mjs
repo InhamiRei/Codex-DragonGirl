@@ -93,8 +93,8 @@ try {
   console.log(run(process.execPath, [path.join(root, 'scripts/bubble-smoke.mjs')], {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
-  // 从解压后的真实安装包验证气泡时序、朝向与表情，避免只在源码目录中通过。
-  for (const script of ['bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'performance-smoke.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
+  // 从解压后的真实安装包验证窗口遮挡、菜单、气泡时序与表情，避免只在源码目录中通过。
+  for (const script of ['follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'performance-smoke.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
   const result = {
@@ -113,10 +113,11 @@ try {
       '原生启动助手完整性与静默联动入口',
       '位置保存与重启恢复、内置音效离线可用',
       '四档显示比例下双额度完整且无原生滚动条',
+      '跟随窗口遮挡与最小化恢复、连续置前无闪烁',
       '气泡刷新保持连续显示、文字位置与长内容阅读进度',
       '拖拽松手自动朝向、镜像命中与动画偏好',
       '安装包成功与失败表情、素材加载和自动恢复',
-      '原生菜单完整展开、二级输入与关闭后窗口恢复',
+      '原生菜单四角完整展开、二级输入与人物窗口几何稳定',
       '后台刷新复用节点与菜单、常驻气泡和账号状态及时更新',
     ],
   };

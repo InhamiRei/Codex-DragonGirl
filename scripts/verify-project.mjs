@@ -13,7 +13,7 @@ const suite = [
   ...(process.platform === 'win32' ? [['windows', ['scripts/windows-smoke.mjs']]] : [
     ['desktop', ['scripts/desktop-smoke.mjs']], ['app', ['scripts/app-smoke.mjs']],
   ]),
-  ...['startup', 'position', 'bubble', 'bubble-refresh', 'facing', 'eyes', 'blink', 'expression', 'menu', 'sad', 'account-tests', 'performance']
+  ...['startup', 'position', 'follow', 'bubble', 'bubble-refresh', 'facing', 'eyes', 'blink', 'expression', 'menu', 'sad', 'account-tests', 'performance']
     .map((name) => [name, [`scripts/${name}-smoke.mjs`]]),
 ];
 

@@ -105,6 +105,11 @@ await fs.rm(iconset, { recursive: true, force: true });
 // 本机分发采用 ad-hoc 签名，验证完整性；不宣称 Apple Developer ID 公证。
 run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', bundle]);
 run('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle]);
+// 本机替换只需要完整签名的应用，不额外创建 ZIP 与磁盘映像。
+if (process.argv.includes('--app-only')) {
+  console.log('本机应用构建完成：' + bundle);
+  process.exit(0);
+}
 const zip = path.join(output, `Codex-DragonGirl-${version}-macOS-arm64.zip`);
 await fs.rm(zip, { force: true });
 run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', bundle, zip]);

@@ -29,6 +29,7 @@ import { StateStore } from './state-store.js';
 import { dialogueLine } from '../shared/dialogue.js';
 import { DEFAULT_CHARACTER_ASSET, eyeTrackingEnabled } from '../shared/gaze.js';
 import { shouldFaceLeft } from '../shared/facing.js';
+import { followWindowStack, followWindowFloating } from '../shared/follow-window.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const ORIGIN = 'dragon://app';
@@ -181,6 +182,8 @@ export class Companion {
       this.sendCharacterLayout();
       if (event === 'show') this.pollCursor(true);
     });
+    // 原生显示可能提升窗口层级，角色和气泡每次出现后立即回到宿主上方。
+    window.on('show', () => this.syncWindowStacking(true));
     this.windows.set(view, window);
     this.interactive.set(view, false);
     return window;
@@ -326,7 +329,10 @@ export class Companion {
     this.updateFacing();
     const window = this.windows.get('character');
     if (!window || window.isDestroyed()) return;
-    if (!this.contextMenu) window.setBounds(stageBounds(this.character), false);
+    // 菜单期间的后台状态更新不重复改动人物窗口；用户主动改大小或恢复位置时仍正常应用。
+    const menuKeepsGeometry = this.contextMenu && this.menuCharacter
+      && ['x', 'y', 'width', 'height'].every((key) => this.character[key] === this.menuCharacter[key]);
+    if (!menuKeepsGeometry) window.setBounds(stageBounds(this.character), false);
     this.sendCharacterLayout();
     if (this.bubbleVisible) this.positionBubble();
     this.pollCursor(true);
@@ -566,24 +572,22 @@ export class Companion {
     if (this.stopping || this.contextMenu || !this.validPoint(point)
       || !window || window.isDestroyed() || !window.isVisible()) return;
     const menu = this.buildMenu();
-    // 关闭后恢复紧贴角色的小窗口和光标轮询，透明区域重新穿透。
+    // 菜单不改变人物窗口，关闭后只恢复输入与轮询，避免为恢复布局而触发额外重绘。
     const closed = () => {
       if (this.contextMenu !== menu) return;
       this.contextMenu = null;
-      this.applyCharacter();
+      this.menuCharacter = null;
+      this.pollCursor(true);
+      this.syncWindowStacking();
     };
+    this.menuCharacter = { ...this.character };
     this.contextMenu = menu;
     clearTimeout(this.cursorTimer);
     try {
-      // macOS 小型透明窗口会使菜单折叠；临时提供整块工作区，角色屏幕位置保持不变。
-      if (process.platform === 'darwin') {
-        window.setBounds(screen.getDisplayNearestPoint(point).workArea, false);
-        this.sendCharacterLayout();
-      }
       const bounds = window.getContentBounds();
       this.setInteractive('character', true);
-      // 指定所属网页框架，让系统使用原生上下文菜单的事件路由。
-      menu.popup({ window, frame: window.webContents.mainFrame,
+      // macOS 交给 AppKit 放置原生菜单，不把菜单空间换算成人物网页的尺寸与坐标。
+      menu.popup({ window, frame: window.webContents.mainFrame, ...(process.platform === 'darwin' ? { positioningItem: 0 } : {}),
         x: Math.round(point.x - bounds.x), y: Math.round(point.y - bounds.y), callback: closed });
     } catch (error) {
       closed();
@@ -749,8 +753,66 @@ export class Companion {
     this.positionBubble();
   }
 
+  // 跟随模式交由宿主决定层级，独立桌面模式继续置顶；只在模式切换时重设默认窗口属性。
+  setFollowMode(enabled) {
+    if (this.followMode === enabled) return;
+    this.followMode = enabled;
+    for (const window of this.windows.values()) window.setAlwaysOnTop(!enabled, 'floating');
+  }
+
+  // 使用原生窗口编号直接调整相对层级，不截屏、不聚焦宿主，也不把后台角色提升到其他应用上方。
+  syncWindowStacking(force = false) {
+    const hostId = this.followTarget?.id;
+    if (!this.followMode || this.suppressedByFollow || this.stopping || this.contextMenu || !Number.isSafeInteger(hostId) || hostId <= 0) return;
+    if (this.followOrder && !this.followOrder.some((id) => String(id) === String(hostId))) { this.followFrame(null); return; }
+    const owned = [...Companion.registry].flatMap((pet) => [...pet.windows.values()])
+      .filter((window) => !window.isDestroyed()).map((window) => window.getMediaSourceId().split(':')[1]);
+    const regions = [this.character, ...(this.bubbleVisible ? [this.windows.get('bubble').getBounds()] : [])];
+    const floating = process.platform === 'darwin' && followWindowFloating(this.followNormalWindows, this.followTarget, owned, regions);
+    let levelChanged = false;
+    // 前台宿主上方使用稳定浮动层；后台宿主恢复普通层级。隐藏的气泡也预先同步，显示时不会窜到其他应用前面。
+    if (process.platform === 'darwin') for (const window of this.windows.values()) {
+      if (!window.isDestroyed() && window.isAlwaysOnTop() !== floating) {
+        window.setAlwaysOnTop(floating, 'floating');
+        levelChanged = true;
+      }
+    }
+    const overlays = [...this.windows.values()].filter((window) => !window.isDestroyed() && window.isVisible());
+    const sources = new Map(overlays.map((window) => [window.getMediaSourceId().split(':')[1], window]));
+    if (!sources.size) return;
+    const topmost = new Set(this.followTopmost?.map(String));
+    const [characterId, ...bubbleIds] = sources.keys();
+    // 浮动层已天然高于宿主，只维护气泡在角色上方；不能再把角色拉回普通层参与反复置前。
+    const localOrder = this.followOrder?.some((id) => String(id) === characterId) ? this.followOrder : null;
+    const moves = floating
+      ? followWindowStack(localOrder, characterId, bubbleIds, { force: force || levelChanged })
+      : followWindowStack(this.followOrder, hostId, [...sources.keys()], { force: force || levelChanged, topmost: [...topmost] });
+    if (!moves) { this.followFrame(null); return; }
+    try {
+      for (const { id, above, top } of moves) {
+        const window = sources.get(id);
+        if (process.platform === 'win32') {
+          const raised = topmost.has(above);
+          // 系统或旧快照可能绕过 Electron 改变置顶样式，先校正缓存，再降回普通组。
+          if (topmost.has(id) && !raised && !window.isAlwaysOnTop()) window.setAlwaysOnTop(true, 'floating');
+          if (window.isAlwaysOnTop() !== raised) window.setAlwaysOnTop(raised, 'floating');
+          if (raised) topmost.add(id);
+          else topmost.delete(id);
+        }
+        if (process.platform === 'win32' && top) window.moveTop();
+        else window.moveAbove(`window:${above}:0`);
+      }
+    } catch {
+      // 宿主可能在本次快照后关闭；先收起窗口，等下一份有效快照重新绑定。
+      this.followFrame(null);
+    }
+  }
+
   // 跟随只改变显示位置，不覆盖独立桌面模式保存的位置意图。
-  followFrame(frame, offset = { x: 1, y: 1 }) {
+  followFrame(frame, offset = { x: 1, y: 1 }, { order = null, topmost = [], normalWindows = null } = {}) {
+    this.followOrder = order;
+    this.followTopmost = topmost;
+    this.followNormalWindows = normalWindows;
     // 菜单展开时固定窗口位置，让二级菜单持续接收悬停；宿主隐藏时仍正常收起。
     if (this.contextMenu && frame) return;
     this.followTarget = frame;
@@ -764,7 +826,10 @@ export class Companion {
       this.windows.get('character')?.hide();
       return;
     }
-    if (this.gesture.active) return;
+    if (this.gesture.active) {
+      this.syncWindowStacking();
+      return;
+    }
     this.display = screen.getDisplayMatching(frame);
     const next = constrainCharacter(
       {
@@ -778,7 +843,8 @@ export class Companion {
       this.character = next;
       this.applyCharacter();
     } else if (this.updateFacing()) this.sendCharacterLayout();
-    if (this.visible && this.ready.has('character') && !this.windows.get('character').isVisible())
+    this.syncWindowStacking();
+    if (this.visible && !this.suppressedByFollow && this.ready.has('character') && !this.windows.get('character').isVisible())
       this.windows.get('character').showInactive();
   }
 

@@ -121,11 +121,17 @@ export class Monitor extends EventEmitter {
       ...process, home: await fs.realpath(process.home).catch(() => process.home),
     })));
     if (this.stopped || bridge !== this.native || sequence !== this.nativeSequence) return;
+    // 纯层级变化只同步原生窗口，不重复向管理界面发布相同账户与用量数据。
+    const changed = this.nativeError || this.screenPermission !== state.screenPermission
+      || JSON.stringify(this.processes) !== JSON.stringify(processes);
     this.processes = processes;
+    this.windowOrder = state.windowOrder;
+    this.topmostWindows = state.topmostWindows;
+    this.normalWindows = state.normalWindows;
     this.nativeError = null;
     this.screenPermission = state.screenPermission;
     this.emit('windows', { ...state, processes });
-    this.publish();
+    if (changed) this.publish();
   }
   // 目录映射变化才重新配置索引，稳定时无需重扫历史。
   discover() {

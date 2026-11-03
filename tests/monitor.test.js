@@ -13,6 +13,26 @@ function gate() {
   return { promise, resolve };
 }
 
+// 只有遮挡顺序变化时也必须触发跟随，同时避免管理界面与账户数据重复刷新。
+test('原生层级单独变化立即同步窗口，实例与权限变化仍正常发布', async () => {
+  const monitor = new Monitor(os.tmpdir(), { testMode: true });
+  const bridge = monitor.native = {};
+  let publications = 0;
+  const orders = [];
+  monitor.publish = () => publications++;
+  monitor.on('windows', () => orders.push(monitor.windowOrder));
+  const row = { pid: 123, home: os.tmpdir(), frontmost: false, windows: [{ id: 1, x: 100, y: 100, width: 800, height: 600 }] };
+  await monitor.receiveNative({ processes: [row], screenPermission: true, windowOrder: [3, 2, 1] }, bridge);
+  assert.equal(publications, 1);
+  await monitor.receiveNative({ processes: [row], screenPermission: true, windowOrder: [3, 1, 2] }, bridge);
+  assert.deepEqual(orders, [[3, 2, 1], [3, 1, 2]]);
+  assert.equal(publications, 1);
+  await monitor.receiveNative({ processes: [{ ...row, frontmost: true }], screenPermission: true, windowOrder: [1, 3, 2] }, bridge);
+  assert.equal(publications, 2);
+  await monitor.receiveNative({ processes: [{ ...row, frontmost: true }], screenPermission: false, windowOrder: [1, 3, 2] }, bridge);
+  assert.equal(publications, 3);
+});
+
 // 后台刷新未完成时的点击必须排队，重复入口复用任务，并等到账本汇总结束。
 test('手动刷新串接正在进行的批次，合并重复操作并等待账本', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-refresh-'));

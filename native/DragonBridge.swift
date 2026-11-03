@@ -103,7 +103,7 @@ func discoverProcesses() {
         cachedProcesses[app.processIdentifier] = ProcessInfoRow(pid: app.processIdentifier, appPath: app.bundleURL!.path, home: URL(fileURLWithPath: home).resolvingSymlinksInPath().path, environment: environment.filter { $0.key != "CODEX_HOME" })
     }
 }
-// 只发送变化后的窗口列表；Quartz 和 Electron 都使用左上角逻辑坐标。
+// 只发送变化后的窗口编号、层级与必要几何，不读取其他应用的标题或内容。
 func emitSnapshot() {
     if Date().timeIntervalSince(lastDiscovery) > 3 { discoverProcesses(); lastDiscovery = Date() }
     let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
@@ -121,7 +121,19 @@ func emitSnapshot() {
         if let modal = cachedModalWindowState(row.pid, visible) { process["modalOpen"] = modal }
         return process
     }
-    let snapshot: [String: Any] = ["processes": processes, "screenPermission": CGPreflightScreenCaptureAccess()]
+    let windowOrder = windows.compactMap { window -> Int? in
+        guard (window[kCGWindowAlpha as String] as? Double ?? 1) > 0.1 else { return nil }
+        return window[kCGWindowNumber as String] as? Int
+    }
+    // 未被普通窗口遮挡的宿主可使用浮动层保持连续显示，窗口几何同时排除其他显示器的无关窗口。
+    let normalWindows = windows.compactMap { window -> [String: Any]? in
+        guard (window[kCGWindowLayer as String] as? Int) == 0,
+              (window[kCGWindowAlpha as String] as? Double ?? 1) > 0.1,
+              let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+              let rect = CGRect(dictionaryRepresentation: bounds), rect.width > 0, rect.height > 0 else { return nil }
+        return ["id": window[kCGWindowNumber as String] ?? 0, "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
+    }
+    let snapshot: [String: Any] = ["processes": processes, "windowOrder": windowOrder, "normalWindows": normalWindows, "screenPermission": CGPreflightScreenCaptureAccess()]
     guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]), let output = String(data: data, encoding: .utf8), output != lastOutput else { return }
     lastOutput = output
     FileHandle.standardOutput.write(data + Data([10]))
@@ -136,6 +148,8 @@ if CommandLine.arguments.contains("--permission") {
 } else {
     signal(SIGPIPE, SIG_IGN)
     emitSnapshot()
+    // 应用切换立即同步；普通轮询继续覆盖不激活应用的置前、最小化与窗口移动。
+    _ = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in emitSnapshot() }
     let timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { _ in emitSnapshot() }
     RunLoop.main.add(timer, forMode: .common)
     RunLoop.main.run()

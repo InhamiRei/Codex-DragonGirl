@@ -23,7 +23,7 @@
 - **开心星光**：轻点默认角色或主任务完成时，紫色虹膜内的星芒和柔光会缓慢漂移、明暗变化，配合一次轻弹，约两秒后恢复。保留原来的无口造型；拖动、取消和错误任务不会触发，静音时仍可显示，可在「偏好设置 → 外观 → 动态表情」关闭。
 - **伤心含泪**：主任务失败时，眼皮轻垂、泪光流动，一小滴泪珠缓缓滑落，约六秒后恢复。继续保持无口造型；取消任务、子任务失败及额度查询异常不会触发伤心。
 - **表情预览**：右键角色或打开托盘菜单，选择「表情 → 开心 / 伤心」即可播放一次，结束后自动恢复。需使用默认角色并开启「动态表情」。
-- **窗口跟随**：跟随当前 Codex 窗口，多开时可设置每个运行实例一只；最小化后自动隐藏关联角色。macOS 打开文件或文件夹选择框时暂时收起角色与气泡，关闭后恢复原位置。
+- **窗口跟随**：跟随当前 Codex 窗口的位置与前后层级，多开时可设置每个运行实例一只；被其他窗口遮挡时，角色和气泡一起被遮挡，最小化后自动隐藏。macOS 打开文件或文件夹选择框时暂时收起角色与气泡，关闭后恢复原位置。独立桌面模式保持置顶。
 - **启动联动**：首次开启「随 Codex 启动」后，照常打开 Codex，龙娘就会自动出现；自动启动不弹管理窗口。
 - **额度气泡**：查看实际剩余额度、重置时间和今日 Tokens，用量窗口按服务返回结果展示。后台更新原位显示，不重复播放淡入；长内容保留阅读位置。
 - **气泡语录**：轻点龙娘查看用量，再点气泡显示一条日常语录，再点气泡收起；50 条日常文案逐轮切换，另有 10 条任务提示。点击龙娘也可收起，右键菜单「说句话」可直接互动。
@@ -39,9 +39,9 @@
 
 | 电脑 | 下载文件 | 打开方法 |
 | --- | --- | --- |
-| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-1.4.3-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
-| macOS 15+，Apple Silicon | `Codex-DragonGirl-1.4.3-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
-| 同上，偏好 ZIP | `Codex-DragonGirl-1.4.3-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
+| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-1.4.4-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
+| macOS 15+，Apple Silicon | `Codex-DragonGirl-1.4.4-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
+| 同上，偏好 ZIP | `Codex-DragonGirl-1.4.4-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
 
 Windows 请保留解压后的整个文件夹，程序需要旁边的运行时文件。当前暂未提供 Windows ARM 原生版和 Intel Mac 版。
 
@@ -76,6 +76,13 @@ Windows 和 macOS 的助手均随安装包附带，无需安装 Node.js。关闭
 Windows 跟随针对同一系统用户运行的 Codex / ChatGPT 桌面窗口。受系统权限保护或以其他用户运行的进程可能无法识别，可切换独立桌面模式，并手动添加目录。WSL 内部的独立账户和 Linux 窗口暂不作自动映射。
 
 ## 更新内容
+
+### v1.4.4
+
+- 修复 macOS 与 Windows 跟随模式的窗口层级：Codex 被其他窗口遮挡时，角色和气泡一起退到后面；重新置前、最小化与恢复时保持同步。
+- 修复 macOS 点击 Codex 时角色闪烁，未被遮挡时保持稳定显示，并正确处理多显示器和局部遮挡。
+- 修复 macOS 右键人物时闪烁或短暂跳到屏幕左上角，菜单展开与关闭保持人物窗口的尺寸和位置，四角菜单与二级操作均可正常使用。
+- 新增真实窗口遮挡、连续置前和菜单几何回归验证，并在解压后的发行包上复验。
 
 ### v1.4.3
 
@@ -188,6 +195,7 @@ npm run test:desktop
 npm run test:app
 npm run test:startup
 npm run test:position
+npm run test:follow
 npm run test:bubble
 npm run test:eyes
 npm run test:blink

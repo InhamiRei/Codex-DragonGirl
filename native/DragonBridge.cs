@@ -44,6 +44,9 @@ internal static class DragonBridge
     // 最小化窗口不显示关联角色。
     [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr window);
+    // 区分系统置顶窗口与普通窗口，避免相对排序意外继承置顶属性。
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
     // 前台窗口用于选择当前实例。
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
@@ -182,6 +185,24 @@ internal static class DragonBridge
         return windows;
     }
 
+    // 仅发布屏幕上窗口的前后编号；层级变化也触发快照，不读取其他应用的标题或内容。
+    private static List<long> WindowOrder(out List<long> topmost)
+    {
+        List<long> order = new List<long>();
+        List<long> raised = new List<long>();
+        EnumWindows(delegate(IntPtr window, IntPtr parameter)
+        {
+            if (!IsWindowVisible(window) || IsIconic(window)) return true;
+            int cloaked;
+            if (DwmGetWindowAttribute(window, 14, out cloaked, 4) == 0 && cloaked != 0) return true;
+            order.Add(window.ToInt64());
+            if ((GetWindowLongPtr(window, -20).ToInt64() & 0x8) != 0) raised.Add(window.ToInt64());
+            return true;
+        }, IntPtr.Zero);
+        topmost = raised;
+        return order;
+    }
+
     // 输出与 macOS 一致的行分隔 JSON 协议，物理坐标显式标记。
     private static string Snapshot()
     {
@@ -195,7 +216,9 @@ internal static class DragonBridge
                 { "networkEnv", row.Network }, { "frontmost", front == (uint)row.Pid },
                 { "coordinateSpace", "physical" }, { "windows", Windows(row.Pid, false) }
             });
-        return Json.Serialize(new Dictionary<string, object> { { "processes", rows }, { "screenPermission", true } });
+        List<long> topmost;
+        List<long> order = WindowOrder(out topmost);
+        return Json.Serialize(new Dictionary<string, object> { { "processes", rows }, { "windowOrder", order }, { "topmostWindows", topmost }, { "screenPermission", true } });
     }
 
     // 聚焦只允许目标应用，窗口恢复后再请求系统激活。

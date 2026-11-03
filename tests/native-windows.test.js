@@ -13,7 +13,7 @@ test('Windows 原生桥读取窗口并仅公开环境白名单', { skip: process
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), '龙娘 窗口测试-'));
   const executable = path.join(temp, 'Codex.exe');
   const csc = path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
-  const build = spawnSync(csc, ['/nologo', '/target:winexe', '/platform:x64', '/reference:System.Windows.Forms.dll', `/out:${executable}`, path.join(root, 'tests/fixtures/WindowFixture.cs')], { encoding: 'utf8' });
+  const build = spawnSync(csc, ['/nologo', '/target:winexe', '/platform:x64', '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', `/out:${executable}`, path.join(root, 'tests/fixtures/WindowFixture.cs')], { encoding: 'utf8' });
   assert.equal(build.status, 0, build.stdout + build.stderr);
   const home = path.join(temp, '自定义账户');
   await fs.mkdir(home);

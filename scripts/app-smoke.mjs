@@ -645,7 +645,8 @@ try {
   const modalState = await application.evaluate(() => {
     const { monitor, companion, dashboard } = globalThis.__dragonGirlApp;
     const runtime = monitor.processes[0];
-    globalThis.__followMain = { ...runtime.windows[0], id: 100 };
+    // 此处只模拟几何与模态状态，不提供真实系统窗口编号；相对层级由 follow-smoke 验证。
+    globalThis.__followMain = { ...runtime.windows[0] };
     companion.showBubble('文件夹选择前的气泡', 'speech');
     companion.gesture.begin({ x: companion.character.x + 10, y: companion.character.y + 10 }, companion.character);
     companion.setInteractive('character', true);

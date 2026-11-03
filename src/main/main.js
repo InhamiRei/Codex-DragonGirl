@@ -115,7 +115,8 @@ if (!hasLock) {
         return;
       }
       companion = new Companion(app.getPath('userData'), {
-        testMode, initiallySuppressed: startup.reason !== 'manual' && initialSettings.mode === 'follow',
+        // 跟随模式等首份宿主快照后再显示，手动启动时也不会短暂浮在其他应用上方。
+        testMode, initiallySuppressed: initialSettings.mode === 'follow' && (!testMode || process.env.DRAGONGIRL_MONITOR_TEST === '1'),
       });
       if (testMode) globalThis.__dragonGirlTest = companion;
       await companion.start();
