@@ -582,22 +582,26 @@ try {
   await choose('select[name="soundTheme"]', 'duck');
   await page.locator('#cancel-settings').click();
   assert.equal(await page.locator('select[name="soundTheme"]').inputValue(), 'fx1');
-  // 从真实设置控件保存视线、眨眼与表情，确认草稿、磁盘和角色收到的外观配置保持一致。
+  // 从真实设置控件保存自动朝向、视线、眨眼与表情，确认草稿、磁盘和角色保持一致。
   await page.locator('[data-settings-tab="appearance"]').click();
   assert.equal(await page.locator('#eye-tracking').isChecked(), true);
   assert.equal(await page.locator('#natural-blink').isChecked(), true);
   assert.equal(await page.locator('#dynamic-expressions').isChecked(), true);
+  assert.equal(await page.locator('#character-auto-flip').isChecked(), true);
   for (const enabled of [false, true]) {
+    await page.locator('#character-auto-flip').setChecked(enabled);
     await page.locator('#eye-tracking').setChecked(enabled);
     await page.locator('#natural-blink').setChecked(enabled);
     await page.locator('#dynamic-expressions').setChecked(enabled);
     await page.locator('#save-settings').click();
     await until(() => application.evaluate((_, expected) => {
       const { monitor, companion } = globalThis.__dragonGirlApp;
-      return monitor.settings.eyeTracking === expected && companion.appearance.settings.eyeTracking === expected
+      return monitor.settings.autoFlip === expected && companion.appearance.settings.autoFlip === expected
+        && monitor.settings.eyeTracking === expected && companion.appearance.settings.eyeTracking === expected
         && monitor.settings.blinkEnabled === expected && companion.appearance.settings.blinkEnabled === expected
         && monitor.settings.expressionsEnabled === expected && companion.appearance.settings.expressionsEnabled === expected;
-    }, enabled), '视线、眨眼与表情开关没有同步到角色');
+    }, enabled), '自动朝向、视线、眨眼与表情开关没有同步到角色');
+    assert.equal(JSON.parse(await fs.readFile(path.join(data, 'settings.json'), 'utf8')).autoFlip, enabled);
     assert.equal(JSON.parse(await fs.readFile(path.join(data, 'settings.json'), 'utf8')).eyeTracking, enabled);
     assert.equal(JSON.parse(await fs.readFile(path.join(data, 'settings.json'), 'utf8')).blinkEnabled, enabled);
     assert.equal(JSON.parse(await fs.readFile(path.join(data, 'settings.json'), 'utf8')).expressionsEnabled, enabled);

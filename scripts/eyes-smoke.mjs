@@ -79,11 +79,11 @@ async function look(x, y) {
   return eyeFeatures();
 }
 
-// 外观更新沿用生产入口，开关和翻转不会跳过主进程布局协议。
+// 视线基准固定关闭自动朝向，手动翻转仍走生产布局；自动朝向由独立拖拽验收覆盖。
 async function appearance(settings, asset = DEFAULT_CHARACTER_ASSET) {
   await application.evaluate((_, value) => {
     globalThis.__dragonGirlTest.setAppearance(value);
-  }, { asset, settings: { eyeTracking: true, blinkEnabled: false, soundEnabled: false, ...settings } });
+  }, { asset, settings: { autoFlip: false, eyeTracking: true, blinkEnabled: false, soundEnabled: false, ...settings } });
 }
 
 try {

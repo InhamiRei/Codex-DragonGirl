@@ -38,6 +38,8 @@ export function gazeTarget(point, rect, pose) {
   if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)
     || !(rect?.width > 0) || !(rect?.height > 0)) return { x: 0, y: 0 };
   const local = imagePoint(point, rect, pose);
+  // 水平翻转经过零宽时暂时回到中性视线，不把不可逆矩阵送入眼区绘制。
+  if (!Number.isFinite(local.x) || !Number.isFinite(local.y)) return { x: 0, y: 0 };
   const x = (local.x - EYE_ARTWORK.center.x / EYE_ARTWORK.width) / 0.65;
   const y = (local.y - EYE_ARTWORK.center.y / EYE_ARTWORK.height) * rect.height / rect.width / 0.65;
   const length = Math.max(1, Math.hypot(x, y));

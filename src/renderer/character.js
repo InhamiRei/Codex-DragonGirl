@@ -2,6 +2,7 @@ import { SoundEngine } from './audio.js';
 import { PressSpring } from '../shared/spring.js';
 import { imagePoint, opaqueAt } from '../shared/hit-test.js';
 import { EyeTracker } from './eyes.js';
+import { FlipMotion } from '../shared/facing.js';
 
 const bridge = window.dragonGirl;
 const stage = document.getElementById('stage');
@@ -9,6 +10,7 @@ const character = document.getElementById('character');
 const portrait = document.getElementById('portrait');
 const eyes = new EyeTracker(character, paintBodyPose);
 const spring = new PressSpring();
+const flip = new FlipMotion();
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const sound = new SoundEngine();
 window.__soundEngine = sound;
@@ -73,7 +75,7 @@ function configureEyes() {
   if (!layout || !decodedPortrait) return;
   eyes.configure(decodedPortrait, layout, {
     ...pose,
-    scaleX: pose.scaleX * (layout.appearance?.settings?.flip ? -1 : 1),
+    scaleX: pose.scaleX * flip.value,
   }, reducedMotion.matches, activePointer !== null);
 }
 
@@ -100,7 +102,10 @@ async function loadPortrait(asset) {
 
 // 布局变化不重建元素或手势监听，拖动中的指针捕获不会因此失效。
 function applyLayout(model) {
+  const immediate = !layout || model.visible === false || document.hidden || model.asset !== layout.asset
+    || reducedMotion.matches || model.appearance?.settings?.motion === false;
   layout = model;
+  flip.setFlipped(model.flipped ?? !!model.appearance?.settings?.flip, immediate);
   if (model.appearance?.settings) sound.configure(model.appearance.settings);
   stage.dataset.status = model.appearance?.status || 'idle';
   if (portrait.src !== model.asset && assetLoading !== model.asset) void loadPortrait(model.asset);
@@ -110,6 +115,7 @@ function applyLayout(model) {
   character.style.width = `${model.rect.width}px`;
   character.style.height = `${model.rect.height}px`;
   routeCursor(lastCursor);
+  if (!flip.settled || (animation && immediate)) wakeSpring();
 }
 
 // 将点击回弹与身体跟随合成同一份绘制姿态，命中检测也读取最终的平移、翻转和倾角。
@@ -118,8 +124,9 @@ function paintCharacter() {
   renderedPose = {
     ...pose, ...bodyPose,
     angle: pose.angle + bodyPose.angle,
-    scaleX: pose.scaleX * (layout.appearance?.settings?.flip ? -1 : 1),
+    scaleX: pose.scaleX * flip.value,
   };
+  character.dataset.flipping = String(!flip.settled);
   character.style.transform = `translate(${renderedPose.translateX}px, ${renderedPose.translateY}px) rotate(${renderedPose.angle}deg) scale(${renderedPose.scaleX}, ${renderedPose.scaleY})`;
   updateInteractive();
 }
@@ -139,15 +146,20 @@ function paintPose(next) {
 
 // 动画静止后停止 requestAnimationFrame，桌宠闲置时不维持空转的动画循环。
 function animate(time) {
-  const next = spring.step(Math.max(0, (time - previousTime) / 1000));
+  const seconds = Math.max(0, (time - previousTime) / 1000);
+  flip.step(seconds);
+  const next = spring.step(seconds);
   previousTime = time;
   paintPose(next);
-  animation = next.settled ? 0 : requestAnimationFrame(animate);
+  animation = next.settled && flip.settled ? 0 : requestAnimationFrame(animate);
 }
 
 // 连点沿用弹簧当前速度，尊重系统减少动态效果设置。
 function wakeSpring() {
-  if (reducedMotion.matches || layout?.appearance?.settings?.motion === false) {
+  if (reducedMotion.matches || layout?.visible === false || document.hidden || layout?.appearance?.settings?.motion === false) {
+    cancelAnimationFrame(animation);
+    animation = 0;
+    flip.finish();
     paintPose({ scaleX: spring.target[0], scaleY: spring.target[1], angle: 0 });
     return;
   }
@@ -257,9 +269,15 @@ async function start() {
     if (isCharacterHit({ x: event.clientX, y: event.clientY })) bridge.menu(screenPoint(event));
   });
   window.addEventListener('blur', () => finishPointer(null, true));
-  reducedMotion.addEventListener('change', configureEyes);
-  document.addEventListener('visibilitychange', configureEyes);
-  window.addEventListener('pagehide', () => eyes.reset());
+  // 系统减少动态效果或窗口隐藏时同步结束翻转，重新显示不从一半继续播放。
+  reducedMotion.addEventListener('change', () => applyLayout(layout));
+  document.addEventListener('visibilitychange', () => applyLayout(layout));
+  window.addEventListener('pagehide', () => {
+    cancelAnimationFrame(animation);
+    animation = 0;
+    flip.finish();
+    eyes.reset();
+  });
   bridge.ready();
 }
 

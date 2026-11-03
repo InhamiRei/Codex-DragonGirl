@@ -11,7 +11,8 @@ const quotaTitle = document.getElementById('quota-title');
 const tail = document.getElementById('tail');
 let lastInteractive = null;
 let renderedRevision = -1;
-let animatedRevision = -1;
+let renderedShowId = -1;
+let animatedShowId = -1;
 
 // 所有动态内容都通过文本节点写入，账户名称与自定义模板不能注入 HTML。
 function element(tag, className, text) {
@@ -77,18 +78,20 @@ function contentFitsEllipse() {
 }
 
 // 固定外框内优先完整排版，放不下的内容进入居中的安全滚动区域，保留全部文字。
-function measure(model) {
+function measure(model, scrollTop = 0) {
   document.body.dataset.compact = 'false';
   contentPane.scrollTop = 0;
   if (document.body.dataset.layout === 'usage' &&
       (contentPane.scrollHeight > contentPane.clientHeight + 1 || !contentFitsEllipse()))
     document.body.dataset.compact = 'true';
   const scrollable = contentPane.scrollHeight > contentPane.clientHeight + 1;
+  // 测量在未滚动的坐标中进行，结束后恢复已有阅读位置，不让后台刷新把长内容推回顶部。
+  contentPane.scrollTop = Math.min(scrollTop, Math.max(0, contentPane.scrollHeight - contentPane.clientHeight));
   const label = model.kind === 'usage'
-    ? '点击查看一句语录，点击龙娘或按 Esc 收起气泡'
+    ? '点击查看一句语录，点击龙娘可收起气泡'
     : '点击收起龙娘的气泡';
   bubble.setAttribute('aria-label', scrollable
-    ? `${label}，长内容可用滚轮或上下方向键查看`
+    ? `${label}，长内容可用滚轮查看`
     : label);
   bridge.measureBubble({
     revision: model.revision,
@@ -143,32 +146,43 @@ function drawOutline(model) {
     : edge + stroke / 2 + BUBBLE_FRAME.thoughtGap}px`;
 }
 
-// 内容变化才重新测量；位置与尾巴更新不重复播放动画，也不触发尺寸反馈循环。
+// 内容版本只负责排版，显示轮次才负责入场动画；可见内容刷新始终在原位完成。
 function render(model) {
+  const showId = model.showId ?? 0;
+  // 丢弃迟到的启动快照或旧布局，防止已显示的新内容被旧消息覆盖并重新隐藏。
+  if (model.revision < renderedRevision || showId < renderedShowId) return;
+  const opening = showId !== renderedShowId;
+  const keepVisible = !opening && document.body.dataset.ready === 'true';
+  const scrollTop = !opening && document.body.dataset.kind === 'usage' && model.kind === 'usage'
+    ? contentPane.scrollTop : 0;
+  if (opening) {
+    renderedShowId = showId;
+    // 只有新一轮打开才结束旧动画，后台更新不能打断正在进行的淡入或把透明度跳回零。
+    for (const node of [outline, bubble, tail])
+      for (const animation of node.getAnimations()) animation.cancel();
+  }
   document.body.dataset.side = model.side;
   document.body.dataset.horizontal = model.horizontal || 'left';
   document.body.dataset.kind = model.kind;
   document.body.dataset.layout = model.usage ? 'usage' : 'text';
   document.body.dataset.multiple = String((model.usage?.quotas.length || 0) > 1);
   if (renderedRevision !== model.revision) {
-    // 内容变化时结束上一句的淡入，保证文字与连续轮廓同时显示。
-    for (const node of [outline, bubble, tail])
-      for (const animation of node.getAnimations()) animation.cancel();
     renderedRevision = model.revision;
-    document.body.dataset.ready = 'false';
+    if (!keepVisible) document.body.dataset.ready = 'false';
     document.documentElement.style.setProperty('--max-width', `${model.maxWidth}px`);
     document.documentElement.style.setProperty('--max-height', `${model.maxHeight}px`);
     plan.hidden = true;
     if (model.usage) renderUsage(model.usage);
     else message.textContent = model.text;
-    measure(model);
+    measure(model, scrollTop);
   }
   drawOutline(model);
-  const ready = model.measuredRevision === model.revision;
+  const measured = model.measuredRevision === model.revision;
+  const ready = keepVisible || measured;
   document.body.dataset.ready = String(ready);
-  if (!ready || animatedRevision === model.revision) return;
-  animatedRevision = model.revision;
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (!measured || animatedShowId === showId) return;
+  animatedShowId = showId;
+  if (showId === 0 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   for (const node of [outline, bubble, tail])
     node.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
 }

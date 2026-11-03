@@ -352,8 +352,23 @@
                   </div>
                   <div class="setting-row">
                     <div class="setting-copy">
-                      <label for="character-flip">角色翻转</label>
-                      <p>水平翻转角色朝向。</p>
+                      <label for="character-auto-flip">自动朝向</label>
+                      <p>拖到左右半边，松手后平滑转向内侧；跟随时按宿主窗口判断。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input
+                        id="character-auto-flip"
+                        name="autoFlip"
+                        type="checkbox"
+                        class="switch"
+                        role="switch"
+                      />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="character-flip">手动翻转</label>
+                      <p>反转当前朝向，关闭自动朝向后保持固定方向。</p>
                     </div>
                     <div class="setting-control">
                       <input

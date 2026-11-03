@@ -47,8 +47,14 @@ jobs:
       - name: 验证气泡缩放与原生滚动条
         run: npm run test:bubble
         timeout-minutes: 3
+      - name: 验证气泡打开与并发刷新
+        run: npm run test:bubble-refresh
+        timeout-minutes: 3
       - name: 验证眼睛和身体跟随
         run: npm run test:eyes
+        timeout-minutes: 3
+      - name: 验证拖拽松手自动朝向
+        run: npm run test:facing
         timeout-minutes: 3
       - name: 验证自然眨眼
         run: npm run test:blink
@@ -96,6 +102,8 @@ jobs:
             .artifacts/expression-*.json
             .artifacts/sad-*.png
             .artifacts/sad-*.json
+            .artifacts/facing-*.png
+            .artifacts/facing-report.json
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14
@@ -106,6 +114,7 @@ jobs:
           path: |
             .artifacts/bubble-scrollbar-*.png
             .artifacts/bubble-scrollbar-report.json
+            .artifacts/bubble-refresh-report.json
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14

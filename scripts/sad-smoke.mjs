@@ -28,10 +28,10 @@ async function until(check, message, timeout = 15000) {
   throw new Error(message);
 }
 
-// 通过正式外观通道切换选项，静音和关闭身体动画仍应保留含泪效果。
+// 通过正式外观通道切换选项；像素基准关闭自动朝向，静音和关闭身体动画仍保留含泪效果。
 async function appearance(settings = {}, asset = DEFAULT_CHARACTER_ASSET) {
   await application.evaluate((_, value) => globalThis.__dragonGirlTest.setAppearance(value), {
-    asset, settings: { motion: false, eyeTracking: false, blinkEnabled: false, expressionsEnabled: true, soundEnabled: false, ...settings },
+    asset, settings: { autoFlip: false, motion: false, eyeTracking: false, blinkEnabled: false, expressionsEnabled: true, soundEnabled: false, ...settings },
   });
 }
 
@@ -162,6 +162,11 @@ try {
   await seek(2800);
   await page.screenshot({ path: path.join(artifacts, 'sad-flipped.png'), omitBackground: true });
   await appearance({ motion: true });
+  // 取消手动镜像会播放平滑翻转，先等待实际画面回正，再检查最终低头姿态。
+  await until(() => page.evaluate(() => {
+    const character = document.getElementById('character');
+    return character.dataset.flipping !== 'true' && new DOMMatrix(getComputedStyle(character).transform).a > .99;
+  }), '恢复原始朝向后翻转尚未结束');
   const position = await application.evaluate(() => ({ ...globalThis.__dragonGirlTest.character }));
   await seek(2400);
   const body = await metrics();

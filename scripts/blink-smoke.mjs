@@ -25,11 +25,11 @@ async function until(check, message, timeout = 12000) {
   throw new Error(message);
 }
 
-// 使用生产外观入口，独立切换眨眼与鼠标跟随。
+// 眨眼基准固定关闭自动朝向，避免屏幕落点改变原画像素坐标，手动翻转仍单独验证。
 async function appearance(settings) {
   await application.evaluate((_, settings) => {
     globalThis.__dragonGirlTest.setAppearance({ asset: 'dragon://app/assets/characters/codex-dragon-girl.png', settings });
-  }, { eyeTracking: false, blinkEnabled: false, soundEnabled: false, ...settings });
+  }, { autoFlip: false, eyeTracking: false, blinkEnabled: false, soundEnabled: false, ...settings });
 }
 
 // 合成原画与眼区后统计紫色虹膜、睫毛，闭合必须真实遮住虹膜并留下可见的眼睑线。

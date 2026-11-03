@@ -26,10 +26,10 @@ async function until(check, message, timeout = 12000) {
   throw new Error(message);
 }
 
-// 通过生产布局入口更新外观，静音和关闭跟随不能顺带禁止表情。
+// 通过生产布局入口更新外观；像素基准关闭自动朝向，手动翻转、静音和跟随仍独立验证。
 async function appearance(settings = {}, asset = DEFAULT_CHARACTER_ASSET) {
   await application.evaluate((_, value) => globalThis.__dragonGirlTest.setAppearance(value), {
-    asset, settings: { eyeTracking: false, blinkEnabled: false, expressionsEnabled: true, soundEnabled: false, ...settings },
+    asset, settings: { autoFlip: false, eyeTracking: false, blinkEnabled: false, expressionsEnabled: true, soundEnabled: false, ...settings },
   });
 }
 

@@ -18,7 +18,8 @@ test('macOS 文件夹面板隐藏跟随，关闭、移动及最小化后正确�
       child.kill();
       await new Promise((resolve) => child.exitCode !== null || child.signalCode !== null ? resolve() : child.once('exit', resolve));
     }
-    await fs.rm(directory, { recursive: true, force: true });
+    // 系统可能在测试进程退出后补写目录项，短暂重试避免清理竞争误报为窗口功能失败。
+    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const contents = path.join(directory, 'Codex.app/Contents');
   const executable = path.join(contents, 'MacOS/WindowFixture');

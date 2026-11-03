@@ -1,5 +1,8 @@
 // 逆转身体平移及以底部中心为原点的旋转、缩放，再映射到素材坐标。
 export function imagePoint(point, rect, pose = { scaleX: 1, scaleY: 1, angle: 0 }) {
+  // 翻转经过零宽的一帧没有可点击像素，拒绝求逆，防止零除产生 NaN 命中或异常视线。
+  if (Math.abs(pose.scaleX) < 0.0001 || Math.abs(pose.scaleY) < 0.0001)
+    return { x: Infinity, y: Infinity };
   const dx = point.x - rect.x - rect.width / 2 - (pose.translateX || 0);
   const dy = point.y - rect.y - rect.height - (pose.translateY || 0);
   const radians = (-pose.angle * Math.PI) / 180;

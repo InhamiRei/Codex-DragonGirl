@@ -28,6 +28,7 @@ import { DragGesture } from '../shared/gesture.js';
 import { StateStore } from './state-store.js';
 import { dialogueLine } from '../shared/dialogue.js';
 import { DEFAULT_CHARACTER_ASSET, eyeTrackingEnabled } from '../shared/gaze.js';
+import { shouldFaceLeft } from '../shared/facing.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const ORIGIN = 'dragon://app';
@@ -42,6 +43,7 @@ export class Companion {
     this.secondary = secondary;
     this.delegate = delegate;
     this.appearance = {};
+    this.facingLeft = false;
     Companion.registry.add(this);
     this.store = new StateStore(path.join(dataDirectory, 'preferences.json'));
     this.testMode = testMode;
@@ -62,6 +64,7 @@ export class Companion {
       text: dialogueLine('chat'),
       usage: null,
       kind: 'speech',
+      showId: 0,
       revision: 0,
       measuredRevision: -1,
       ...this.bubbleLimits(),
@@ -277,6 +280,16 @@ export class Companion {
       screen.getPrimaryDisplay();
     const size = characterSize(this.state.scale, this.display.workArea, this.imageRatio);
     this.character = restorePlacement(this.state.placement, this.display, size);
+    this.updateFacing();
+  }
+
+  // 拖动中锁定原朝向，松手后按所属屏幕或宿主窗口更新，取消拖动会沿原位置恢复。
+  updateFacing() {
+    if (this.gesture.active) return false;
+    const next = shouldFaceLeft(this.character, this.followTarget || this.display?.workArea, this.facingLeft);
+    const changed = next !== this.facingLeft;
+    this.facingLeft = next;
+    return changed;
   }
 
   // 用系统实际窗口位置换算角色局部坐标，避免 macOS 收回透明边距后把角色一起顶离边缘。
@@ -293,6 +306,8 @@ export class Companion {
       asset: this.appearance.asset || `${ORIGIN}/assets/characters/codex-dragon-girl.png`,
       visible: !!window && !window.isDestroyed() && window.isVisible(),
       snapEnabled: this.state.snapEnabled,
+      // 手动镜像作为基础方向，关闭自动朝向后仍完整保留原来的手动翻转行为。
+      flipped: !!this.appearance.settings?.flip !== (this.appearance.settings?.autoFlip !== false && this.facingLeft),
       appearance: this.appearance,
     };
   }
@@ -308,6 +323,7 @@ export class Companion {
 
   // 所有窗口几何集中更新，气泡始终跟随角色，且只发送变化后的布局。
   applyCharacter() {
+    this.updateFacing();
     const window = this.windows.get('character');
     if (!window || window.isDestroyed()) return;
     if (!this.contextMenu) window.setBounds(stageBounds(this.character), false);
@@ -404,7 +420,10 @@ export class Companion {
   // 所有气泡共用显示和计时逻辑，内容来源用于避免通知被后台数据覆盖。
   showBubble(content, kind) {
     if (!this.visible || this.suppressedByFollow || !this.ready.has('bubble')) return;
+    const opening = !this.bubbleVisible;
     this.setBubbleContent(content, kind);
+    // 显示轮次独立于内容版本，后台额度更新与气泡内换句不能被当作重新打开。
+    if (opening) this.bubbleModel.showId += 1;
     this.bubbleVisible = true;
     this.positionBubble();
     clearTimeout(this.bubbleTimer);
@@ -443,6 +462,7 @@ export class Companion {
     if (
       !measurement ||
       measurement.revision !== this.bubbleModel.revision ||
+      measurement.revision === this.bubbleModel.measuredRevision ||
       !Number.isFinite(measurement.width) ||
       !Number.isFinite(measurement.height) ||
       measurement.width <= 0 ||
@@ -454,7 +474,8 @@ export class Companion {
     this.bubbleSize = { width: limits.maxWidth, height: limits.maxHeight };
     this.bubbleModel.measuredRevision = measurement.revision;
     this.positionBubble();
-    if (this.bubbleVisible) this.windows.get('bubble').showInactive();
+    const window = this.windows.get('bubble');
+    if (this.bubbleVisible && !window.isVisible()) window.showInactive();
   }
 
   // 默认使用角色左上方的位置，方向和思绪泡锚点随屏幕边缘避让一起更新。
@@ -469,8 +490,12 @@ export class Companion {
       };
     const layout = placeBubble(this.character, this.display.workArea, this.bubbleSize);
     this.bubbleModel = { ...this.bubbleModel, side: layout.side, horizontal: layout.horizontal, tailX: layout.tailX };
-    this.windows.get('bubble').setBounds(layout.bounds, false);
-    this.windows.get('bubble').webContents.send('dg:bubble', this.bubbleModel);
+    const window = this.windows.get('bubble');
+    const current = window.getBounds();
+    // 原生窗口位置不变时不重复定位，避免在透明窗口上制造无意义的重绘与位置回跳。
+    if (['x', 'y', 'width', 'height'].some(key => current[key] !== layout.bounds[key]))
+      window.setBounds(layout.bounds, false);
+    window.webContents.send('dg:bubble', this.bubbleModel);
   }
 
   // 隐藏气泡时同时释放其输入区域，透明窗口不会继续遮挡桌面。
@@ -752,7 +777,7 @@ export class Companion {
     if (next.x !== this.character.x || next.y !== this.character.y) {
       this.character = next;
       this.applyCharacter();
-    }
+    } else if (this.updateFacing()) this.sendCharacterLayout();
     if (this.visible && this.ready.has('character') && !this.windows.get('character').isVisible())
       this.windows.get('character').showInactive();
   }
