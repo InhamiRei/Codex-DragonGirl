@@ -65,6 +65,12 @@ async function send(target, command) {
   await until(async () => (await fs.readFile(path.join(target.directory, 'command-complete'), 'utf8').catch(() => '')) === value, `测试窗口未处理 ${command}`);
 }
 
+// Windows 后台测试进程受前台权限限制；降低另一个自建窗口来改变遮挡顺序，不更改焦点或放宽系统权限。
+async function raise(target, other) {
+  if (!isMac && other) await send(other, 'lower');
+  await send(target, 'raise');
+}
+
 // 系统顺序独立于 Electron 的 isVisible，能发现窗口仍可见但错误浮在其他应用上方的问题。
 function systemState(pid) {
   const result = spawnSync(bridge, ['--once'], { encoding: 'utf8', timeout: 10000 });
@@ -119,6 +125,7 @@ async function expectStack(host, cover, covered, bubble = true, raised = false) 
 }
 
 try {
+  await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
   await fs.mkdir(path.join(home, 'sessions'), { recursive: true });
   await fs.mkdir(data, { recursive: true });
   await fs.writeFile(path.join(data, 'settings.json'), JSON.stringify({ mode: 'follow', volume: 0, pinnedBubble: true }));
@@ -143,11 +150,11 @@ try {
   await application.evaluate(() => globalThis.__dragonGirlApp.companion.showBubble('窗口层级验收', 'speech'));
   await until(() => application.evaluate(() => globalThis.__dragonGirlApp.companion.windows.get('bubble').isVisible()), '气泡未显示');
   const original = (await companionState()).character;
-  await send(host, 'raise');
+  await raise(host, cover);
   await expectStack(host, cover, false);
   // 点击前台宿主会重新排列普通窗口；连续采样必须始终看见角色与气泡，不能容许先消失再补回。
   if (isMac) {
-    await send(host, 'raise');
+    await raise(host, cover);
     await expectStack(host, cover, false);
     try {
       await until(async () => {
@@ -190,7 +197,7 @@ try {
   }
   const foreground = systemState(host.child.pid).host.frontmost;
   // 宿主没有移动或最小化，前台应用也不变，只置前另一个应用的窗口。
-  await send(cover, 'raise');
+  await raise(cover, host);
   await expectStack(host, cover, true);
   assert.equal(systemState(host.child.pid).host.frontmost, foreground, '层级同步改变了键盘焦点');
   assert.deepEqual((await companionState()).character, original, '遮挡改变了角色跟随位置');
@@ -205,7 +212,7 @@ try {
     companion.showBubble('后台气泡不能置顶', 'notice');
   });
   await expectStack(host, cover, true);
-  await send(host, 'raise');
+  await raise(host, cover);
   await expectStack(host, cover, false);
   assert.deepEqual((await companionState()).character, original);
   // Windows 使用真正的置顶覆盖窗口验证层级组边界，并检查实际 Win32 样式而非只看 Electron 缓存。
@@ -215,7 +222,7 @@ try {
     await send(host, 'raise');
     await expectStack(host, cover, true);
     await send(cover, 'normal');
-    await send(host, 'raise');
+    await raise(host, cover);
     await expectStack(host, cover, false);
     await send(host, 'topmost');
     await expectStack(host, cover, false, true, true);
@@ -234,8 +241,8 @@ try {
   }, '最小化恢复后角色没有回到原位置');
   await application.evaluate(() => globalThis.__dragonGirlApp.companion.hide());
   const sequence = (await companionState()).sequence;
-  await send(cover, 'raise');
-  await send(host, 'raise');
+  await raise(cover, host);
+  await raise(host, cover);
   await until(async () => (await companionState()).sequence > sequence, '窗口层级变化没有触发原生快照');
   assert.equal((await companionState()).windows.character.visible, false, '窗口置前覆盖了用户主动隐藏的状态');
   // 模式切换使用真实管理层入口，独立桌面保持置顶，再切回跟随时恢复普通层级。
@@ -258,7 +265,7 @@ try {
   });
   await until(async () => !(await companionState()).windows.character.visible, '跟随最小化宿主时没有隐藏');
   await send(host, 'restore');
-  await send(host, 'raise');
+  await raise(host, cover);
   await expectStack(host, cover, false, false);
   const report = { passed: true, platform: process.platform, checks: ['真实跨应用层级', '仅层级变化触发快照', '完全遮挡', '部分遮挡仍显示', '后台气泡层级', '恢复原位且不抢焦点', '最小化与恢复', '保留主动隐藏', '独立桌面仍置顶', '切回跟随恢复层级', ...(isMac ? ['连续置前 12 次、全程 8ms 采样无闪烁'] : [])] };
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
