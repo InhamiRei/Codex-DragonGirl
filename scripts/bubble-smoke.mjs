@@ -121,12 +121,13 @@ try {
     await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
     await page.mouse.wheel(0, 10000);
     await until(() => page.locator('#bubble-content').evaluate((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1), '隐藏滚动条后无法阅读长消息末尾');
+    // 强制聚焦后的按键注入仅检查渲染层滚动逻辑，不作为桌面键盘可用性的证据。
     await page.locator('#bubble').focus();
     await page.keyboard.press('Home');
     assert.equal(await page.locator('#bubble-content').evaluate((node) => node.scrollTop), 0);
     await page.keyboard.press('End');
     assert.ok(await page.locator('#bubble-content').evaluate((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1));
-    // 切到语录必须重新计时；常驻气泡保持显示，Esc 仍可主动收起。
+    // 切到语录必须重新计时；常驻气泡保持显示，渲染层注入 Esc 时仍按关闭处理。
     if (scale === 1) {
       // 每类语录实际渲染一轮，完整文案不能超出椭圆，也不能依赖滚动才能读完。
       for (const kind of ['chat', 'complete', 'cancelled', 'error']) {
@@ -170,13 +171,13 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 1100));
       assert.equal(await application.evaluate(() => globalThis.__dragonGirlTest.bubbleVisible), true, '常驻语录仍被自动收起');
       await page.locator('#bubble').press('Escape');
-      await until(() => application.evaluate(() => !globalThis.__dragonGirlTest.bubbleVisible), 'Esc 无法收起常驻语录');
+      await until(() => application.evaluate(() => !globalThis.__dragonGirlTest.bubbleVisible), '渲染层未处理注入的 Esc');
       await application.evaluate((_, settings) => { globalThis.__dragonGirlTest.appearance.settings = settings; }, settings);
     }
     await application.close(); application = null;
   }
   await fs.writeFile(path.join(root, '.artifacts/bubble-scrollbar-report.json'), JSON.stringify({ passed: true, results }, null, 2));
-  console.log('气泡验证通过：四档显示比例、三组字体配置、双额度完整展示、无原生滚动条、长内容可滚动，语录重新计时、常驻与 Esc 收起。');
+  console.log('气泡验证通过：四档显示比例、三组字体配置、双额度完整展示、无原生滚动条、长内容可滚动，语录重新计时、常驻与渲染层 Esc 处理。');
 } finally {
   if (application) await application.close().catch(() => {});
   await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

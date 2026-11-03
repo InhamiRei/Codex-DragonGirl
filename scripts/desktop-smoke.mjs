@@ -274,7 +274,7 @@ try {
   });
   assert.equal((await snapshot()).bubbleVisible, false, '迟到点击重新打开了隐藏的气泡。');
 
-  // Enter 与空格均执行“用量 → 一条语录 → 关闭”，新一轮继续使用下一句。
+  // 自动化强制聚焦并注入按键只校验渲染层处理，不代表非聚焦原生窗口支持键盘操作。
   for (const key of ['Enter', 'Space']) {
     await prepareCharacterInput();
     const face = await facePoint();
@@ -292,7 +292,7 @@ try {
     await bubble.keyboard.press(key);
     await until(async () => !(await snapshot()).bubbleVisible, `${key} 未收起语录气泡。`);
   }
-  console.log('✓ 按压回弹、用量切语录再收起、键盘激活和隐藏后迟到点击通过。');
+  console.log('✓ 按压回弹、用量切语录再收起、渲染层按键处理和隐藏后迟到点击通过。');
 
   // 长短文本必须使用同一固定外框；超长内容完整保留，并能通过真实滚轮读到末尾。
   const longText = '这是一段用于验证自动换行的较长消息。'.repeat(10);
