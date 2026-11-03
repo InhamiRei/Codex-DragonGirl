@@ -32,7 +32,7 @@ for (const notice of ['LICENSE', 'LICENSES.chromium.html'])
     path.join(root, 'node_modules/electron/dist', notice),
     path.join(contents, 'Resources', notice),
   );
-for (const folder of ['src', 'assets', 'docs'])
+for (const folder of ['src', 'assets'])
   await fs.cp(path.join(root, folder), path.join(application, folder), { recursive: true });
 await fs.mkdir(path.join(application, 'native/bin'), { recursive: true });
 await fs.copyFile(
@@ -50,7 +50,6 @@ delete pkg.devDependencies;
 delete pkg.scripts;
 await fs.writeFile(path.join(application, 'package.json'), JSON.stringify(pkg, null, 2));
 await fs.copyFile(path.join(root, 'README.md'), path.join(application, 'README.md'));
-await fs.copyFile(path.join(root, 'CHANGELOG.md'), path.join(application, 'CHANGELOG.md'));
 await fs.rename(path.join(contents, 'MacOS/Electron'), path.join(contents, 'MacOS/CodexDragonGirl'));
 const plist = path.join(contents, 'Info.plist');
 for (const [key, value] of Object.entries({

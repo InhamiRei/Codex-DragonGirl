@@ -25,10 +25,9 @@ await fs.rm(bundle, { recursive: true, force: true });
 await fs.cp(path.join(root, 'node_modules/electron/dist'), bundle, { recursive: true });
 await fs.rename(path.join(bundle, 'electron.exe'), path.join(bundle, 'DragonGirl.exe'));
 await fs.mkdir(application, { recursive: true });
-for (const folder of ['src', 'assets', 'docs'])
+for (const folder of ['src', 'assets'])
   await fs.cp(path.join(root, folder), path.join(application, folder), { recursive: true });
-for (const file of ['README.md', 'CHANGELOG.md'])
-  await fs.copyFile(path.join(root, file), path.join(application, file));
+await fs.copyFile(path.join(root, 'README.md'), path.join(application, 'README.md'));
 await fs.mkdir(path.join(application, 'native/bin'), { recursive: true });
 await fs.copyFile(native, path.join(application, 'native/bin/dragongirl-native.exe'));
 await fs.copyFile(path.join(root, 'native/bin/dragongirl-startup.exe'), path.join(application, 'native/bin/dragongirl-startup.exe'));

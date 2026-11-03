@@ -43,14 +43,16 @@ try {
     code = path.join(application, 'Contents/Resources/app');
   await compareFolder('src', code);
   await compareFolder('assets', code);
-  await compareFolder('docs', code);
+  // 新发行包保留 README，已删除的文档目录与更新日志不能从旧产物混入。
+  const packagedNames = await fs.readdir(code);
+  if (packagedNames.includes('docs') || packagedNames.includes('CHANGELOG.md'))
+    throw new Error('安装包混入已删除的文档');
   for (const binary of ['dragongirl-native', 'dragongirl-startup'])
     if (!(await fs.readFile(path.join(root, 'native/bin', binary))).equals(await fs.readFile(path.join(code, 'native/bin', binary))))
       throw new Error(`原生组件过期：${binary}`);
   // 说明和版本信息也必须来自当前源码，避免文档修改后误用旧包。
-  for (const file of ['README.md', 'CHANGELOG.md'])
-    if (!(await fs.readFile(path.join(root, file))).equals(await fs.readFile(path.join(code, file))))
-      throw new Error(`安装包文档过期：${file}`);
+  if (!(await fs.readFile(path.join(root, 'README.md'))).equals(await fs.readFile(path.join(code, 'README.md'))))
+    throw new Error('安装包 README 过期');
   const metadata = JSON.parse(await fs.readFile(path.join(code, 'package.json'), 'utf8'));
   if (metadata.version !== manifest.version || metadata.author !== 'Hey、小怪兽')
     throw new Error('安装包版本或作者不符');

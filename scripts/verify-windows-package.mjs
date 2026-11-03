@@ -39,11 +39,13 @@ try {
   if (result.status !== 0) throw new Error(result.stderr || 'ZIP 解压失败');
   const executable = path.join(temp, manifest.executable);
   const code = path.join(path.dirname(executable), 'resources/app');
-  for (const directory of ['src', 'assets', 'docs']) await compare(directory, code);
-  // 文档和产品元信息必须与本次发行源码一致。
-  for (const document of ['README.md', 'CHANGELOG.md'])
-    if (!(await fs.readFile(path.join(root, document))).equals(await fs.readFile(path.join(code, document))))
-      throw new Error(`安装包文档不一致：${document}`);
+  for (const directory of ['src', 'assets']) await compare(directory, code);
+  // 新发行包只保留 README，检查旧文档未混入且产品说明对应本次源码。
+  const packagedNames = await fs.readdir(code);
+  if (packagedNames.includes('docs') || packagedNames.includes('CHANGELOG.md'))
+    throw new Error('安装包混入已删除的文档');
+  if (!(await fs.readFile(path.join(root, 'README.md'))).equals(await fs.readFile(path.join(code, 'README.md'))))
+    throw new Error('安装包 README 不一致');
   const metadata = JSON.parse(await fs.readFile(path.join(code, 'package.json'), 'utf8'));
   if (metadata.version !== manifest.version || metadata.author !== 'Hey、小怪兽')
     throw new Error('安装包版本或作者不符');

@@ -13,7 +13,7 @@
 
 **作者：Hey、小怪兽**
 
-[下载最新版](https://github.com/InhamiRei/Codex-DragonGirl/releases/latest) · [更新日志](CHANGELOG.md) · [反馈问题](https://github.com/InhamiRei/Codex-DragonGirl/issues)
+[下载最新版](https://github.com/InhamiRei/Codex-DragonGirl/releases/latest) · [更新记录](https://github.com/InhamiRei/Codex-DragonGirl/releases) · [反馈问题](https://github.com/InhamiRei/Codex-DragonGirl/issues)
 
 ## 她能做什么
 
@@ -25,6 +25,7 @@
 - **窗口跟随**：跟随当前 Codex 窗口，多开时可设置每个运行实例一只；最小化后自动隐藏关联角色。macOS 打开文件或文件夹选择框时暂时收起角色与气泡，关闭后恢复原位置。
 - **启动联动**：首次开启「随 Codex 启动」后，照常打开 Codex，龙娘就会自动出现；自动启动不弹管理窗口。
 - **额度气泡**：查看实际剩余额度、重置时间和今日 Tokens，用量窗口按服务返回结果展示。
+- **气泡语录**：轻点龙娘查看用量，再点气泡显示一条日常语录，再点气泡收起；50 条日常文案逐轮切换，另有 10 条任务提示。点击龙娘或在气泡上按 Esc 也可收起，右键菜单「说句话」可直接互动。
 - **多实例总览**：自动发现默认目录、Cockpit 多开目录，也可手动添加；同一账户的共享额度会作提示。
 - **本机账本**：按日期、实例、模型、来源筛选，查看模型分布、年度活动热力图和会话明细，支持 CSV / JSON 导出。
 - **账号测智**：从账户总览选择实例，用鹈鹕动画或自定义提示词对比回答；支持共同模型与思考强度、并发、取消、动画预览和本地测试记录。
@@ -37,9 +38,9 @@
 
 | 电脑 | 下载文件 | 打开方法 |
 | --- | --- | --- |
-| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-1.4.1-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
-| macOS 15+，Apple Silicon | `Codex-DragonGirl-1.4.1-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
-| 同上，偏好 ZIP | `Codex-DragonGirl-1.4.1-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
+| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-1.4.2-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
+| macOS 15+，Apple Silicon | `Codex-DragonGirl-1.4.2-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
+| 同上，偏好 ZIP | `Codex-DragonGirl-1.4.2-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
 
 Windows 请保留解压后的整个文件夹，程序需要旁边的运行时文件。当前暂未提供 Windows ARM 原生版和 Intel Mac 版。
 
@@ -51,7 +52,7 @@ Windows 请保留解压后的整个文件夹，程序需要旁边的运行时文
 2. **打开龙娘。** 管理窗口自动显示发现的账户与目录。首次建立历史账本可能需要几分钟，额度查询独立进行。
 3. **选择摆放方式。** 在「偏好设置 → 外观」选择跟随窗口或独立桌面；右键角色可恢复位置、调整大小或进入管理界面。
 4. **轻点试听。** 九段原声音效已随应用附带，首次打开即可离线播放，无需下载。可在「偏好设置 → 声音」调整音量或修复音效。
-5. **查看用量。** 轻点龙娘打开气泡；点击托盘 / 菜单栏图标打开账户总览、用量账本和偏好设置。
+5. **查看用量与互动。** 轻点龙娘打开用量气泡，再点气泡显示一条语录，再点气泡收起；点龙娘或在气泡上按 Esc 也可收起。点击托盘 / 菜单栏图标打开账户总览、用量账本和偏好设置。
 
 显示 / 隐藏主龙娘的快捷键：macOS 为 `⌘⌥⇧D`，Windows 为 `Ctrl+Alt+Shift+D`。也可使用右键菜单操作。
 
@@ -74,6 +75,13 @@ Windows 和 macOS 的助手均随安装包附带，无需安装 Node.js。关闭
 Windows 跟随针对同一系统用户运行的 Codex / ChatGPT 桌面窗口。受系统权限保护或以其他用户运行的进程可能无法识别，可切换独立桌面模式，并手动添加目录。WSL 内部的独立账户和 Linux 窗口暂不作自动映射。
 
 ## 更新内容
+
+### v1.4.2
+
+- 新增“用量 → 一条语录 → 收起”的气泡点击交互，支持 Enter、空格和 Esc。
+- 日常语录扩充为 50 条，混合轻吐槽、程序员梗与龙娘设定；10 条任务提示先说明结果，再补充角色回应。
+- 自定义用量模板同样支持语录互动，后台额度刷新保留当前语录，切换后重新计时并遵循常驻设置。
+- 删除独立 docs 目录和 CHANGELOG，使用说明与素材来源统一保留在 README。
 
 ### v1.4.1
 
@@ -190,4 +198,22 @@ npm run verify:package
 
 ## 素材与致谢
 
-原声音效来自 [DeepSeek Balance Whale Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)，九段原声随应用附带，来源、文件校验和权利说明见 [音效来源](docs/音效来源.md)。第三方音频不标为本项目原创，也不另行授予素材许可。
+原声音效来自 [DeepSeek Balance Whale Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)，固定提交为 `5247dd6813d6e4430728f39ccc63d43cda046022`。九段原声随 Windows / macOS 应用附带，首次启动即可离线播放。
+
+| 原文件 | 界面名称 | 分组 |
+| --- | --- | --- |
+| Ya1.mp3 | 小黄鸭·按下 | 小黄鸭 |
+| Ya2.mp3 | 小黄鸭·松开 | 小黄鸭 |
+| D1.mp3 | 音效一·按下 | 音效一 |
+| D2.mp3 | 音效一·松开 | 音效一 |
+| minecraft-exp-orb.wav | 经验球 | 提示音 |
+| task-end-a.wav | 任务结束音一 | 提示音 |
+| cost-default.wav | 消耗提示 | 提示音 |
+| ask-default.wav | 提问提示 | 提示音 |
+| approve-default.wav | 授权提示 | 提示音 |
+
+原始地址、字节数和 SHA-256 记录在 [音效清单](src/shared/audio-library.js) 与 [内置音效来源记录](assets/audio/original-audio-sources.json)，构建前逐一核验，缺失或损坏时停止打包。
+
+原项目的[素材说明](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/blob/5247dd6813d6e4430728f39ccc63d43cda046022/PROVENANCE.md)区分音频素材与代码许可：音频不适用该项目的 MIT 代码许可，且未授予再许可。龙娘保留来源说明，不将音频标为原创，也不另行授予素材许可；素材权利与适用范围仍以原项目说明和各素材原权利人为准。
+
+播放保留原速与完整录音，只调整所选音量；优先读取本机通过校验的副本，缺失或损坏时使用内置原声。「修复原声音效」优先从内置文件恢复，只有两份副本均不可用时才从固定来源下载并校验。
