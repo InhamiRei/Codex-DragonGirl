@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dialogueLine } from '../src/shared/dialogue.js';
 const root = fileURLToPath(new URL('../', import.meta.url)),
   temp = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-app-')),
   user = path.join(temp, 'user'),
@@ -733,6 +734,21 @@ try {
     animations: 'disabled', omitBackground: true,
     path: path.join(root, '.artifacts/bubble-plan-tokens.png'),
   });
+  // 真实用量卡片切到语录后，后台额度更新不得覆盖短句；再次点击关闭，重开回到用量。
+  const quoteIndex = await application.evaluate(() => globalThis.__dragonGirlApp.companion.lineIndex);
+  await bubble.locator('#message').click();
+  await until(() => bubble.locator('#message').textContent().then((text) => text === dialogueLine('chat', quoteIndex)), '点击用量气泡未显示语录');
+  const afterQuotaUpdate = await application.evaluate(() => {
+    const c = globalThis.__dragonGirlApp.companion;
+    c.setAppearance({ ...c.appearance, status: 'working' });
+    return { visible: c.bubbleVisible, kind: c.bubbleKind, usage: c.bubbleModel.usage, text: c.bubbleModel.text };
+  });
+  assert.deepEqual(afterQuotaUpdate, { visible: true, kind: 'speech', usage: null, text: dialogueLine('chat', quoteIndex) });
+  assert.equal(await bubble.locator('.quota').count(), 0, '切到语录后残留额度内容');
+  await bubble.locator('#bubble').click();
+  await until(() => application.evaluate(() => !globalThis.__dragonGirlApp.companion.bubbleVisible), '再次点击语录没有关闭气泡');
+  await application.evaluate(() => globalThis.__dragonGirlApp.companion.toggleBubble());
+  await until(() => bubble.locator('.quota').count().then((count) => count > 0), '重新打开气泡未回到用量');
   // 自定义模板保持逐字纯文本；过期额度只显示待刷新，不伪造成零值或进度条。
   const customText = await application.evaluate(() => {
     const a = globalThis.__dragonGirlApp;
@@ -747,6 +763,12 @@ try {
   assert.equal(await bubble.locator('#message img').count(), 0, '自定义模板被当成 HTML');
   assert.equal(await bubble.locator('.quota').count(), 0);
   assert.equal(await bubble.locator('body').getAttribute('data-layout'), 'text');
+  // 自定义用量模板虽然没有结构化额度，也必须支持“语录 → 收起”的相同交互。
+  const customQuoteIndex = await application.evaluate(() => globalThis.__dragonGirlApp.companion.lineIndex);
+  await bubble.locator('#message').click();
+  await until(() => bubble.locator('#message').textContent().then((text) => text === dialogueLine('chat', customQuoteIndex)), '自定义用量模板未切换语录');
+  await bubble.locator('#bubble').click();
+  await until(() => application.evaluate(() => !globalThis.__dragonGirlApp.companion.bubbleVisible), '自定义模板切换后的语录无法关闭');
   // 多桶额度必须逐项保留，小于百分之一与真实零值有不同文案，不能因卡片排版合并丢失。
   await application.evaluate(() => {
     const a = globalThis.__dragonGirlApp;
@@ -801,15 +823,16 @@ try {
     const afterUpdate = c.bubbleModel.text;
     c.state.speechEnabled = true;
     const m = globalThis.__dragonGirlApp.monitor;
+    const completeIndex = m.dialogueCounts.complete || 0;
     m.workerMessage({ type: 'task', task: { home: c.instanceId, source: '主任务', status: 'complete' } });
     const complete = c.bubbleModel.text;
     c.setAppearance({ ...c.appearance, status: 'complete' });
-    return { first, second, visible, afterUpdate, complete, afterComplete: c.bubbleModel.text };
+    return { first, second, visible, afterUpdate, completeIndex, complete, afterComplete: c.bubbleModel.text };
   });
   assert.equal(speech.visible, true, '主动对话未显示气泡');
   assert.notEqual(speech.first, speech.second, '连续对话没有轮换');
   assert.equal(speech.afterUpdate, speech.second, '对话被后台状态覆盖');
-  assert.match(speech.complete, /交卷|龙角|成果/);
+  assert.equal(speech.complete, dialogueLine('complete', speech.completeIndex), '主任务完成未显示对应的完成语录');
   assert.equal(speech.afterComplete, speech.complete, '完成提示被后台状态覆盖');
   await until(() => character.locator('#character').getAttribute('data-expression').then((value) => value === 'happy'), '主任务完成没有通过监控器触发开心');
   assert.deepEqual(await character.evaluate(() => window.__completionExpressions), ['happy']);
@@ -933,6 +956,7 @@ try {
           '今日消耗置于运行信息旁与三种窗口宽度适配',
           '旧版默认气泡自动迁移',
           '默认用量卡片层次、多桶与真实零值、自定义模板纯文本和过期额度提示',
+          '用量与自定义模板点击显示语录、再次收起、后台刷新保留语录和重开恢复用量',
           '目录发现',
           '独立筛选',
           '设置保存取消',

@@ -84,9 +84,12 @@ function measure(model) {
       (contentPane.scrollHeight > contentPane.clientHeight + 1 || !contentFitsEllipse()))
     document.body.dataset.compact = 'true';
   const scrollable = contentPane.scrollHeight > contentPane.clientHeight + 1;
+  const label = model.kind === 'usage'
+    ? '点击查看一句语录，点击龙娘或按 Esc 收起气泡'
+    : '点击收起龙娘的气泡';
   bubble.setAttribute('aria-label', scrollable
-    ? '点击收起龙娘的气泡，长内容可用滚轮或上下方向键查看'
-    : '点击收起龙娘的气泡');
+    ? `${label}，长内容可用滚轮或上下方向键查看`
+    : label);
   bridge.measureBubble({
     revision: model.revision,
     width: model.maxWidth,
@@ -94,9 +97,9 @@ function measure(model) {
   });
 }
 
-// 没有可见滚动条后，内容区域不再保留无效的点击死区。
-function closeFromContent() {
-  bridge.closeBubble();
+// 文字和椭圆轮廓共用交互入口，用量切换为一条语录，再点收起。
+function advanceFromContent() {
+  bridge.advanceBubble();
 }
 
 // 原生滚动条隐藏后保留方向键和翻页阅读，长内容仍完整存在于滚动容器中。
@@ -192,11 +195,15 @@ async function start() {
   });
   window.addEventListener('pointermove', (event) => routeCursor({ x: event.clientX, y: event.clientY }));
   window.addEventListener('pointerleave', () => routeCursor({ x: -1, y: -1 }));
-  bubble.addEventListener('click', closeFromContent);
-  outline.addEventListener('click', () => bridge.closeBubble());
+  bubble.addEventListener('click', advanceFromContent);
+  outline.addEventListener('click', advanceFromContent);
   bubble.addEventListener('keydown', (event) => {
     if (scrollFromKeyboard(event)) return;
-    if (['Enter', ' ', 'Escape'].includes(event.key)) {
+    // 键盘激活与鼠标点击行为一致，Esc 单独保留收起操作。
+    if (['Enter', ' '].includes(event.key)) {
+      event.preventDefault();
+      advanceFromContent();
+    } else if (event.key === 'Escape') {
       event.preventDefault();
       bridge.closeBubble();
     }

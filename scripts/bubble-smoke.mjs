@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import { dialogueLine } from '../src/shared/dialogue.js';
 
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-bubble-'));
@@ -125,10 +126,57 @@ try {
     assert.equal(await page.locator('#bubble-content').evaluate((node) => node.scrollTop), 0);
     await page.keyboard.press('End');
     assert.ok(await page.locator('#bubble-content').evaluate((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1));
+    // 切到语录必须重新计时；常驻气泡保持显示，Esc 仍可主动收起。
+    if (scale === 1) {
+      // 每类语录实际渲染一轮，完整文案不能超出椭圆，也不能依赖滚动才能读完。
+      for (const kind of ['chat', 'complete', 'cancelled', 'error']) {
+        const first = dialogueLine(kind);
+        for (let index = 0; index < 100; index += 1) {
+          const text = dialogueLine(kind, index);
+          if (index && text === first) break;
+          await show({ text });
+          const result = await metrics();
+          assert.ok(result.scrollHeight <= result.clientHeight + 1, `语录需要滚动才能读完：${text}`);
+          assert.equal(result.outside, false, `语录超出椭圆：${text}`);
+          assert.equal(await page.locator('#message').textContent(), text, '语录显示不完整');
+        }
+      }
+      await show({ text: dialogueLine('chat', 4) });
+      await page.screenshot({ path: path.join(root, '.artifacts/bubble-dialogue-preview.png'), omitBackground: true });
+      const settings = await application.evaluate(() => {
+        const c = globalThis.__dragonGirlTest;
+        const previous = c.appearance.settings;
+        c.appearance.settings = { ...previous, pinnedBubble: false, bubbleSeconds: 1 };
+        return previous;
+      });
+      const sample = { text: '定时用量', usage: {
+        plan: 'Plus', quotas: [{ label: '周额度', remaining: 89 }], quotaNote: '', tokens: '12',
+      } };
+      await show(sample);
+      await application.evaluate(() => { globalThis.__dragonGirlTest.appearance.settings.bubbleSeconds = 1.5; });
+      await page.locator('#message').click();
+      await until(() => application.evaluate(() => globalThis.__dragonGirlTest.bubbleKind === 'speech'), '定时用量未切换为语录');
+      // 跨过原气泡的一秒期限，确认旧计时器没有把新语录提前关闭。
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      assert.equal(await application.evaluate(() => globalThis.__dragonGirlTest.bubbleVisible), true, '语录沿用旧气泡计时器而提前关闭');
+      await until(() => application.evaluate(() => !globalThis.__dragonGirlTest.bubbleVisible), '语录超过新期限仍未自动收起');
+      await application.evaluate(() => {
+        const c = globalThis.__dragonGirlTest;
+        c.appearance.settings = { ...c.appearance.settings, pinnedBubble: true, bubbleSeconds: 1 };
+      });
+      await show(sample);
+      await page.locator('#message').click();
+      await until(() => application.evaluate(() => globalThis.__dragonGirlTest.bubbleKind === 'speech'), '常驻用量未切换为语录');
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      assert.equal(await application.evaluate(() => globalThis.__dragonGirlTest.bubbleVisible), true, '常驻语录仍被自动收起');
+      await page.locator('#bubble').press('Escape');
+      await until(() => application.evaluate(() => !globalThis.__dragonGirlTest.bubbleVisible), 'Esc 无法收起常驻语录');
+      await application.evaluate((_, settings) => { globalThis.__dragonGirlTest.appearance.settings = settings; }, settings);
+    }
     await application.close(); application = null;
   }
   await fs.writeFile(path.join(root, '.artifacts/bubble-scrollbar-report.json'), JSON.stringify({ passed: true, results }, null, 2));
-  console.log('气泡验证通过：四档显示比例、三组字体配置、双额度完整展示、无原生滚动条、长内容可滚动。');
+  console.log('气泡验证通过：四档显示比例、三组字体配置、双额度完整展示、无原生滚动条、长内容可滚动，语录重新计时、常驻与 Esc 收起。');
 } finally {
   if (application) await application.close().catch(() => {});
   await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld(
     cancelGesture: () => ipcRenderer.send('dg:gesture-cancel'),
     menu: (point) => ipcRenderer.send('dg:menu', point),
     closeBubble: () => ipcRenderer.send('dg:close-bubble'),
+    // 仅发送气泡交互意图，由主进程根据当前内容决定显示语录还是收起。
+    advanceBubble: () => ipcRenderer.send('dg:advance-bubble'),
     measureBubble: (measurement) => ipcRenderer.send('dg:bubble-measured', measurement),
     assetError: () => ipcRenderer.send('dg:asset-error'),
     onCursor: (listener) => subscribe('dg:cursor', listener),

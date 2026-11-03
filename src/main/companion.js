@@ -249,6 +249,8 @@ export class Companion {
       if (c) c.showMenu(point);
     });
     ipcMain.on('dg:close-bubble', (event) => locate(event, 'bubble')?.hideBubble());
+    // 推进消息只路由到发送它的气泡实例，角色页或其他窗口不能跨实例触发对话。
+    ipcMain.on('dg:advance-bubble', (event) => locate(event, 'bubble')?.advanceBubble());
     ipcMain.on('dg:bubble-measured', (event, measurement) =>
       locate(event, 'bubble')?.resizeBubble(measurement),
     );
@@ -376,7 +378,7 @@ export class Companion {
     this.updateMenu();
   }
 
-  // 轻点角色切换用量气泡，主动对话由独立入口处理。
+  // 轻点角色打开用量或收起当前气泡，点击用量气泡与菜单入口负责显示语录。
   toggleBubble() {
     if (this.bubbleVisible) {
       this.hideBubble();
@@ -413,10 +415,17 @@ export class Companion {
       );
   }
 
-  // 菜单中的主动互动始终回应，不受“点击时显示气泡”开关限制。
+  // 主动互动共用语录顺序与显示逻辑，菜单入口不受“点击时显示气泡”开关限制。
   speak() {
     this.show();
     this.showBubble(dialogueLine('chat', this.lineIndex++), 'speech');
+  }
+
+  // 用量气泡切换为一条语录，其余气泡点击收起；迟到点击不能重新叫出已隐藏的角色或气泡。
+  advanceBubble() {
+    if (this.stopping || !this.visible || this.suppressedByFollow || !this.bubbleVisible) return;
+    if (this.bubbleKind === 'usage') this.speak();
+    else this.hideBubble();
   }
 
   // 使用固定设计尺寸，仅在屏幕工作区小于气泡时收紧边界，内容长度不参与计算。

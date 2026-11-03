@@ -258,9 +258,41 @@ try {
   await until(() => page.evaluate(() => Math.abs(new DOMMatrix(getComputedStyle(document.getElementById('character')).transform).d - 1) < 0.001), '回弹后没有恢复原比例。');
   await page.screenshot({ path: path.join(artifacts, 'character.png'), omitBackground: true });
   await bubble.screenshot({ path: path.join(artifacts, 'bubble.png'), omitBackground: true });
+  // 点用量内容显示一条现有语录，再点收起；关闭后的迟到 IPC 不得重新弹出气泡。
+  const nextLine = await application.evaluate(() => globalThis.__dragonGirlTest.lineIndex);
+  await bubble.locator('#message').click();
+  await bubbleLayout(dialogueLine('chat', nextLine));
+  assert.equal((await snapshot()).bubbleVisible, true, '点击用量气泡直接关闭，未显示语录。');
+  assert.equal(await bubble.locator('body').getAttribute('data-kind'), 'speech');
+  assert.match(await bubble.locator('#bubble').getAttribute('aria-label'), /点击收起/);
+  await bubble.screenshot({ path: path.join(artifacts, 'bubble-click-speech.png'), omitBackground: true });
   await bubble.locator('#bubble').click();
   await until(async () => !(await snapshot()).bubbleVisible, '气泡无法独立关闭。');
-  console.log('✓ 按压回弹、轻点气泡和独立关闭通过。');
+  await bubble.evaluate(async () => {
+    window.dragonGirl.advanceBubble();
+    await window.dragonGirl.bootstrap();
+  });
+  assert.equal((await snapshot()).bubbleVisible, false, '迟到点击重新打开了隐藏的气泡。');
+
+  // Enter 与空格均执行“用量 → 一条语录 → 关闭”，新一轮继续使用下一句。
+  for (const key of ['Enter', 'Space']) {
+    await prepareCharacterInput();
+    const face = await facePoint();
+    await page.mouse.click(face.x, face.y);
+    await until(async () => (await snapshot()).bubbleVisible, '再次点击角色没有打开用量气泡。');
+    const current = await application.evaluate(() => ({
+      text: globalThis.__dragonGirlTest.bubbleModel.text,
+      index: globalThis.__dragonGirlTest.lineIndex,
+    }));
+    await bubbleLayout(current.text);
+    await bubble.locator('#bubble').focus();
+    await bubble.keyboard.press(key);
+    await bubbleLayout(dialogueLine('chat', current.index));
+    assert.equal((await snapshot()).bubbleVisible, true, `${key} 未切换到语录。`);
+    await bubble.keyboard.press(key);
+    await until(async () => !(await snapshot()).bubbleVisible, `${key} 未收起语录气泡。`);
+  }
+  console.log('✓ 按压回弹、用量切语录再收起、键盘激活和隐藏后迟到点击通过。');
 
   // 长短文本必须使用同一固定外框；超长内容完整保留，并能通过真实滚轮读到末尾。
   const longText = '这是一段用于验证自动换行的较长消息。'.repeat(10);
