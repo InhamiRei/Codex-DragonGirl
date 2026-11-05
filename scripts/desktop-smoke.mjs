@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BUBBLE_FRAME, BUBBLE_SIZE } from '../src/shared/geometry.js';
 import { dialogueLine } from '../src/shared/dialogue.js';
+import { quotaDisplayWindows } from '../src/shared/presentation.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dataDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'dragongirl-desktop-'));
@@ -344,11 +345,21 @@ try {
 
   // 按用户当前的 60% 角色大小核对相对位置，额度与用量使用隔离的示例数据。
   await application.evaluate(() => globalThis.__dragonGirlTest.setScale(.6));
+  // 示例日期固定在北京时间，便于直接对照两种套餐的重置时间，不涉及真实账号。
+  await bubble.evaluate(() => {
+    window.__realNow = Date.now;
+    Date.now = () => Date.parse('2026-11-05T10:00:00+08:00');
+  });
   const usageText = 'Pro 100\n周额度 11%\n今日 2.7亿 Tokens';
-  await application.evaluate((_, text) => globalThis.__dragonGirlTest.showBubble({
+  await application.evaluate((_, { text, quotas }) => globalThis.__dragonGirlTest.showBubble({
     text,
-    usage: { plan: 'Pro 100', quotas: [{ label: '周额度', remaining: 11, low: true }], quotaNote: '', tokens: '2.7亿' },
-  }, 'usage'), usageText);
+    usage: { plan: 'Pro 100', timezone: 'Asia/Shanghai',
+      quotas,
+      quotaNote: '', tokens: '2.7亿' },
+  }, 'usage'), { text: usageText, quotas: quotaDisplayWindows([
+    { label: '周额度', minutes: 10080, remaining: 11, low: true,
+      resetsAt: Date.parse('2026-11-09T13:33:00+08:00') },
+  ], 'prolite') });
   const usageBubble = await bubbleLayout(usageText);
   assert.equal(usageBubble.textOutside, false, '用量文字超出了漫画气泡轮廓。');
   assert.deepEqual([usageBubble.card.width, usageBubble.card.height], [shortBubble.card.width, shortBubble.card.height], '用量和对话的轮廓尺寸不同。');
@@ -359,13 +370,18 @@ try {
   await bubble.screenshot({ path: path.join(artifacts, 'bubble-comic-usage.png'), omitBackground: true });
   const taskPreview = await captureCompanionPreview();
 
-  // 双额度覆盖三位数与两位数的列对齐，以及标题、额度行、今日用量之间的统一间距。
-  const plusText = 'Plus\n5 小时 100% · 周额度 54%\n今日 57117 Tokens';
+  // 覆盖带数量单位的今日用量，整行自然居中，双额度仍完整展示。
+  const plusText = 'Plus\n5 小时 54% · 周额度 2%\n今日 2715万 Tokens';
   await application.evaluate((_, text) => globalThis.__dragonGirlTest.showBubble({
     text,
-    usage: { plan: 'Plus', quotas: [{ label: '5 小时', remaining: 100, low: false }, { label: '周额度', remaining: 54, low: false }], quotaNote: '', tokens: '57117' },
+    usage: { plan: 'Plus', timezone: 'Asia/Shanghai',
+      quotas: [{ label: '5 小时', remaining: 54, low: false, resetsAt: Date.parse('2026-11-05T13:27:00+08:00') },
+        { label: '周额度', remaining: 2, low: true, resetsAt: Date.parse('2026-11-09T09:04:00+08:00') }],
+      quotaNote: '', tokens: '2715万' },
   }, 'usage'), plusText);
   const plusBubble = await bubbleLayout(plusText);
+  assert.ok(Math.abs(usageBubble.content.y - plusBubble.content.y) < 1, 'Pro 和 Plus 的内容起点没有统一。');
+  assert.equal(usageBubble.clientHeight, plusBubble.clientHeight, 'Pro 和 Plus 的内容高度没有统一。');
   assert.deepEqual([plusBubble.card.width, plusBubble.card.height], [usageBubble.card.width, usageBubble.card.height], '双额度改变了固定轮廓。');
   assert.equal(plusBubble.textOutside, false, '双额度文字超出椭圆轮廓。');
   assert.ok(plusBubble.scrollWidth <= plusBubble.clientWidth + 1, '双额度出现横向溢出。');
@@ -373,7 +389,7 @@ try {
   assert.equal(await bubble.locator('#bubble-content').evaluate((pane) => getComputedStyle(pane).scrollbarWidth), 'none');
   const plusLayout = await bubble.evaluate(() => {
     const header = document.querySelector('.bubble-header').getBoundingClientRect();
-    const rows = [...document.querySelectorAll('.quota-heading')].map((node) => node.getBoundingClientRect());
+    const rows = [...document.querySelectorAll('.quota')].map((node) => node.getBoundingClientRect());
     const footer = document.querySelector('.usage-footer').getBoundingClientRect();
     const card = document.getElementById('bubble').getBoundingClientRect();
     const title = document.getElementById('plan').getBoundingClientRect();
@@ -385,13 +401,14 @@ try {
       titleOffset: title.left + title.width / 2 - card.left - card.width / 2,
     };
   });
-  assert.ok(Math.max(...plusLayout.gaps) - Math.min(...plusLayout.gaps) < 1, 'Plus 各行上下间距不一致。');
+  assert.ok(Math.max(...plusLayout.gaps) - Math.min(...plusLayout.gaps) < 1, 'Plus 各区块上下间距不一致。');
   assert.ok(Math.abs(plusLayout.heights[0] - plusLayout.heights[1]) < 1, 'Plus 两条额度的行高不同。');
   assert.ok(Math.abs(plusLayout.labelStarts[0] - plusLayout.labelStarts[1]) < 1, '额度标签没有左对齐。');
   assert.ok(Math.abs(plusLayout.valueEnds[0] - plusLayout.valueEnds[1]) < 1, '额度百分比没有右对齐。');
   assert.ok(Math.abs(plusLayout.titleOffset) < 1, 'Plus 标题没有居中。');
   await bubble.screenshot({ path: path.join(artifacts, 'bubble-plus.png'), omitBackground: true });
   const plusPreview = await captureCompanionPreview();
+  await bubble.evaluate(() => { Date.now = window.__realNow; delete window.__realNow; });
 
   // 复现用户截图中的任务提示，文字完整换行，轮廓与用量气泡保持完全一致。
   const speechText = dialogueLine('complete', 1);
@@ -482,6 +499,7 @@ try {
   });
   assert.equal(windowCount, 2);
   await saveCompanionPreview(taskPreview);
+  await saveCompanionPreview(taskPreview, 'bubble-pro-preview.png');
   await saveCompanionPreview(plusPreview, 'bubble-plus-preview.png');
   await saveCompanionPreview(speechPreview, 'bubble-fixed-speech-preview.png');
   await application.close();

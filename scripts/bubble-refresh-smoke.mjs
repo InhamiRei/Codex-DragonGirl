@@ -151,7 +151,8 @@ try {
   await measured();
   await application.evaluate((_, model) => globalThis.__dragonGirlTest.windows.get('bubble').webContents.send('dg:bubble', model), staleModel);
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  assert.match(await page.locator('#bubble').innerText(), /1\.1亿/, '旧快照覆盖了新用量');
+  assert.equal(await page.locator('.metric-value').textContent(), '1.1', '旧快照覆盖了新用量');
+  assert.equal(await page.locator('.metric-unit').textContent(), '亿 Tokens', '更新后的数量单位不正确');
   assert.equal(await page.evaluate(() => window.__bubbleAnimations), 1);
 
   // 自定义长用量更新保留阅读位置，切换语录则回到开头。

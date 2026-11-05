@@ -8,7 +8,8 @@ import { parserState, parseUsageEvent, estimateCost } from '../src/core/usage-pa
 import { normalizeQuota, AlertTracker } from '../src/core/quota.js';
 import { discoverHomes } from '../src/core/instances.js';
 import { normalizeSettings, isQuiet } from '../src/core/settings.js';
-import { dayKey, midnight, nextDay } from '../src/shared/time.js';
+import { dayKey, midnight, nextDay, quotaResetTime } from '../src/shared/time.js';
+import { quotaAvailableWindows, quotaDisplayWindows, tokenDisplayParts } from '../src/shared/presentation.js';
 import { readAccount } from '../src/core/rpc.js';
 import { readRecentQuota } from '../src/core/log-snapshot.js';
 
@@ -71,6 +72,96 @@ test('多桶额度、空重置时间与明确的零值', () => {
   assert.equal(q.buckets[1].windows[0].remaining, 100);
   assert.equal(q.allowed, false);
   assert.equal(q.resetCredits.details, null);
+});
+
+// 周额度限制只作用于同桶真实 5h 的展示，原始使用量、重置时间与其他窗口均不变。
+test('周额度耗尽时 5h 可用量归零，恢复后重新使用真实读数', () => {
+  const fiveHour = Object.freeze({ id: 'primary', minutes: 300, remaining: 100,
+    usedPercent: 0, resetsAt: 1900000000000 });
+  const weekly = Object.freeze({ id: 'secondary', minutes: 10080, remaining: 0 });
+  const daily = Object.freeze({ id: 'daily', minutes: 1440, remaining: 85 });
+  const windows = Object.freeze([weekly, daily, fiveHour]);
+  const blocked = quotaAvailableWindows(windows);
+  assert.equal(blocked[2].remaining, 0);
+  assert.equal(blocked[2].isBlockedByWeeklyLimit, true);
+  assert.equal(blocked[2].usedPercent, fiveHour.usedPercent);
+  assert.equal(blocked[2].resetsAt, fiveHour.resetsAt);
+  assert.equal(blocked[0], weekly);
+  assert.equal(blocked[1], daily);
+  assert.equal(fiveHour.remaining, 100);
+  assert.equal(fiveHour.isBlockedByWeeklyLimit, undefined);
+  const recovered = [fiveHour, { ...weekly, remaining: 25 }];
+  assert.equal(quotaAvailableWindows(recovered), recovered);
+  assert.equal(quotaAvailableWindows(recovered)[0].remaining, 100);
+  const otherBucket = [fiveHour, { ...weekly, remaining: 75 }];
+  assert.equal(quotaAvailableWindows(otherBucket), otherBucket);
+});
+
+// 不足 1% 仍明确显示为不足 1，缺失或未知的周额度也不能误触发耗尽联动。
+test('5h 可用量不受其他桶、未知或仍有余额的周窗口影响', () => {
+  const fiveHour = { minutes: 300, remaining: 61 };
+  for (const remaining of [0.4, 1, 100, null, undefined, NaN]) {
+    const windows = [fiveHour, { minutes: 10080, remaining }];
+    assert.equal(quotaAvailableWindows(windows), windows);
+  }
+  for (const windows of [[], [fiveHour], [fiveHour, { minutes: 1440, remaining: 0 }]])
+    assert.equal(quotaAvailableWindows(windows), windows);
+});
+
+// 各档 Pro 的补位电量精确跟随周额度，零额度也同步归零，原始窗口始终不被改写。
+test('Pro 单周额度生成明确标注无限制的 5h 展示行', () => {
+  for (const plan of ['pro', 'prolite', 'promax']) {
+    for (const remaining of [62, 0.4, 0]) {
+      const weekly = Object.freeze({ label: '周额度', minutes: 10080, remaining,
+        low: remaining <= 20, resetsAt: 1900000000000 });
+      const windows = Object.freeze([weekly]);
+      const result = quotaDisplayWindows(windows, plan);
+      assert.equal(result.length, 2);
+      assert.equal(result[0].label, '5 小时');
+      assert.equal(result[0].minutes, 300);
+      assert.equal(result[0].isUnlimited, true);
+      assert.equal(result[0].resetsAt, null);
+      assert.equal(result[0].remaining, weekly.remaining);
+      assert.equal(result[0].low, weekly.low);
+      assert.equal(result[1], weekly);
+      assert.equal(windows.length, 1);
+      assert.equal(weekly.isUnlimited, undefined);
+    }
+  }
+});
+
+// 未知套餐、非 Pro、多桶或已有真实 5h 时保留实际窗口，缺失字段不能被推断为无限制。
+test('5h 展示补位不覆盖真实限制，也不扩展未知额度', () => {
+  const weekly = { label: '周额度', minutes: 10080, remaining: 62 };
+  const windows = [weekly];
+  for (const plan of ['plus', 'unknown', 'apiKey', 'business', 'codex_future', undefined])
+    assert.equal(quotaDisplayWindows(windows, plan), windows);
+  for (const rows of [[], [{ ...weekly, minutes: null }],
+    [{ label: '5 小时', minutes: 300 }, weekly], [weekly, { ...weekly }]])
+    assert.equal(quotaDisplayWindows(rows, 'prolite'), rows);
+});
+
+// 数量单位仅改变排版，普通数值、万、亿、万亿及未知文案都不能丢失或被重新计量。
+test('气泡用量数字与数量单位分开显示', () => {
+  for (const [text, number, unit] of [
+    ['2715万', '2715', '万'], ['123.4万', '123.4', '万'], ['2.7亿', '2.7', '亿'],
+    ['1.234万亿', '1.234', '万亿'], ['12,345万', '12,345', '万'],
+    ['0', '0', ''], ['123456789', '123456789', ''], ['暂未统计', '暂未统计', ''],
+  ]) assert.deepEqual(tokenDisplayParts(text), { number, unit });
+});
+
+// 紧凑重置时间遵循统计时区，跨日显示完整时分，缺失与到期不能被误报为新周期。
+test('气泡重置时间区分当天、跨日、未知和等待刷新', () => {
+  const now = Date.parse('2026-11-05T10:00:00+08:00');
+  assert.equal(quotaResetTime(Date.parse('2026-11-05T13:27:00+08:00'), 'Asia/Shanghai', now).text, '13:27 重置');
+  const weekly = quotaResetTime(Date.parse('2026-11-09T13:33:00+08:00'), 'Asia/Shanghai', now);
+  assert.equal(weekly.text, '11.09 13:33 重置');
+  assert.match(weekly.title, /2026-11-09 13:33.*Asia\/Shanghai/);
+  assert.equal(quotaResetTime(Date.parse('2026-11-05T10:00:00Z'), 'America/Los_Angeles', now).text, '11.05 02:00 重置');
+  assert.equal(quotaResetTime(Date.parse('2026-11-05T16:05:00Z'), 'Asia/Shanghai', now).text, '11.06 00:05 重置');
+  for (const value of [undefined, null, NaN, Infinity, 0])
+    assert.equal(quotaResetTime(value, 'Asia/Shanghai', now).text, '重置时间未知');
+  assert.equal(quotaResetTime(now, 'Asia/Shanghai', now).text, '重置待刷新');
 });
 
 // 相同账户在多个实例出现，只触发一次额度提醒；旧数据不触发。

@@ -37,3 +37,19 @@ export function nextDay(day) {
   date.setUTCDate(date.getUTCDate() + 1);
   return date.toISOString().slice(0, 10);
 }
+
+// 重置时间沿用统计时区；跨日以月.日显示日期，未知或已到期时不推测下个周期。
+export function quotaResetTime(timestamp, timezone = 'Asia/Shanghai', now = Date.now()) {
+  if (!Number.isFinite(timestamp) || timestamp <= 0)
+    return { text: '重置时间未知', title: '服务暂未提供此额度窗口的重置时间' };
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(timestamp).map((part) => [part.type, part.value]));
+  const clock = `${parts.hour}:${parts.minute}`;
+  const title = `${parts.year}-${parts.month}-${parts.day} ${clock} 重置（${timezone}）`;
+  if (timestamp <= now) return { text: '重置待刷新', title: `${title}；时间已到，等待最新额度` };
+  const date = dayKey(timestamp, timezone) === dayKey(now, timezone) ? '' : `${parts.month}.${parts.day} `;
+  return { text: `${date}${clock} 重置`, title };
+}

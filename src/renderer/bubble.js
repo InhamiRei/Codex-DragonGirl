@@ -1,4 +1,6 @@
 import { BUBBLE_FRAME } from '../shared/geometry.js';
+import { quotaResetTime } from '../shared/time.js';
+import { tokenDisplayParts } from '../shared/presentation.js';
 
 const bridge = window.dragonGirl;
 const bubble = document.getElementById('bubble');
@@ -22,12 +24,11 @@ function element(tag, className, text) {
   return node;
 }
 
-// 用量以漫画对白的居中层次呈现，单个额度直接组成标题，多桶仍逐项保留。
+// 用量沿用紫色漫画气泡；每个窗口保留真实重置时间，十格电量横向表示剩余额度。
 function renderUsage(usage) {
   plan.textContent = usage.plan;
   plan.hidden = false;
-  quotaTitle.textContent = usage.quotas.length === 1 ? `${usage.quotas[0].label}剩余` : '';
-  quotaTitle.hidden = usage.quotas.length !== 1;
+  quotaTitle.hidden = true;
   const content = element('div', 'usage');
   content.dataset.multiple = String(usage.quotas.length > 1);
   for (const quota of usage.quotas) {
@@ -35,21 +36,53 @@ function renderUsage(usage) {
     row.dataset.low = String(quota.low);
     const heading = element('div', 'quota-heading');
     const remaining = quota.remaining > 0 && quota.remaining < 1 ? '<1' : Math.round(quota.remaining);
+    // Pro 的补位行明确标注无限制，百分比与电量条的来源通过悬停和辅助功能说明。
+    const reset = quota.isUnlimited
+      ? { text: '无限制', title: '5 小时无限制；电量条和百分比参考周额度，实际可用量仍受周额度限制' }
+      : quotaResetTime(quota.resetsAt, usage.timezone);
+    // 周限制影响可用量，保留真实 5h 重置时间，并在悬停与辅助说明中解释原因。
+    const blockedNote = quota.isBlockedByWeeklyLimit ? '周额度已耗尽，5 小时额度暂不可用' : '';
+    if (blockedNote) row.title = `${blockedNote}；${reset.title}`;
+    else if (quota.isUnlimited) row.title = reset.title;
+    const resetTime = element('span', 'quota-reset', reset.text);
+    resetTime.title = reset.title;
+    heading.append(element('span', 'quota-label', quota.label), resetTime);
+    const meter = element('div', 'quota-meter');
+    const battery = element('div', 'quota-battery');
+    battery.setAttribute('role', 'meter');
+    battery.setAttribute('aria-label', quota.isUnlimited ? '5 小时展示进度（参考周额度）' : `${quota.label}剩余额度`);
+    battery.setAttribute('aria-valuemin', '0');
+    battery.setAttribute('aria-valuemax', '100');
+    battery.setAttribute('aria-valuenow', String(quota.remaining));
+    battery.setAttribute('aria-valuetext', blockedNote
+      ? `剩余 0%，${blockedNote}，${reset.title}`
+      : quota.isUnlimited ? `5 小时无限制；周额度剩余 ${remaining}%` : `剩余 ${remaining}%，${reset.title}`);
+    // 每格保留实际填充比例，低于 10% 仍可分辨，零额度不点亮任何格子。
+    for (let index = 0; index < 10; index += 1) {
+      const segment = element('span', 'battery-segment');
+      segment.style.setProperty('--fill', `${Math.max(0, Math.min(1, quota.remaining / 10 - index)) * 100}%`);
+      segment.setAttribute('aria-hidden', 'true');
+      battery.append(segment);
+    }
     const value = element('span', 'quota-value', remaining);
     value.append(element('span', 'quota-unit', '%'));
-    // 用紧凑的剩余标签给百分比留出宽度，普通双额度不因标点和空格被挤成两行。
-    heading.append(element('span', 'quota-label', `${quota.label}剩余`), value);
-    row.append(heading);
+    meter.append(battery, value);
+    row.append(heading, meter);
     content.append(row);
   }
   if (usage.quotaNote) content.append(element('p', 'quota-note', usage.quotaNote));
   const footer = element('div', 'usage-footer');
   const today = element('div', 'today');
+  // 今日用量整行居中，文字与数字使用同一小字号自然连排，数字仅通过颜色区分。
+  const tokens = tokenDisplayParts(usage.tokens);
   today.append(
-    element('span', 'metric-label', '今日已用'),
-    element('span', 'metric-value', usage.tokens),
-    element('span', 'metric-unit', 'Tokens'),
+    element('span', 'metric-label', '今日'),
+    document.createTextNode(' '),
+    element('span', 'metric-value', tokens.number),
+    document.createTextNode(tokens.unit ? '' : ' '),
+    element('span', 'metric-unit', tokens.unit ? `${tokens.unit} Tokens` : 'Tokens'),
   );
+  today.setAttribute('aria-label', `今日已用 ${usage.tokens} Tokens`);
   footer.append(today);
   content.append(footer);
   message.replaceChildren(content);

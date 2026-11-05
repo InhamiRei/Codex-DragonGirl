@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { DEFAULT_SETTINGS, normalizeSettings } from '../core/settings.js';
-import { planLabel, instanceLabel } from '../shared/presentation.js';
+import { planLabel, instanceLabel, quotaAvailableWindows, quotaDisplayWindows } from '../shared/presentation.js';
 import { Companion } from './companion.js';
 import { followWindowFrame } from '../shared/follow-window.js';
 import { AccountTests } from '../core/account-tests.js';
@@ -122,21 +122,22 @@ export class Dashboard {
   bubbleFor(companion) {
     const i = this.latest?.instances.find((i) => i.id === companion.instanceId) || this.selected();
     if (!i) return '还没有发现应用实例\n右键打开设置，添加数据目录';
-    const quota = i.stale
-      ? '额度待刷新'
-      : i.quota?.buckets
-          .flatMap((b) =>
-            b.windows.map(
-              (w) =>
-                `${w.label} ${w.remaining > 0 && w.remaining < 1 ? '<1' : Math.round(w.remaining)}%`,
-            ),
-          )
-          .join(' · ') || '暂无额度数据';
+    const planType = i.account?.type === 'apiKey'
+      ? 'apiKey' : i.account?.planType || i.quota?.buckets[0]?.plan;
+    // 先在各额度桶内计算可用量，再汇总展示，避免一个桶的周限制误伤其他桶。
+    const quotas = i.stale ? [] : (i.quota?.buckets || []).flatMap((bucket) =>
+      quotaAvailableWindows(bucket.windows).map((window) => ({
+        ...window,
+        label: i.quota.buckets.length > 1 ? `${bucket.name} · ${window.label}` : window.label,
+        low: window.remaining <= this.monitor.settings.lowQuota,
+      })),
+    );
+    const quota = i.stale ? '额度待刷新' : quotas.map((window) =>
+      `${window.label} ${window.remaining > 0 && window.remaining < 1 ? '<1' : Math.round(window.remaining)}%`,
+    ).join(' · ') || '暂无额度数据';
     const vars = {
       name: instanceLabel(i, this.monitor.settings),
-      plan: planLabel(
-        i.account?.type === 'apiKey' ? 'apiKey' : i.account?.planType || i.quota?.buckets[0]?.plan,
-      ),
+      plan: planLabel(planType),
       quota,
       tokens: new Intl.NumberFormat('zh-CN', { notation: 'compact' }).format(
         this.latest?.today?.homes[i.id] || 0,
@@ -161,21 +162,15 @@ export class Dashboard {
       .replace(/\{([^{}\s]+)\}/g, (text, key) => vars[key] ?? text)
       .slice(0, 220);
     // 仅默认模板展示结构化用量，自定义模板始终保留用户自己的纯文本排版。
-    const quotas = i.stale ? [] : (i.quota?.buckets || []).flatMap((bucket) =>
-      bucket.windows.map((window) => ({
-        label: i.quota.buckets.length > 1 ? `${bucket.name} · ${window.label}` : window.label,
-        remaining: window.remaining,
-        low: window.remaining <= this.monitor.settings.lowQuota,
-      })),
-    );
     return {
       text,
       usage: this.monitor.settings.bubbleTemplate === DEFAULT_SETTINGS.bubbleTemplate
         ? {
             plan: vars.plan,
-            quotas,
+            quotas: quotaDisplayWindows(quotas, planType),
             quotaNote: quotas.length ? '' : quota,
             tokens: vars.tokens,
+            timezone: this.monitor.settings.timezone,
           }
         : null,
     };

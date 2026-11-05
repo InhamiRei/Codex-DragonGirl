@@ -1,6 +1,6 @@
 import { AUDIO_FILES, audioFile, eventAudioId } from '../shared/audio-library.js';
 import { enhanceSelects, syncSelects, closeSelects, destroySelects } from './select.js';
-import { planLabel, instanceLabel, originLabel } from '../shared/presentation.js';
+import { planLabel, instanceLabel, originLabel, quotaAvailableWindows } from '../shared/presentation.js';
 import { SoundEngine } from './audio.js';
 import { dayKey, midnight, nextDay } from '../shared/time.js';
 import { activityCalendar, activityLevel } from '../shared/activity.js';
@@ -89,7 +89,7 @@ function resetText(time) {
       hour: '2-digit',
       minute: '2-digit',
       hourCycle: 'h23',
-    }).format(time);
+    }).format(time).replace('/', '.');
   if (remaining <= 0) return `等待服务确认重置 · ${absolute}`;
   const minutes = Math.ceil(remaining / 60000),
     days = Math.floor(minutes / 1440),
@@ -382,7 +382,7 @@ function accountCard(instance) {
   if (instance.quota?.buckets.length) {
     for (const bucket of instance.quota.buckets) {
       if (instance.quota.buckets.length > 1) card.append(node('span', 'muted', bucket.name));
-      for (const window of bucket.windows) {
+      for (const window of quotaAvailableWindows(bucket.windows)) {
         const row = node(
             'div',
             `quota-row ${instance.stale ? 'stale' : ''} ${window.remaining <= 20 ? 'critical' : window.remaining <= 50 ? 'warning' : ''}`,
@@ -390,6 +390,7 @@ function accountCard(instance) {
           top = node('div', 'quota-top'),
           track = node('div', 'track'),
           fill = node('div', 'fill');
+        if (window.isBlockedByWeeklyLimit) row.title = '周额度已耗尽，5 小时额度暂不可用';
         top.append(
           node('span', '', window.label),
           node(

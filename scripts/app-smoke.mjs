@@ -731,8 +731,20 @@ try {
     return model.measuredRevision === model.revision && document.body.dataset.ready === 'true';
   }), '用量卡片没有完成测量');
   assert.equal(await bubble.locator('#plan').textContent(), 'Pro 100');
-  assert.ok(await bubble.locator('.quota').count() > 0, '默认用量未显示额度层次');
-  assert.equal(await bubble.locator('.metric-label').textContent(), '今日已用');
+  assert.equal(await bubble.locator('.quota').count(), 2, 'Pro 单周窗口未补充 5h 展示行');
+  assert.deepEqual(await bubble.locator('.quota-label').allTextContents(), ['5 小时', '周额度']);
+  assert.equal(await bubble.locator('.quota-reset').first().textContent(), '无限制');
+  assert.match(await bubble.locator('.quota').first().getAttribute('title'), /电量条和百分比参考周额度/);
+  const proProgress = await bubble.locator('.quota-battery').evaluateAll((meters) =>
+    meters.map((meter) => ({ remaining: meter.getAttribute('aria-valuenow'),
+      fills: [...meter.children].map((cell) => cell.style.getPropertyValue('--fill')) })));
+  assert.deepEqual(proProgress[0], proProgress[1], '5h 展示电量没有跟随周额度');
+  assert.equal(await application.evaluate(() => {
+    const a = globalThis.__dragonGirlApp;
+    return a.dashboard.latest.instances.find((instance) => instance.id === a.companion.instanceId)
+      .quota.buckets.flatMap((bucket) => bucket.windows).length;
+  }), 1, '展示补位污染了真实计量窗口');
+  assert.equal(await bubble.locator('.metric-label').textContent(), '今日');
   assert.equal(await bubble.locator('.metric-unit').textContent(), 'Tokens');
   assert.doesNotMatch(await bubble.locator('#bubble').innerText(), /工作中|任务完成|任务异常|状态待更新/, '默认用量气泡仍显示任务状态');
   await bubble.screenshot({
@@ -774,8 +786,8 @@ try {
   await until(() => bubble.locator('#message').textContent().then((text) => text === dialogueLine('chat', customQuoteIndex)), '自定义用量模板未切换语录');
   await bubble.locator('#bubble').click();
   await until(() => application.evaluate(() => !globalThis.__dragonGirlApp.companion.bubbleVisible), '自定义模板切换后的语录无法关闭');
-  // 多桶额度必须逐项保留，小于百分之一与真实零值有不同文案，不能因卡片排版合并丢失。
-  await application.evaluate(() => {
+  // 各桶单独应用周限制：耗尽桶的 5h 归零，其他桶仍保留不足 1% 与真实余额。
+  const multiBucket = await application.evaluate(() => {
     const a = globalThis.__dragonGirlApp;
     const instance = a.dashboard.latest.instances.find((i) => i.id === a.companion.instanceId);
     const quota = instance.quota;
@@ -784,19 +796,77 @@ try {
     instance.quota = {
       ...quota,
       buckets: [
-        { name: 'Codex', windows: [{ label: '5 小时', remaining: 0.4 }, { label: '周额度', remaining: 0 }] },
-        { name: '研究', windows: [{ label: '周额度', remaining: 100 }] },
+        { name: 'Codex', windows: [{ label: '5 小时', minutes: 300, remaining: 100, resetsAt: Date.now() + 3600000 }, { label: '周额度', minutes: 10080, remaining: 0 }] },
+        { name: '研究', windows: [{ label: '5 小时', minutes: 300, remaining: 0.4 }, { label: '周额度', minutes: 10080, remaining: 100 }] },
       ],
     };
+    const original = JSON.stringify(instance.quota);
     const content = a.dashboard.bubbleFor(a.companion);
+    const rawPreserved = original === JSON.stringify(instance.quota);
     instance.quota = quota;
     instance.stale = stale;
     a.companion.showBubble(content, 'usage');
+    return { rawPreserved, text: content.text };
   });
-  await until(() => bubble.locator('.quota').count().then((count) => count === 3), '多桶额度未完整显示');
-  assert.deepEqual(await bubble.locator('.quota-value').allTextContents(), ['<1%', '0%', '100%']);
-  assert.deepEqual(await bubble.locator('.quota-label').allTextContents(), ['Codex · 5 小时剩余', 'Codex · 周额度剩余', '研究 · 周额度剩余']);
-  assert.equal(await bubble.locator('.quota[data-low="true"]').count(), 2);
+  assert.equal(multiBucket.rawPreserved, true, '展示联动改写了真实额度');
+  assert.match(multiBucket.text, /Codex · 5 小时 0%/);
+  await until(() => bubble.locator('.quota').count().then((count) => count === 4), '多桶额度未完整显示');
+  assert.deepEqual(await bubble.locator('.quota-value').allTextContents(), ['0%', '0%', '<1%', '100%']);
+  assert.deepEqual(await bubble.locator('.quota-label').allTextContents(), ['Codex · 5 小时', 'Codex · 周额度', '研究 · 5 小时', '研究 · 周额度']);
+  assert.match(await bubble.locator('.quota').first().getAttribute('title'), /周额度已耗尽/);
+  assert.match(await bubble.locator('.quota-battery').first().getAttribute('aria-valuetext'), /5 小时额度暂不可用/);
+  assert.match(await bubble.locator('.quota-reset').first().textContent(), /\d{2}:\d{2} 重置/);
+  assert.match(await bubble.locator('.quota-reset').first().getAttribute('title'), /Asia\/Shanghai/);
+  assert.equal(await bubble.locator('.quota-reset').nth(1).textContent(), '重置时间未知');
+  assert.equal(await bubble.locator('.battery-segment').count(), 40);
+  assert.equal(await bubble.locator('.quota[data-low="true"]').count(), 3);
+  // 用同一份真实发布快照验证总览和气泡双零、清空电量条，以及周额度恢复后的自动回升。
+  const quotaCardIndex = await application.evaluate(() => {
+    const a = globalThis.__dragonGirlApp;
+    const id = a.companion.instanceId;
+    const previous = a.monitor.readings.get(id);
+    globalThis.__weeklyQuotaFixture = { id, previous };
+    a.monitor.readings.set(id, { ...previous, account: { ...previous.account, planType: 'plus' }, quota: {
+      ...previous.quota, capturedAt: Date.now(), buckets: [{ id: 'codex', name: 'Codex', windows: [
+        { id: 'primary', label: '5 小时', minutes: 300, usedPercent: 0, remaining: 100, resetsAt: Date.now() + 3600000 },
+        { id: 'secondary', label: '周额度', minutes: 10080, usedPercent: 100, remaining: 0 },
+      ] }],
+    } });
+    a.monitor.publish();
+    return a.monitor.instances.findIndex((instance) => instance.id === id);
+  });
+  const quotaCard = page.locator('.account').nth(quotaCardIndex);
+  await until(async () => JSON.stringify(await quotaCard.locator('.quota-value').allTextContents()) ===
+    JSON.stringify(['0% 剩余', '0% 剩余']), '总览未同步周额度耗尽时的双零');
+  await until(async () => JSON.stringify(await bubble.locator('.quota-value').allTextContents()) ===
+    JSON.stringify(['0%', '0%']), '气泡未同步周额度耗尽时的双零');
+  assert.match(await quotaCard.locator('.quota-row').first().getAttribute('title'), /周额度已耗尽/);
+  assert.equal(await quotaCard.locator('.fill').first().evaluate((element) => element.style.width), '0%');
+  assert.match(await quotaCard.locator('.quota-reset').first().textContent(), /\d{2}\.\d{2} \d{2}:\d{2}/);
+  assert.ok(await bubble.locator('.quota-battery').evaluateAll((meters) =>
+    meters.every((meter) => [...meter.children].every((segment) => segment.style.getPropertyValue('--fill') === '0%'))));
+  await bubble.screenshot({ path: path.join(root, '.artifacts/bubble-weekly-zero.png'), omitBackground: true });
+  await application.evaluate(() => {
+    const a = globalThis.__dragonGirlApp;
+    const { id } = globalThis.__weeklyQuotaFixture;
+    const reading = a.monitor.readings.get(id);
+    if (reading.quota.buckets[0].windows[0].remaining !== 100) throw new Error('真实 5h 原值丢失');
+    reading.quota.buckets[0].windows[1].remaining = 25;
+    reading.quota.buckets[0].windows[1].usedPercent = 75;
+    a.monitor.publish();
+  });
+  await until(async () => (await quotaCard.locator('.quota-value').first().textContent()) === '100% 剩余',
+    '周额度恢复后总览 5h 没有恢复真实读数');
+  await until(async () => JSON.stringify(await bubble.locator('.quota-value').allTextContents()) ===
+    JSON.stringify(['100%', '25%']), '周额度恢复后气泡 5h 没有恢复真实读数');
+  assert.equal(await quotaCard.locator('.quota-row').first().getAttribute('title'), null);
+  await application.evaluate(() => {
+    const a = globalThis.__dragonGirlApp;
+    const { id, previous } = globalThis.__weeklyQuotaFixture;
+    a.monitor.readings.set(id, previous);
+    delete globalThis.__weeklyQuotaFixture;
+    a.monitor.publish();
+  });
   await application.evaluate(() => {
     const a = globalThis.__dragonGirlApp;
     const instance = a.dashboard.latest.instances.find((i) => i.id === a.companion.instanceId);
@@ -961,6 +1031,7 @@ try {
           '今日消耗置于运行信息旁与三种窗口宽度适配',
           '旧版默认气泡自动迁移',
           '默认用量卡片层次、多桶与真实零值、自定义模板纯文本和过期额度提示',
+          '周额度耗尽时气泡与总览的 5h 同步归零、按桶隔离、保留原值并在恢复后回升',
           '用量与自定义模板点击显示语录、再次收起、后台刷新保留语录和重开恢复用量',
           '目录发现',
           '独立筛选',

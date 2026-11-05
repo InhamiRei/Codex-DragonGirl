@@ -5,12 +5,14 @@ import os from 'node:os';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { dialogueLine } from '../src/shared/dialogue.js';
+import { quotaDisplayWindows } from '../src/shared/presentation.js';
 
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-bubble-'));
 const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
 let application, page;
 const results = [];
+const fixtureNow = Date.parse('2026-11-05T10:00:00+08:00');
 
 // 测量回传完成后再检查，避免透明首帧被误认为内容没有溢出。
 async function until(check, message) {
@@ -35,6 +37,8 @@ async function launch(scale) {
   await until(() => application.evaluate(() => globalThis.__dragonGirlTest?.ready.size === 2), '气泡窗口未就绪');
   page = application.windows().find((window) => window.url().endsWith('/bubble.html'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
+  // 固定渲染页日期，真实计时器仍正常运行，截图和跨日断言不会随执行日期变化。
+  await page.evaluate((now) => { Date.now = () => now; }, fixtureNow);
   await application.evaluate(() => {
     const companion = globalThis.__dragonGirlTest;
     clearTimeout(companion.cursorTimer);
@@ -60,6 +64,8 @@ async function metrics() {
   return page.evaluate(() => {
     const pane = document.getElementById('bubble-content');
     const card = document.getElementById('bubble').getBoundingClientRect();
+    const number = document.querySelector('.metric-value')?.getBoundingClientRect();
+    const unit = document.querySelector('.metric-unit');
     const range = document.createRange();
     const walker = document.createTreeWalker(pane, NodeFilter.SHOW_TEXT);
     let outside = false;
@@ -78,6 +84,23 @@ async function metrics() {
       clientWidth: pane.clientWidth, scrollWidth: pane.scrollWidth,
       gutter: pane.offsetWidth - pane.clientWidth, scrollbar: getComputedStyle(pane).scrollbarWidth,
       compact: document.body.dataset.compact, outside,
+      // 今日用量改为同字号的普通单行文字，不再要求数字对准气泡中线。
+      footerAlign: document.querySelector('.today') ? getComputedStyle(document.querySelector('.today')).textAlign : null,
+      footerWeight: document.querySelector('.today') ? getComputedStyle(document.querySelector('.today')).fontWeight : null,
+      amount: document.querySelector('.metric-value')?.textContent,
+      amountSize: number ? Number.parseFloat(getComputedStyle(document.querySelector('.metric-value')).fontSize) : null,
+      unit: unit?.textContent,
+      unitSize: unit ? Number.parseFloat(getComputedStyle(unit).fontSize) : null,
+      footerVisible: (() => {
+        const footer = document.querySelector('.usage-footer')?.getBoundingClientRect();
+        const viewport = pane.getBoundingClientRect();
+        return !!footer && footer.top >= viewport.top && footer.bottom <= viewport.bottom + 1;
+      })(),
+      resets: [...document.querySelectorAll('.quota-reset')].map((node) => node.textContent),
+      meters: [...document.querySelectorAll('.quota-battery')].map((node) => ({
+        value: node.getAttribute('aria-valuenow'),
+        segments: [...node.children].map((segment) => segment.style.getPropertyValue('--fill')),
+      })),
       labels: [...document.querySelectorAll('.quota-label')].map((label) => ({ text: label.textContent, height: label.getBoundingClientRect().height })),
       text: pane.innerText,
     };
@@ -90,7 +113,10 @@ try {
     await launch(scale);
     for (const [index, font] of ['', 'Microsoft YaHei, sans-serif', 'Arial, sans-serif'].entries()) {
       const sample = { text: `Plus-${scale}-${index}`, usage: {
-        plan: 'Plus', quotas: [{ label: '5 小时', remaining: 32 }, { label: '周额度', remaining: 89 }], quotaNote: '', tokens: '57117',
+        plan: 'Plus', timezone: 'Asia/Shanghai',
+        quotas: [{ label: '5 小时', remaining: 79, resetsAt: Date.parse('2026-11-05T13:27:00+08:00') },
+          { label: '周额度', remaining: 6, low: true, resetsAt: Date.parse('2026-11-09T13:33:00+08:00') }],
+        quotaNote: '', tokens: '123.4万',
       } };
       await show(sample, font, index === 2);
       const result = await metrics();
@@ -100,14 +126,58 @@ try {
       assert.ok(result.labels.every((label) => label.height <= 19), '普通额度标签发生换行');
       assert.equal(result.scrollbar, 'none', '仍保留系统原生滚动条');
       assert.equal(result.gutter, 0, '滚动条挤占了内容宽度');
-      assert.match(result.text, /今日已用/);
-      assert.match(result.text, /57117/);
+      assert.equal(result.footerVisible, true, '今日 Tokens 被挤出了可视区域');
+      assert.equal(result.footerAlign, 'center', '今日用量没有整行居中');
+      assert.equal(result.footerWeight, '400', '今日用量仍然加粗');
+      assert.deepEqual(result.resets, ['13:27 重置', '11.09 13:33 重置']);
+      assert.equal(result.meters[0].segments.length, 10);
+      assert.equal(result.meters[0].segments.filter((fill) => fill === '100%').length, 7);
+      assert.match(result.text, /今日/);
+      assert.equal(result.amount, '123.4');
+      assert.equal(result.unit, '万 Tokens');
+      assert.equal(result.amountSize, result.unitSize, '数字与 Tokens 的字号不同');
       results.push({ scale, font: font || 'system', ...result });
       sample.usage.quotas.forEach((quota) => { quota.remaining = 100; });
       sample.text += '-100';
       await show(sample, font, index === 2);
       const full = await metrics();
       assert.ok(full.scrollHeight <= full.clientHeight + 1 && !full.outside, '三位数百分比破坏了完整布局');
+      assert.ok(full.meters.every((meter) => meter.segments.every((fill) => fill === '100%')), '100% 电量没有完整填满');
+      // 不同数量级均须在原椭圆内完整显示，特别覆盖之前会触发裁切的长数值。
+      for (const tokens of ['0', '2715万', '9999.9万', '1.234亿', '1.234万亿', '123456789']) {
+        sample.usage.tokens = tokens;
+        sample.text = `Plus-${scale}-${index}-${tokens}`;
+        await show(sample, font, index === 2);
+        const numbers = await metrics();
+        assert.ok(numbers.footerVisible && numbers.scrollHeight <= numbers.clientHeight + 1 && !numbers.outside,
+          `今日 Tokens 未完整显示：${JSON.stringify({ scale, font, tokens, ...numbers })}`);
+        if (tokens === '2715万') {
+          assert.equal(numbers.amount, '2715');
+          assert.equal(numbers.unit, '万 Tokens');
+        }
+      }
+    }
+    // 三档 Pro 与 Plus 使用相同双行布局；无限制行的电量始终跟随实际周额度。
+    for (const [planType, plan] of [['prolite', 'Pro 100'], ['pro', 'Pro 200'], ['promax', 'Pro 500']]) {
+      const weekly = { label: '周额度', minutes: 10080, remaining: 62,
+        resetsAt: Date.parse('2026-11-09T13:33:00+08:00') };
+      const pro = { text: `${plan}-${scale}`, usage: { plan, timezone: 'Asia/Shanghai',
+        quotas: quotaDisplayWindows([weekly], planType), quotaNote: '', tokens: '123.4万' } };
+      await show(pro);
+      const proResult = await metrics();
+      assert.equal(proResult.meters.length, 2);
+      assert.deepEqual(proResult.resets, ['无限制', '11.09 13:33 重置']);
+      assert.deepEqual(proResult.meters[0], proResult.meters[1]);
+      assert.ok(proResult.footerVisible && !proResult.outside && proResult.scrollHeight <= proResult.clientHeight + 1);
+      assert.equal(proResult.clientHeight, results.find((row) => row.scale === scale && row.font === 'system').clientHeight,
+        'Pro 和 Plus 的双行布局高度不同');
+      if (scale === 1 && planType === 'prolite') await page.screenshot({ path: path.join(root, '.artifacts/bubble-pro-unified.png'), omitBackground: true });
+      pro.text += '-zero';
+      pro.usage.quotas = quotaDisplayWindows([{ ...weekly, remaining: 0, low: true, resetsAt: null }], planType);
+      await show(pro);
+      const zero = await metrics();
+      assert.ok(zero.meters.every((meter) => meter.segments.every((fill) => fill === '0%')), '0% 电量仍点亮了格子');
+      assert.deepEqual(zero.resets, ['无限制', '重置时间未知']);
     }
     // 保留真正超长的内容，隐藏滚动条后依然能用滚轮读到最后一行。
     const longText = '这是需要完整保留的长消息。'.repeat(30) + '最后一行';
