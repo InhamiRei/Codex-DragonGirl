@@ -389,7 +389,6 @@ try {
   // 页脚必须显示运行包的版本，源码运行与解压后的发行包都走真实 IPC 验收。
   const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
   await until(async () => await page.locator('#app-version').textContent() === `v${version}`, '页脚版本号未显示或与安装包不符');
-  await page.locator('.page-footer').screenshot({ path: path.join(root, '.artifacts/app-version-footer.png') });
   // 完全空的音效目录也应报告就绪，避免开发缓存掩盖新用户默认无声的问题。
   const audioStatus = await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.command('audio-status'));
   assert.equal(audioStatus.complete, true);
@@ -1014,6 +1013,8 @@ try {
     /YOUR CODEX|CODEX COMPANION|Standard|Ultrafast|PROLITE|tokens|USD|词元/,
   );
   assert.deepEqual(errors, []);
+  // 在交互验收结束后再截取页脚，避免截图的自动滚动干扰前面的悬停与刷新测试。
+  await page.locator('.page-footer').screenshot({ path: path.join(root, '.artifacts/app-version-footer.png') });
   await fs.writeFile(
     path.join(
       root,
