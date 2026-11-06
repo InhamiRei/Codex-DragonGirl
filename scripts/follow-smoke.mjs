@@ -110,7 +110,7 @@ async function expectStack(host, cover, covered, bubble = true, raised = !covere
     const layered = isMac && state.windows.character.topmost
       ? characterPosition >= 0 && characterPosition < position && (!bubble || bubblePosition >= 0 && bubblePosition < characterPosition)
       : position > 0 && order[position - 1] === ids.character && (!bubble || order[position - 2] === ids.bubble);
-    last = { order: order.filter((id) => [host.id, cover.id, ...Object.values(ids)].includes(id)), normal: normal?.slice(0, 12), ids, host: host.id, cover: cover.id, state, actualRaised };
+    last = { order: order.filter((id) => [host.id, cover.id, ...Object.values(ids)].includes(id)), frontOrder: order.slice(0, 16), normal: normal?.slice(0, 12), ids, host: host.id, cover: cover.id, state, actualRaised };
     return state.windows.character.visible && (!bubble || state.windows.bubble.visible)
       && (isMac ? !covered || !coverOverlaps || !state.windows.character.topmost && !state.windows.bubble.topmost
         : state.windows.character.topmost === raised && state.windows.bubble.topmost === raised)

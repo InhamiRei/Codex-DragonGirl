@@ -186,20 +186,29 @@ internal static class DragonBridge
     }
 
     // 仅发布屏幕上窗口的前后编号；层级变化也触发快照，不读取其他应用的标题或内容。
-    private static List<long> WindowOrder(out List<long> topmost)
+    private static List<long> WindowOrder(out List<long> topmost, out List<Dictionary<string, object>> normalWindows)
     {
         List<long> order = new List<long>();
         List<long> raised = new List<long>();
+        List<Dictionary<string, object>> normal = new List<Dictionary<string, object>>();
         EnumWindows(delegate(IntPtr window, IntPtr parameter)
         {
             if (!IsWindowVisible(window) || IsIconic(window)) return true;
             int cloaked;
             if (DwmGetWindowAttribute(window, 14, out cloaked, 4) == 0 && cloaked != 0) return true;
+            // 输入法等辅助窗口可能带有可见标志却没有绘制区域，不能因此把前台宿主误判为被覆盖。
+            Rect rect;
+            if (!GetWindowRect(window, out rect) || rect.Right <= rect.Left || rect.Bottom <= rect.Top) return true;
             order.Add(window.ToInt64());
             if ((GetWindowLongPtr(window, -20).ToInt64() & 0x8) != 0) raised.Add(window.ToInt64());
+            else normal.Add(new Dictionary<string, object> {
+                { "id", window.ToInt64() }, { "x", rect.Left }, { "y", rect.Top },
+                { "width", rect.Right - rect.Left }, { "height", rect.Bottom - rect.Top }
+            });
             return true;
         }, IntPtr.Zero);
         topmost = raised;
+        normalWindows = normal;
         return order;
     }
 
@@ -217,8 +226,9 @@ internal static class DragonBridge
                 { "coordinateSpace", "physical" }, { "windows", Windows(row.Pid, false) }
             });
         List<long> topmost;
-        List<long> order = WindowOrder(out topmost);
-        return Json.Serialize(new Dictionary<string, object> { { "processes", rows }, { "windowOrder", order }, { "topmostWindows", topmost }, { "screenPermission", true } });
+        List<Dictionary<string, object>> normalWindows;
+        List<long> order = WindowOrder(out topmost, out normalWindows);
+        return Json.Serialize(new Dictionary<string, object> { { "processes", rows }, { "windowOrder", order }, { "topmostWindows", topmost }, { "normalWindows", normalWindows }, { "screenPermission", true } });
     }
 
     // 聚焦只允许目标应用，窗口恢复后再请求系统激活。
