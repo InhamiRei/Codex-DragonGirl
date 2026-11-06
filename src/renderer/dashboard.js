@@ -947,6 +947,8 @@ function action(id, callback) {
 async function start() {
   enhanceSelects();
   state = await call('snapshot');
+  // 页脚显示实际运行版本，便于反馈问题时直接确认安装包版本。
+  $('#app-version').textContent = `v${state.appVersion}`;
   accountTests = new AccountTestsView({ call, toast, getState: () => state });
   bridge.onAccountTests((run) => accountTests.receive(run));
   appearance = state.appearance;

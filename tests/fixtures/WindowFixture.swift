@@ -16,6 +16,8 @@ let window = NSWindow(contentRect: initialFrame, styleMask: [.titled, .closable,
 window.title = "龙娘窗口跟随测试"
 window.makeKeyAndOrderFront(nil)
 application.activate(ignoringOtherApps: true)
+// AppKit 首次显示可能将副屏初始坐标夹回主屏；显示后再定位，避免用户主屏窗口干扰隔离验收。
+window.setFrameOrigin(initialFrame.origin)
 var panel: NSOpenPanel?
 var previous = ""
 var orderTimer: Timer?

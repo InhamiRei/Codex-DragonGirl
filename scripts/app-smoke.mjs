@@ -386,6 +386,10 @@ try {
   );
   page = application.windows().find((p) => p.url().endsWith('/dashboard.html'));
   page.on('pageerror', (e) => errors.push(e.message));
+  // 页脚必须显示运行包的版本，源码运行与解压后的发行包都走真实 IPC 验收。
+  const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
+  await until(async () => await page.locator('#app-version').textContent() === `v${version}`, '页脚版本号未显示或与安装包不符');
+  await page.locator('.page-footer').screenshot({ path: path.join(root, '.artifacts/app-version-footer.png') });
   // 完全空的音效目录也应报告就绪，避免开发缓存掩盖新用户默认无声的问题。
   const audioStatus = await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.command('audio-status'));
   assert.equal(audioStatus.complete, true);
@@ -1025,6 +1029,7 @@ try {
         refreshedLedgerTotal: 42400,
         pagedThreads: 45,
         checks: [
+          '页脚显示实际应用版本号',
           'Plus、Pro 100、Pro 200、Pro 500 原名与未知套餐保留',
           '重置卡置顶、悬停明细、键盘访问与后台重绘保持',
           '真实 RPC 读取重置卡详情并排除已使用卡',

@@ -27,6 +27,10 @@ test('原生层级单独变化立即同步窗口，实例与权限变化仍正�
   await monitor.receiveNative({ processes: [row], screenPermission: true, windowOrder: [3, 1, 2] }, bridge);
   assert.deepEqual(orders, [[3, 2, 1], [3, 1, 2]]);
   assert.equal(publications, 1);
+  // Windows 静止心跳也要触发层级校正，但不能重新发布用量或重绘管理界面。
+  await monitor.receiveNative({ processes: [row], screenPermission: true, windowOrder: [3, 1, 2] }, bridge);
+  assert.deepEqual(orders, [[3, 2, 1], [3, 1, 2], [3, 1, 2]]);
+  assert.equal(publications, 1);
   await monitor.receiveNative({ processes: [{ ...row, frontmost: true }], screenPermission: true, windowOrder: [1, 3, 2] }, bridge);
   assert.equal(publications, 2);
   await monitor.receiveNative({ processes: [{ ...row, frontmost: true }], screenPermission: false, windowOrder: [1, 3, 2] }, bridge);

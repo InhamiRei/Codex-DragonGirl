@@ -54,4 +54,28 @@ test('Windows 原生桥读取窗口并仅公开环境白名单', { skip: process
   await new Promise((resolve) => setTimeout(resolve, 300));
   const restored = JSON.parse(spawnSync(bridge, ['--once'], { encoding: 'utf8' }).stdout).processes.find((process) => process.pid === child.pid);
   assert.ok(restored.windows.some((window) => window.width >= 400 && window.height >= 300));
+  // 静止窗口也必须收到重复快照，使原生排序偶尔未生效时仍有下一次恢复机会。
+  const stream = spawn(bridge, [], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(async () => {
+    if (stream.exitCode !== null || stream.signalCode !== null) return;
+    const exited = new Promise((resolve) => stream.once('exit', resolve));
+    stream.kill();
+    await exited;
+  });
+  let buffer = '', previous = null, heartbeat = false;
+  stream.stdout.setEncoding('utf8');
+  stream.stdout.on('data', (chunk) => {
+    buffer += chunk;
+    let newline;
+    while ((newline = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      if (line === previous) heartbeat = true;
+      previous = line;
+    }
+  });
+  const heartbeatDeadline = Date.now() + 8000;
+  while (!heartbeat && stream.exitCode === null && Date.now() < heartbeatDeadline)
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(heartbeat, '窗口静止后原生桥没有补发恢复心跳');
 });

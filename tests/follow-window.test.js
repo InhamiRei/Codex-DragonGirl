@@ -1,9 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { followWindowFrame, followWindowStack, followWindowFloating } from '../src/shared/follow-window.js';
+import { followWindowFrame, followWindowStack, followWindowFloating, followWindowTopmost } from '../src/shared/follow-window.js';
 
 const main = { id: 1, x: 200, y: 125, width: 1100, height: 792 };
 const picker = { id: 2, x: 310, y: 297, width: 880, height: 448 };
+
+// 是否浮动由实际窗口顺序决定，不能只看前台进程；无激活的覆盖窗口也应让龙娘退后。
+test('Windows 前台宿主保持浮动，其他普通窗口置前后撤销，系统置顶窗口不影响判断', () => {
+  assert.equal(followWindowTopmost([1, 3, 2, 8], 1, [2, 3]), true);
+  assert.equal(followWindowTopmost([9, 3, 2, 1, 8], 1, [2, 3], [9, 3, 2]), true);
+  assert.equal(followWindowTopmost([9, 3, 2, 8, 1], 1, [2, 3], [9, 3, 2]), false);
+  assert.equal(followWindowTopmost([9, 1, 8], 1, [2, 3], [9, 1]), true);
+  assert.equal(followWindowTopmost(['9', '1', '8'], 1, [2, 3], [9]), true);
+  assert.equal(followWindowTopmost([9, 8], 1, [2, 3], [1, 9]), false);
+  assert.equal(followWindowTopmost(null, 1, [2, 3]), false);
+  // 多实例之间只忽略人物窗口，后面的 Codex 宿主不能随前面的实例一起浮动。
+  assert.equal(followWindowTopmost([8, 7, 6, 3, 2, 1], 6, [2, 3, 7, 8]), true);
+  assert.equal(followWindowTopmost([8, 7, 6, 3, 2, 1], 1, [2, 3, 7, 8]), false);
+});
 
 // 前台宿主不再依赖每次点击后的补偿排序；角色自身及其他实例角色不能改变前台判断。
 test('macOS 未被遮挡的宿主保持浮动层，跨屏窗口与角色自身不触发层级切换', () => {
@@ -98,7 +112,7 @@ test('宿主不在当前屏幕顺序中时停止显示', () => {
 });
 
 // Windows 在置顶组之后调用相对排序会继承置顶，普通宿主位于组边界时必须使用普通组顶端。
-test('Windows 置顶窗口之后的宿主不会把角色和气泡变成全局置顶', () => {
+test('Windows 普通层跟随在置顶组边界使用普通组顶端', () => {
   assert.deepEqual(followWindowStack([9, 1, 3, 2], 1, [2, 3], { topmost: [9] }), [
     { id: '2', above: '1', top: true }, { id: '3', above: '2', top: true },
   ]);
@@ -117,5 +131,17 @@ test('Windows 宿主置顶属性改变时修正角色与气泡的层级组', () 
   ]);
   assert.deepEqual(followWindowStack([3, 2, 1], 1, [2, 3], { topmost: [3, 2] }), [
     { id: '2', above: '1', top: true }, { id: '3', above: '2', top: true },
+  ]);
+});
+
+// 拖动前台普通宿主时维持浮动组，并把其他置顶窗口留在角色上方，不能重新走普通组置前。
+test('Windows 前台跟随使用稳定浮动组，收到新快照后不会自行降级', () => {
+  assert.deepEqual(followWindowStack([9, 1, 3, 2], 1, [2, 3], { topmost: [9], floating: true }), [
+    { id: '2', above: '1', top: false }, { id: '3', above: '2', top: false },
+  ]);
+  assert.deepEqual(followWindowStack([9, 3, 2, 1], 1, [2, 3], { topmost: [9, 3, 2], floating: true }), []);
+  // 普通应用盖上来后撤销浮动组，角色与气泡仍退到覆盖窗口之后。
+  assert.deepEqual(followWindowStack([3, 2, 8, 1], 1, [2, 3], { topmost: [3, 2] }), [
+    { id: '2', above: '1', top: false }, { id: '3', above: '2', top: false },
   ]);
 });

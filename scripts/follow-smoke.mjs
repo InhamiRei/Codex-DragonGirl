@@ -53,7 +53,7 @@ async function fixture(name) {
   const child = spawn(executable, isMac ? [directory] : ['--controlled', directory], {
     stdio: 'ignore', env: { ...process.env, CODEX_HOME: home, ...(isMac ? { DRAGONGIRL_FIXTURE_SECONDARY: '1' } : {}) },
   });
-  children.push(child);
+  children.push({ child, directory });
   const ready = await until(async () => JSON.parse(await fs.readFile(path.join(directory, 'ready.json'), 'utf8').catch(() => 'null')), `${name} 测试窗口未就绪`);
   return { directory, child, id: String(ready.window) };
 }
@@ -95,7 +95,7 @@ async function companionState() {
 }
 
 // 角色与气泡必须紧邻宿主，覆盖应用始终在整组之前；部分遮挡时仍保持窗口可见。
-async function expectStack(host, cover, covered, bubble = true, raised = false) {
+async function expectStack(host, cover, covered, bubble = true, raised = !covered) {
   let last;
   try { return await until(async () => {
     const { order, normal, raised: actualRaised } = systemState(host.child.pid);
@@ -151,12 +151,30 @@ try {
   await until(() => application.evaluate(() => globalThis.__dragonGirlApp.companion.windows.get('bubble').isVisible()), '气泡未显示');
   const original = (await companionState()).character;
   await raise(host, cover);
-  await expectStack(host, cover, false);
-  // Windows CI 另用真实输入激活宿主，覆盖普通窗口置前权限限制，不能只验收后台窗口之间的排序。
-  if (!isMac && process.env.GITHUB_ACTIONS === 'true') {
+  // Windows 用真实输入激活宿主，覆盖普通窗口置前权限限制，不能只验收后台窗口之间的排序。
+  if (!isMac) {
     await send(host, 'click');
     await until(() => systemState(host.child.pid).host?.frontmost, '标题栏点击没有实际激活测试宿主');
-    await expectStack(host, cover, false);
+  }
+  await expectStack(host, cover, false);
+  // 连续真实拖动并在松手后继续采样，不能只等最终恢复，也不能靠抢占键盘焦点来通过。
+  if (!isMac) {
+    await fs.writeFile(path.join(host.directory, 'watch-windows'), Object.values(ids).join('\n'));
+    const drags = [];
+    for (let index = 0; index < 4; index++) {
+      await fs.rm(path.join(host.directory, 'drag-result.json'), { force: true });
+      await send(host, index % 2 ? 'drag-left' : 'drag-right');
+      const result = await until(async () => JSON.parse(await fs.readFile(path.join(host.directory, 'drag-result.json'), 'utf8').catch(() => 'null')), '标题栏拖动采样没有结束');
+      drags.push(result);
+      await fs.writeFile(path.join(root, '.artifacts/follow-drag-report.json'), JSON.stringify({ drags }, null, 2));
+      assert.equal(result.failed, false, `第 ${index + 1} 次拖动未成功执行：${JSON.stringify(result)}`);
+      assert.equal(result.samples, 100, '连续拖动采样未完成');
+      assert.ok(index % 2 ? result.movedX < -50 : result.movedX > 50, `测试没有真正移动宿主：${JSON.stringify(result)}`);
+      assert.equal(result.coveredSamples, 0, `拖动或松手后角色被宿主盖住：${JSON.stringify(result)}`);
+      assert.equal(result.focusLostSamples, 0, '跟随窗口在拖动时抢占了键盘焦点');
+      await expectStack(host, cover, false);
+    }
+    await until(async () => JSON.stringify((await companionState()).character) === JSON.stringify(original), '往返拖动后角色没有跟随宿主回到原位置');
   }
   // 点击前台宿主会重新排列普通窗口；连续采样必须始终看见角色与气泡，不能容许先消失再补回。
   if (isMac) {
@@ -226,7 +244,7 @@ try {
     await send(cover, 'topmost');
     await until(() => systemState(host.child.pid).raised.includes(cover.id), '覆盖窗口未进入系统置顶组');
     await send(host, 'raise');
-    await expectStack(host, cover, true);
+    await expectStack(host, cover, true, true, true);
     await send(cover, 'normal');
     await raise(host, cover);
     await expectStack(host, cover, false);
@@ -273,17 +291,22 @@ try {
   await send(host, 'restore');
   await raise(host, cover);
   await expectStack(host, cover, false, false);
-  const report = { passed: true, platform: process.platform, checks: ['真实跨应用层级', '仅层级变化触发快照', '完全遮挡', '部分遮挡仍显示', '后台气泡层级', '恢复原位且不抢焦点', '最小化与恢复', '保留主动隐藏', '独立桌面仍置顶', '切回跟随恢复层级', ...(isMac ? ['连续置前 12 次、全程 8ms 采样无闪烁'] : [])] };
+  const report = { passed: true, platform: process.platform, checks: ['真实跨应用层级', '仅层级变化触发快照', '完全遮挡', '部分遮挡仍显示', '后台气泡层级', '恢复原位且不抢焦点', '最小化与恢复', '保留主动隐藏', '独立桌面仍置顶', '切回跟随恢复层级', ...(isMac ? ['连续置前 12 次、全程 8ms 采样无闪烁'] : ['真实标题栏往返拖动 4 次、拖动及松手后连续采样无遮挡', '拖动全程不抢焦点', '系统置顶窗口仍正常遮挡角色'])] };
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
   await fs.writeFile(path.join(root, '.artifacts/follow-report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally {
   try { await application?.close(); }
   finally {
-    for (const child of children) {
+    for (const { child, directory } of children) {
       if (child.exitCode === null && child.signalCode === null) {
-        child.kill();
-        await new Promise((resolve) => child.exitCode !== null || child.signalCode !== null ? resolve() : child.once('exit', resolve));
+        // 先正常关闭测试窗口，让正在拖动的线程释放鼠标；进程失去响应时才强制清理。
+        const exited = new Promise((resolve) => child.exitCode !== null || child.signalCode !== null ? resolve() : child.once('exit', resolve));
+        await fs.writeFile(path.join(directory, 'command'), `quit\n${++serial}`).catch(() => {});
+        let timer;
+        await Promise.race([exited, new Promise((resolve) => { timer = setTimeout(resolve, 2500); })]);
+        clearTimeout(timer);
+        if (child.exitCode === null && child.signalCode === null) { child.kill(); await exited; }
       }
     }
     await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

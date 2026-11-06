@@ -90,6 +90,7 @@ jobs:
           name: Windows-window-validation
           path: |
             .artifacts/follow-report.json
+            .artifacts/follow-drag-report.json
             .artifacts/menu-report.json
           include-hidden-files: true
           if-no-files-found: ignore

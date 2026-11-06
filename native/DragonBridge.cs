@@ -248,10 +248,18 @@ internal static class DragonBridge
             if (args.Length == 1 && args[0] == "--once") { Console.WriteLine(Snapshot()); return 0; }
             if (args.Length != 0) return 1;
             string previous = null;
+            // 排序可能被系统暂时拒绝且不报错；稳定状态每秒补发一次，松手后无需再移动其他窗口也能重试。
+            Stopwatch heartbeat = Stopwatch.StartNew();
             while (true)
             {
                 string current = Snapshot();
-                if (current != previous) { Console.WriteLine(current); Console.Out.Flush(); previous = current; }
+                if (current != previous || heartbeat.ElapsedMilliseconds >= 1000)
+                {
+                    Console.WriteLine(current);
+                    Console.Out.Flush();
+                    previous = current;
+                    heartbeat.Restart();
+                }
                 Thread.Sleep(120);
             }
         }

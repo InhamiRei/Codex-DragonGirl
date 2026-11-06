@@ -404,7 +404,8 @@ export class Dashboard {
     if (command === 'default-settings') return normalizeSettings();
     if (command === 'startup-status') return this.startup?.snapshot() || { message: '' };
     if (command === 'normalize-settings') return normalizeSettings(value);
-    if (command === 'snapshot') return { ...this.monitor.snapshot(), appearance: this.primary.state };
+    // 界面版本来自当前运行的应用元数据，发行升级后无需再手动修改页面文案。
+    if (command === 'snapshot') return { ...this.monitor.snapshot(), appearance: this.primary.state, appVersion: app.getVersion() };
     if (command === 'refresh') return this.monitor.refreshAll();
     if (command === 'report') return this.monitor.request('report', { filter: value || {} });
     if (command === 'focus') {
