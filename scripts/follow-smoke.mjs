@@ -114,7 +114,7 @@ async function expectStack(host, cover, covered, bubble = true, raised = !covere
     return state.windows.character.visible && (!bubble || state.windows.bubble.visible)
       // Windows 由原生桥直接设置层级，以真实 Win32 样式为准，Electron 缓存仅用于诊断。
       && (!isMac || !covered || !coverOverlaps || !state.windows.character.topmost && !state.windows.bubble.topmost)
-      && (isMac || actualRaised.includes(ids.character) === raised && actualRaised.includes(ids.bubble) === raised)
+      && (isMac || actualRaised.includes(ids.character) === raised && (!bubble || actualRaised.includes(ids.bubble) === raised))
       && layered
       && (covered ? order.indexOf(cover.id) >= 0 && order.indexOf(cover.id) < position
         && (!coverOverlaps || order.indexOf(cover.id) < (bubble ? bubblePosition : characterPosition))
