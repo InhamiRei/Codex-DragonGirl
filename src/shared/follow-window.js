@@ -32,25 +32,13 @@ export function followWindowFloating(normalWindows, host, overlays, regions = []
   return false;
 }
 
-// Windows 最前面的普通宿主使用稳定浮动组；其他普通应用置前后立即退回，原有置顶宿主继续保持置顶。
-export function followWindowTopmost(windowOrder, hostId, overlays, topmost = []) {
-  const order = windowOrder?.map(String) || [];
-  const host = String(hostId);
-  if (!order.includes(host)) return false;
-  const raised = new Set(topmost.map(String));
-  const owned = new Set(overlays.map(String));
-  return raised.has(host) || order.find((id) => !raised.has(id) && !owned.has(id)) === host;
-}
-
 // 按宿主、角色、气泡的顺序规划相邻层级；只移动偏离位置的窗口，保留其他应用的遮挡关系。
-export function followWindowStack(windowOrder, hostId, overlays, { force = false, topmost = [], floating = false } = {}) {
+export function followWindowStack(windowOrder, hostId, overlays, { force = false, topmost = [] } = {}) {
   const order = windowOrder?.map(String) || [];
   const raised = new Set(topmost.map(String));
   const owned = new Set(overlays.map(String));
   let above = String(hostId);
   if (windowOrder && !order.includes(above)) return null;
-  // 浮动跟随时把宿主当作浮动组的下边界，相对排序会把角色放在其他置顶窗口之后。
-  if (floating) raised.add(above);
   const moves = [];
   for (const id of overlays.map(String)) {
     const parent = order.indexOf(above);

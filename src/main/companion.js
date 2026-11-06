@@ -29,7 +29,7 @@ import { StateStore } from './state-store.js';
 import { dialogueLine } from '../shared/dialogue.js';
 import { DEFAULT_CHARACTER_ASSET, eyeTrackingEnabled } from '../shared/gaze.js';
 import { shouldFaceLeft } from '../shared/facing.js';
-import { followWindowStack, followWindowFloating, followWindowTopmost } from '../shared/follow-window.js';
+import { followWindowStack, followWindowFloating } from '../shared/follow-window.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const ORIGIN = 'dragon://app';
@@ -758,6 +758,9 @@ export class Companion {
     if (this.followMode === enabled) return;
     this.followMode = enabled;
     for (const window of this.windows.values()) window.setAlwaysOnTop(!enabled, 'floating');
+    // 同一管道中的桌面恢复命令会覆盖尚未执行的旧跟随请求，避免切换后被迟到请求降级。
+    if (!enabled && process.platform === 'win32') this.delegate?.stackWindows?.(0,
+      [...this.windows.values()].filter((window) => !window.isDestroyed()).map((window) => window.getMediaSourceId().split(':')[1]), []);
   }
 
   // 使用原生窗口编号直接调整相对层级，不截屏、不聚焦宿主，也不把后台角色提升到其他应用上方。
@@ -767,22 +770,19 @@ export class Companion {
     if (this.followOrder && !this.followOrder.some((id) => String(id) === String(hostId))) { this.followFrame(null); return; }
     const owned = [...Companion.registry].flatMap((pet) => [...pet.windows.values()])
       .filter((window) => !window.isDestroyed()).map((window) => window.getMediaSourceId().split(':')[1]);
+    // Windows 由原生桥按实时句柄排序，避免 Electron 对普通宿主的相对排序隐式改变置顶组。
+    if (process.platform === 'win32') {
+      const overlays = [...this.windows.values()].filter((window) => !window.isDestroyed())
+        .map((window) => window.getMediaSourceId().split(':')[1]);
+      this.delegate?.stackWindows?.(hostId, overlays, owned);
+      return;
+    }
     const regions = [this.character, ...(this.bubbleVisible ? [this.windows.get('bubble').getBounds()] : [])];
-    const isWindows = process.platform === 'win32';
-    const topmost = new Set(this.followTopmost?.map(String));
-    const floating = isWindows
-      ? followWindowTopmost(this.followOrder, hostId, owned, [...topmost])
-      : process.platform === 'darwin' && followWindowFloating(this.followNormalWindows, this.followTarget, owned, regions);
+    const floating = process.platform === 'darwin' && followWindowFloating(this.followNormalWindows, this.followTarget, owned, regions);
     let levelChanged = false;
     // 前台宿主上方使用稳定浮动层；后台宿主恢复普通层级。隐藏的气泡也预先同步，显示时不会窜到其他应用前面。
-    if (isWindows || process.platform === 'darwin') for (const window of this.windows.values()) {
-      if (window.isDestroyed()) continue;
-      // Windows 原生调用可能未生效却更新了 Electron 缓存；有实际快照时双向校正，下一次心跳可重试。
-      const id = window.getMediaSourceId().split(':')[1];
-      if (isWindows && this.followOrder?.some((value) => String(value) === id)
-        && topmost.has(id) !== floating && window.isAlwaysOnTop() === floating)
-        window.setAlwaysOnTop(!floating, 'floating');
-      if (window.isAlwaysOnTop() !== floating) {
+    if (process.platform === 'darwin') for (const window of this.windows.values()) {
+      if (!window.isDestroyed() && window.isAlwaysOnTop() !== floating) {
         window.setAlwaysOnTop(floating, 'floating');
         levelChanged = true;
       }
@@ -790,18 +790,18 @@ export class Companion {
     const overlays = [...this.windows.values()].filter((window) => !window.isDestroyed() && window.isVisible());
     const sources = new Map(overlays.map((window) => [window.getMediaSourceId().split(':')[1], window]));
     if (!sources.size) return;
+    const topmost = new Set(this.followTopmost?.map(String));
     const [characterId, ...bubbleIds] = sources.keys();
-    // macOS 浮动层只需维护内部顺序；Windows 仍贴住宿主边界，避免越过其他应用的置顶窗口。
+    // 浮动层已天然高于宿主，只维护气泡在角色上方；不能再把角色拉回普通层参与反复置前。
     const localOrder = this.followOrder?.some((id) => String(id) === characterId) ? this.followOrder : null;
-    const moves = floating && !isWindows
+    const moves = floating
       ? followWindowStack(localOrder, characterId, bubbleIds, { force: force || levelChanged })
-      : followWindowStack(this.followOrder, hostId, [...sources.keys()], { force: force || levelChanged, topmost: [...topmost], floating });
+      : followWindowStack(this.followOrder, hostId, [...sources.keys()], { force: force || levelChanged, topmost: [...topmost] });
     if (!moves) { this.followFrame(null); return; }
     try {
-      for (const { id, above, top } of moves) {
+      for (const { id, above } of moves) {
         const window = sources.get(id);
-        if (isWindows && top) window.moveTop();
-        else window.moveAbove(`window:${above}:0`);
+        window.moveAbove(`window:${above}:0`);
       }
     } catch {
       // 宿主可能在本次快照后关闭；先收起窗口，等下一份有效快照重新绑定。

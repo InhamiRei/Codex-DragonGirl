@@ -7,7 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
 
-// Windows 桥仅发布所属目录、网络白名单和窗口几何，不读取会话正文或登录文件。
+// Windows 桥只读取目录、网络白名单和窗口几何；层级控制仅作用于父进程创建的角色窗口。
 internal static class DragonBridge
 {
     private delegate bool WindowCallback(IntPtr window, IntPtr parameter);
@@ -15,6 +15,7 @@ internal static class DragonBridge
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
     private static List<ProcessRow> processes = new List<ProcessRow>();
     private static DateTime discoveredAt = DateTime.MinValue;
+    private static volatile bool inputClosed;
 
     // 每个记录只保留识别和聚焦所需的信息，完整环境读取后立即释放。
     private sealed class ProcessRow
@@ -47,6 +48,12 @@ internal static class DragonBridge
     // 区分系统置顶窗口与普通窗口，避免相对排序意外继承置顶属性。
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
+    // 读取实际相邻窗口，包含没有绘制区域的窗口，不能使用过滤后的快照作为 Win32 插入位置。
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr window, uint command);
+    // 只调整本应用角色的层级，不激活、不移动、不显示隐藏窗口，也不改变所有者层级。
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
     // 前台窗口用于选择当前实例。
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
@@ -245,6 +252,112 @@ internal static class DragonBridge
         }
     }
 
+    // 命令中的每个角色编号都必须属于启动桥的 Electron 进程，拒绝操作其他应用窗口。
+    private static List<IntPtr> OwnedHandles(object value, int owner)
+    {
+        object[] values = value as object[];
+        if (values == null || values.Length > 256) throw new ArgumentException();
+        List<IntPtr> result = new List<IntPtr>();
+        foreach (object item in values)
+        {
+            long id = Convert.ToInt64(item);
+            uint pid;
+            IntPtr window = new IntPtr(id);
+            if (id <= 0 || GetWindowThreadProcessId(window, out pid) == 0 || pid != (uint)owner)
+                throw new ArgumentException();
+            if (!result.Contains(window)) result.Add(window);
+        }
+        return result;
+    }
+
+    // 始终读取系统实际置顶样式，避免 Electron 缓存与外部原生排序结果不一致。
+    private static bool IsTopmost(IntPtr window)
+    {
+        return window != IntPtr.Zero && (GetWindowLongPtr(window, -20).ToInt64() & 0x8) != 0;
+    }
+
+    // 前台普通宿主的角色留在置顶组底部；后台宿主保持相邻普通层级，隐藏气泡也同步样式。
+    private static void StackWindows(Dictionary<string, object> request, int owner)
+    {
+        List<IntPtr> overlays = OwnedHandles(request["overlays"], owner);
+        if (overlays.Count == 0) return;
+        List<IntPtr> owned = OwnedHandles(request["owned"], owner);
+        IntPtr host = new IntPtr(Convert.ToInt64(request["host"]));
+        const uint flags = 0x213; // SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER。
+        // 桌面模式的恢复命令也通过同一管道排队，覆盖模式切换前尚未执行的跟随请求。
+        if (host == IntPtr.Zero)
+        {
+            foreach (IntPtr window in overlays)
+                if (!IsTopmost(window)) SetWindowPos(window, new IntPtr(-1), 0, 0, 0, 0, flags);
+            return;
+        }
+        uint hostPid;
+        if (GetWindowThreadProcessId(host, out hostPid) == 0 || !IsWindowVisible(host) || IsIconic(host)) return;
+        using (Process process = Process.GetProcessById((int)hostPid)) if (!IsTarget(process)) return;
+        List<long> topmost;
+        List<Dictionary<string, object>> normal;
+        List<long> visible = WindowOrder(out topmost, out normal);
+        if (!visible.Contains(host.ToInt64())) return;
+        bool floating = IsTopmost(host);
+        if (!floating) foreach (long id in visible)
+        {
+            if (topmost.Contains(id) || owned.Contains(new IntPtr(id))) continue;
+            floating = id == host.ToInt64();
+            break;
+        }
+        foreach (IntPtr window in overlays)
+            if (IsTopmost(window) != floating)
+                SetWindowPos(window, new IntPtr(floating ? -1 : -2), 0, 0, 0, 0, flags);
+
+        IntPtr anchor;
+        if (floating && !IsTopmost(host))
+        {
+            // 插在真实置顶组最后一个窗口之后，避免 moveAbove(普通宿主) 意外把角色降回普通组。
+            anchor = new IntPtr(-1);
+            EnumWindows(delegate(IntPtr window, IntPtr parameter) {
+                if (IsTopmost(window) && !overlays.Contains(window)) anchor = window;
+                return true;
+            }, IntPtr.Zero);
+        }
+        else
+        {
+            anchor = GetWindow(host, 3); // GW_HWNDPREV。
+            while (overlays.Contains(anchor)) anchor = GetWindow(anchor, 3);
+            if (floating && anchor == IntPtr.Zero) anchor = new IntPtr(-1);
+            else if (!floating && IsTopmost(anchor)) anchor = IntPtr.Zero;
+        }
+        // 先放气泡再放角色，使用明确的“插在其后”语义；正确排列时完全不调用 SetWindowPos。
+        for (int index = overlays.Count - 1; index >= 0; index--)
+        {
+            IntPtr window = overlays[index];
+            IntPtr previous = GetWindow(window, 3);
+            bool placed = anchor == new IntPtr(-1) ? previous == IntPtr.Zero
+                : anchor == IntPtr.Zero ? previous == IntPtr.Zero || IsTopmost(previous)
+                : previous == anchor;
+            if (!placed || IsTopmost(window) != floating)
+                SetWindowPos(window, anchor, 0, 0, 0, 0, flags);
+            anchor = window;
+        }
+    }
+
+    // 只接受父进程私有标准输入中的小型层级请求；一次陈旧句柄失败不影响下一次心跳恢复。
+    private static void ReadCommands(int owner)
+    {
+        JavaScriptSerializer parser = new JavaScriptSerializer();
+        try
+        {
+            string line;
+            while ((line = Console.ReadLine()) != null)
+            {
+                if (line.Length > 16384) continue;
+                try { StackWindows(parser.DeserializeObject(line) as Dictionary<string, object>, owner); }
+                catch (Exception) { /* 窗口可能已关闭或更换；由下一份有效快照重试。 */ }
+            }
+        }
+        catch (IOException) { /* 父进程关闭管道时正常结束，不留下控制线程。 */ }
+        finally { inputClosed = true; }
+    }
+
     // 桥随父进程关闭管道而结束，不留下后台常驻服务。
     private static int Main(string[] args)
     {
@@ -256,11 +369,17 @@ internal static class DragonBridge
             int pid;
             if (args.Length == 2 && args[0] == "--focus" && int.TryParse(args[1], out pid)) return Focus(pid);
             if (args.Length == 1 && args[0] == "--once") { Console.WriteLine(Snapshot()); return 0; }
-            if (args.Length != 0) return 1;
+            if (args.Length == 2 && args[0] == "--owner" && int.TryParse(args[1], out pid) && pid > 0)
+            {
+                Thread controls = new Thread(delegate() { ReadCommands(pid); });
+                controls.IsBackground = true;
+                controls.Start();
+            }
+            else if (args.Length != 0) return 1;
             string previous = null;
             // 排序可能被系统暂时拒绝且不报错；稳定状态每秒补发一次，松手后无需再移动其他窗口也能重试。
             Stopwatch heartbeat = Stopwatch.StartNew();
-            while (true)
+            while (!inputClosed)
             {
                 string current = Snapshot();
                 if (current != previous || heartbeat.ElapsedMilliseconds >= 1000)
@@ -272,6 +391,7 @@ internal static class DragonBridge
                 }
                 Thread.Sleep(120);
             }
+            return 0;
         }
         catch (IOException) { return 0; }
         catch (Exception) { Console.Error.WriteLine("窗口桥暂不可用，请重新打开应用。"); return 1; }

@@ -79,11 +79,13 @@ export class Monitor extends EventEmitter {
   // Native 桥只发送几何与必要连接信息，stderr 不保存潜在进程环境。
   startNative() {
     if (this.stopped) return;
-    this.native = spawn(nativeBridgePath(ROOT), [], {
+    this.native = spawn(nativeBridgePath(ROOT), process.platform === 'win32' ? ['--owner', String(process.pid)] : [], {
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'ignore'],
+      stdio: [process.platform === 'win32' ? 'pipe' : 'ignore', 'pipe', 'ignore'],
     });
     const bridge = this.native;
+    // 管道随桥重启而重建；旧管道关闭时不能让主进程因为 EPIPE 退出。
+    bridge.stdin?.on('error', () => {});
     let buffer = '';
     // 中文目录和代理值可能跨管道数据块，使用流式 UTF-8 解码。
     this.native.stdout.setEncoding('utf8');
@@ -113,6 +115,17 @@ export class Monitor extends EventEmitter {
         this.nativeRetry = setTimeout(() => this.startNative(), 5000);
       }
     });
+  }
+  // 层级请求复用原生桥管道，编号由原生端再次核对所属进程；断线或背压时等下一份心跳重试。
+  stackWindows(host, overlays, owned) {
+    const input = this.native?.stdin;
+    const ids = [...overlays, ...owned].map(Number);
+    if (this.stopped || !input?.writable || input.destroyed || input.writableLength > 16384
+      || !Number.isSafeInteger(Number(host)) || Number(host) < 0 || !overlays.length
+      || overlays.length > 256 || owned.length > 256
+      || !ids.every((id) => Number.isSafeInteger(id) && id > 0)) return false;
+    input.write(JSON.stringify({ host: Number(host), overlays: overlays.map(Number), owned: owned.map(Number) }) + '\n', () => {});
+    return true;
   }
   // 统一符号链接、盘符与目录大小写，迟到的桥接结果不能覆盖更新的窗口状态。
   async receiveNative(state, bridge) {

@@ -40,6 +40,7 @@ export class Dashboard {
       refresh: () => void monitor.refreshAll().catch(() => {}),
       bubbleFor: (c) => this.bubbleFor(c),
       onDrag: (c) => this.onDrag(c),
+      stackWindows: (host, overlays, owned) => monitor.stackWindows(host, overlays, owned),
     };
     primary.delegate = this.delegate;
     ipcMain.handle('dg:command', (event, command, value) => {

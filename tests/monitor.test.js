@@ -13,6 +13,31 @@ function gate() {
   return { promise, resolve };
 }
 
+// 只向当前可用管道发送有限窗口编号，失联、背压和停止期间等待后续恢复，不继续积压旧排序。
+test('Windows 层级管道校验编号并在恢复后重新接受请求', () => {
+  const monitor = new Monitor(os.tmpdir(), { testMode: true });
+  const writes = [];
+  const input = { writable: true, destroyed: false, writableLength: 0,
+    // 记录完整行协议，原生端读取的数字不能混入任意命令。
+    write(value) { writes.push(JSON.parse(value)); },
+  };
+  assert.equal(monitor.stackWindows(1, [2, 3], [2, 3]), false);
+  monitor.native = { stdin: input };
+  assert.equal(monitor.stackWindows(1, ['2', '3'], ['2', '3']), true);
+  assert.deepEqual(writes, [{ host: 1, overlays: [2, 3], owned: [2, 3] }]);
+  assert.equal(monitor.stackWindows(1, [NaN], []), false);
+  input.writableLength = 20000;
+  assert.equal(monitor.stackWindows(1, [2], [2]), false);
+  input.writableLength = 0;
+  input.destroyed = true;
+  assert.equal(monitor.stackWindows(1, [2], [2]), false);
+  input.destroyed = false;
+  assert.equal(monitor.stackWindows(0, [2, 3], []), true);
+  monitor.stopped = true;
+  assert.equal(monitor.stackWindows(1, [2], [2]), false);
+  assert.equal(writes.length, 2);
+});
+
 // 只有遮挡顺序变化时也必须触发跟随，同时避免管理界面与账户数据重复刷新。
 test('原生层级单独变化立即同步窗口，实例与权限变化仍正常发布', async () => {
   const monitor = new Monitor(os.tmpdir(), { testMode: true });

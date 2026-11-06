@@ -17,33 +17,28 @@ let Companion;
 try { ({ Companion } = await import('../src/main/companion.js')); }
 finally { hook.deregister(); }
 
-// 原生快照与 Electron 缓存分别控制，模拟系统拒绝调用但 Electron 没有抛错的偶发情况。
-function fixture(t, { order, topmost = [], cached = false }) {
+// 模拟桥暂时不可用，检查重复快照仍会发出请求，并且不会回落到 Electron 的相对排序。
+function fixture(t, order) {
   const platform = Object.getOwnPropertyDescriptor(process, 'platform');
   Object.defineProperty(process, 'platform', { value: 'win32' });
   const calls = [];
-  // 测试窗口只记录边界调用，不在宿主操作系统创建窗口或移动鼠标。
+  // 测试窗口只记录边界调用，不创建系统窗口或移动鼠标。
   function window(id) {
-    let raised = cached;
     return {
       isDestroyed: () => false,
-      isVisible: () => true,
       getMediaSourceId: () => `window:${id}:0`,
-      getBounds: () => ({ x: 100, y: 100, width: 200, height: 200 }),
-      isAlwaysOnTop: () => raised,
-      // 缓存接受新值，但实际系统状态仅由下一份测试快照确认。
-      setAlwaysOnTop(value) { raised = value; calls.push([id, 'topmost', value]); },
-      // 相对排序保留目标编号，便于核对覆盖应用仍位于整组之前。
-      moveAbove(above) { calls.push([id, 'above', above]); },
-      // 单独记录普通组置前，检测是否重新走入受系统限制的路径。
-      moveTop() { calls.push([id, 'top']); },
+      // 只有显式模式切换才允许由 Electron 修改默认置顶属性。
+      setAlwaysOnTop(value) { calls.push([id, 'topmost', value]); },
     };
   }
   const pet = Object.assign(Object.create(Companion.prototype), {
     windows: new Map([['character', window(2)], ['bubble', window(3)]]),
-    followMode: true, followTarget: { id: 1 }, followOrder: order, followTopmost: topmost,
-    character: { x: 100, y: 100, width: 200, height: 200 }, bubbleVisible: true,
-    // 宿主失效时只记录隐藏请求，避免测试落入真实窗口位置与手势处理。
+    followMode: true, followTarget: { id: 1 }, followOrder: order,
+    delegate: {
+      // 返回未送达模拟原生桥断线，下一次心跳必须重新尝试。
+      stackWindows(host, overlays, owned) { calls.push({ host, overlays, owned }); return false; },
+    },
+    // 宿主失效时只记录隐藏请求，避免测试进入真实几何与手势处理。
     followFrame(frame) { calls.push(['follow', frame]); },
   });
   Companion.registry.add(pet);
@@ -54,43 +49,30 @@ function fixture(t, { order, topmost = [], cached = false }) {
   return { pet, calls };
 }
 
-// 松手后系统状态不再变化，重复心跳仍要纠正失败的置顶调用；成功后则不再重复设置或排序。
-test('Windows 层级调用未生效时，同一快照可重试并在实际恢复后停止补偿', (t) => {
-  const { pet, calls } = fixture(t, { order: [1, 2, 3] });
-  pet.syncWindowStacking();
-  calls.length = 0;
-  // 原生排序没有生效，窗口顺序和置顶样式仍与之前完全相同。
-  pet.syncWindowStacking();
-  for (const [id, above] of [[2, 1], [3, 2]])
-    assert.deepEqual(calls.filter(([target]) => target === id), [
-      [id, 'topmost', false], [id, 'topmost', true], [id, 'above', `window:${above}:0`],
-    ]);
-  calls.length = 0;
-  pet.followOrder = [3, 2, 1];
-  pet.followTopmost = [3, 2];
+// 相同快照不是确认回执，原生桥重启或调用被系统拒绝后仍要继续纠正。
+test('Windows 同一静止快照会重试原生层级请求，不依赖 Electron 排序', (t) => {
+  const { pet, calls } = fixture(t, [1, 2, 3]);
   pet.syncWindowStacking();
   pet.syncWindowStacking();
-  assert.deepEqual(calls, [], '稳定状态不应反复切换层级或重新显示窗口');
+  const request = { host: 1, overlays: ['2', '3'], owned: ['2', '3'] };
+  assert.deepEqual(calls, [request, request]);
 });
 
-// 后台恢复也必须核对系统样式，不能让缓存里的普通窗口实际上一直覆盖其他应用。
-test('Windows 缓存已降级但系统仍置顶时重试降级，并恢复到覆盖应用后面', (t) => {
-  const { pet, calls } = fixture(t, { order: [3, 2, 9, 1], topmost: [3, 2] });
+// 桌面恢复必须排在旧跟随请求之后，不能被管道中尚未执行的旧请求降级。
+test('Windows 切换桌面模式时发送有序恢复命令', (t) => {
+  const { pet, calls } = fixture(t, [1, 2, 3]);
   pet.syncWindowStacking();
-  for (const [id, above] of [[2, 1], [3, 2]])
-    assert.deepEqual(calls.filter(([target]) => target === id), [
-      [id, 'topmost', true], [id, 'topmost', false], [id, 'above', `window:${above}:0`],
-    ]);
+  pet.setFollowMode(false);
+  assert.deepEqual(calls[0], { host: 1, overlays: ['2', '3'], owned: ['2', '3'] });
+  assert.deepEqual(calls.at(-1), { host: 0, overlays: ['2', '3'], owned: [] });
   calls.length = 0;
-  pet.followOrder = [9, 3, 2, 1];
-  pet.followTopmost = [];
   pet.syncWindowStacking();
   assert.deepEqual(calls, []);
 });
 
 // 宿主消失时不能为了恢复可见性而把角色留在桌面上。
 test('Windows 宿主已最小化或关闭时停止排序并请求隐藏', (t) => {
-  const { pet, calls } = fixture(t, { order: [3, 2, 9], topmost: [3, 2], cached: true });
+  const { pet, calls } = fixture(t, [3, 2, 9]);
   pet.syncWindowStacking();
   assert.deepEqual(calls, [['follow', null]]);
 });
