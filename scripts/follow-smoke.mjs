@@ -107,7 +107,7 @@ async function expectStack(host, cover, covered, bubble = true, raised = !covere
     const coverOverlaps = !isMac || !!coverFrame && areas.some((area) => coverFrame.x < area.x + area.width
       && coverFrame.x + coverFrame.width > area.x && coverFrame.y < area.y + area.height && coverFrame.y + coverFrame.height > area.y);
     // 浮动层与普通层之间可能存在其他屏幕上的窗口，验收实际前后关系，不要求跨层全局编号相邻。
-    const layered = isMac && state.windows.character.topmost
+    const layered = (isMac ? state.windows.character.topmost : actualRaised.includes(ids.character))
       ? characterPosition >= 0 && characterPosition < position && (!bubble || bubblePosition >= 0 && bubblePosition < characterPosition)
       : position > 0 && order[position - 1] === ids.character && (!bubble || order[position - 2] === ids.bubble);
     last = { order: order.filter((id) => [host.id, cover.id, ...Object.values(ids)].includes(id)), frontOrder: order.slice(0, 16), normal: normal?.slice(0, 12), ids, host: host.id, cover: cover.id, state, actualRaised };

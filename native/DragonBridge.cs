@@ -312,12 +312,10 @@ internal static class DragonBridge
         IntPtr anchor;
         if (floating && !IsTopmost(host))
         {
-            // 插在真实置顶组最后一个窗口之后，避免 moveAbove(普通宿主) 意外把角色降回普通组。
+            // 插在最后一个可见置顶窗口之后；隐藏的辅助窗口可能带有所有者约束，不能作为锚点。
             anchor = new IntPtr(-1);
-            EnumWindows(delegate(IntPtr window, IntPtr parameter) {
-                if (IsTopmost(window) && !overlays.Contains(window)) anchor = window;
-                return true;
-            }, IntPtr.Zero);
+            foreach (long id in topmost)
+                if (!overlays.Contains(new IntPtr(id))) anchor = new IntPtr(id);
         }
         else
         {
