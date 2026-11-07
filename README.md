@@ -1,6 +1,6 @@
 # GPT龙娘（DragonGirl Desktop Companion）
 
-![GPT龙娘与麻吕：桌面陪伴 · 用量一目了然](assets/readme/banner.png)
+![GPT龙娘与麻吕：桌面陪伴 · 用量一目了然](assets/readme/banner.png?v=a2c534eb402d)
 
 <p align="center">
   <a href="https://github.com/InhamiRei/Codex-DragonGirl/releases/latest"><img alt="下载最新版" src="https://img.shields.io/github/v/release/InhamiRei/Codex-DragonGirl?label=Release&color=8b72d9" /></a>
