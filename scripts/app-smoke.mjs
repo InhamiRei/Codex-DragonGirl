@@ -389,6 +389,10 @@ try {
   // 页脚必须显示运行包的版本，源码运行与解压后的发行包都走真实 IPC 验收。
   const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
   await until(async () => await page.locator('#app-version').textContent() === `v${version}`, '页脚版本号未显示或与安装包不符');
+  // 旧配置没有角色字段时，完整应用与实际窗口仍必须默认使用龙娘。
+  assert.equal(await application.evaluate(() => globalThis.__dragonGirlApp.monitor.settings.characterId), 'dragon');
+  assert.equal(await application.evaluate(() => globalThis.__dragonGirlApp.companion.characterModel().asset),
+    'dragon://app/assets/characters/codex-dragon-girl.png');
   // 完全空的音效目录也应报告就绪，避免开发缓存掩盖新用户默认无声的问题。
   const audioStatus = await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.command('audio-status'));
   assert.equal(audioStatus.complete, true);

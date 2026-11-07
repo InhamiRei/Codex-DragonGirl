@@ -1,6 +1,7 @@
 import { AUDIO_GROUPS, DEFAULT_EVENT_SOUNDS, audioFile } from '../shared/audio-library.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { characterById } from '../shared/characters.js';
 
 export const SOUND_EVENTS = ['press', 'release', 'complete', 'error', 'question', 'approval', 'quota'];
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -39,6 +40,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   blinkEnabled: true,
   expressionsEnabled: true,
   characterAsset: '',
+  characterId: 'dragon',
   manualHomes: [],
   followOffsets: {},
   aliases: {},
@@ -123,6 +125,7 @@ export function normalizeSettings(value = {}) {
     ),
   ];
   if (d.characterAsset && !/^[a-f0-9]{32}\.(png|webp)$/.test(d.characterAsset)) d.characterAsset = '';
+  d.characterId = characterById(v.characterId).id;
   d.followOffsets = Object.fromEntries(
     Object.entries(dictionary(v.followOffsets))
       .filter(([k, o]) => path.isAbsolute(k) && o && Number.isFinite(o.x) && Number.isFinite(o.y))

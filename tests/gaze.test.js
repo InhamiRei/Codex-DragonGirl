@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { DEFAULT_CHARACTER_ASSET, EYE_ARTWORK, eyeTrackingEnabled, eyeWarpWeight, gazeTarget, stepGaze, bodyFollowPose } from '../src/shared/gaze.js';
 import { imagePoint } from '../src/shared/hit-test.js';
 import { normalizeSettings } from '../src/core/settings.js';
+import { MARO_ASSET } from '../src/shared/characters.js';
+import { MARO_EYE_ARTWORK, maroEyeForeground, maroEyeMask, maroGazeWeight } from '../src/shared/maro-eyes.js';
 
 // 构造绘制后的屏幕落点，验证坐标还原而不是重复目标计算公式。
 function screenPoint(source, rect, pose) {
@@ -22,7 +24,49 @@ test('眼睛跟随偏好兼容旧设置并限制内置角色', () => {
   assert.equal(normalizeSettings({ eyeTracking: 'false' }).eyeTracking, true);
   assert.equal(eyeTrackingEnabled(), true);
   assert.equal(eyeTrackingEnabled(DEFAULT_CHARACTER_ASSET, { eyeTracking: false }), false);
+  assert.equal(eyeTrackingEnabled(MARO_ASSET), true);
+  assert.equal(eyeTrackingEnabled(MARO_ASSET, { eyeTracking: false }), false);
   assert.equal(eyeTrackingEnabled('dragon://app/user-assets/example.png'), false);
+});
+
+// 麻吕以自己的双眼中心计算方向，刘海与腮红的暖色像素不随眼睛位移。
+test('麻吕使用独立眼部标定并保护前景', () => {
+  const rect = { x: 0, y: 0, width: 1254, height: 1254 };
+  assert.deepEqual(gazeTarget(MARO_EYE_ARTWORK.center, rect, undefined, MARO_EYE_ARTWORK), { x: 0, y: 0 });
+  assert.ok(gazeTarget({ x: 2000, y: 620 }, rect, undefined, MARO_EYE_ARTWORK).x > 0);
+  assert.ok(gazeTarget({ x: 2000, y: 620 }, rect, { scaleX: -1, scaleY: 1, angle: 0 }, MARO_EYE_ARTWORK).x < 0);
+  assert.equal(maroEyeForeground(244, 185, 157), true);
+  assert.equal(maroEyeForeground(130, 92, 68), true);
+  assert.equal(maroEyeForeground(70, 105, 145), false);
+  assert.equal(maroEyeForeground(63, 61, 52), false);
+  assert.equal(maroEyeForeground(250, 232, 221), false);
+});
+
+// 手绘高光不应在遮挡层挖洞，孤立的暖色肤色也不能形成随机静止碎点。
+test('麻吕刘海遮挡按连续轮廓生成而不是逐像素分类', () => {
+  const data = new Uint8ClampedArray(20 * 20 * 4);
+  for (let index = 0; index < 400; index += 1) data.set([250, 232, 221, 255], index * 4);
+  for (let y = 0; y < 7; y += 1) for (let x = 3; x < 8; x += 1)
+    data.set([244, 185, 157, 255], (y * 20 + x) * 4);
+  data.set([255, 240, 210, 255], (3 * 20 + 5) * 4);
+  data.set([244, 185, 157, 255], (15 * 20 + 18) * 4);
+  const mask = maroEyeMask(data, 20, 20, { width: 20, height: 20, y: 0, fixedTop: -20, fixedBottom: 40 });
+  assert.equal(mask[3 * 20 + 5], 1, '发束高光形成遮挡破洞');
+  assert.equal(mask[4 * 20 + 2], 1, '发束描边没有被保护');
+  assert.equal(mask[15 * 20 + 18], 0, '肤色噪点变成静止碎块');
+});
+
+// 鼠标再远也只允许虹膜轻微活动，眼眶和脸颊的源坐标必须保持原样。
+test('麻吕视线限于眼白内部并固定边缘', () => {
+  assert.equal(MARO_EYE_ARTWORK.travel.x, 6);
+  assert.equal(MARO_EYE_ARTWORK.travel.y, 3);
+  const centers = [[435, 630], [680, 620]];
+  MARO_EYE_ARTWORK.eyes.forEach((eye, index) => {
+    assert.equal(maroGazeWeight(...centers[index], eye), 1);
+    for (const point of eye.aperture) assert.equal(maroGazeWeight(...point, eye), 0);
+    assert.equal(maroGazeWeight(eye.x, eye.y, eye), 0);
+    assert.equal(maroGazeWeight(eye.x + eye.width / 2, 700, eye), 0);
+  });
 });
 
 // 身体比眼部移动更轻，翻转后仍按屏幕方向倾斜，不能看向右边却往左倒。

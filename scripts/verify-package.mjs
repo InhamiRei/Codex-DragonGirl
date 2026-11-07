@@ -94,7 +94,8 @@ try {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
   // 从解压后的真实安装包验证窗口遮挡、菜单、气泡时序与表情，避免只在源码目录中通过。
-  for (const script of ['follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'performance-smoke.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
+  for (const script of ['follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'performance-smoke.mjs',
+    'character-smoke.mjs', 'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
   const result = {
@@ -120,6 +121,9 @@ try {
       '安装包成功与失败表情、素材加载和自动恢复',
       '原生菜单四角完整展开、二级输入与人物窗口几何稳定',
       '后台刷新复用节点与菜单、常驻气泡和账号状态及时更新',
+      '首次默认龙娘、角色切换与工作中手动捋发',
+      '三十帧原生 1254 像素、配色与尺寸一致、低头抬头平滑',
+      '两种角色眨眼与视线、麻吕眼眶和脸部逐像素保持固定',
     ],
   };
   await fs.writeFile(

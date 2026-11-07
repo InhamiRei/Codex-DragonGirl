@@ -1111,7 +1111,12 @@ async function start() {
   action('#reset-character', () => {
     draft.characterAsset = '';
     markDirty();
-    toast('保存后恢复默认角色');
+    toast('保存后使用所选内置角色');
+  });
+  // 选择内置角色时取消自定义图片覆盖，仍由统一保存按钮提交外观设置。
+  $('#character-id').addEventListener('change', () => {
+    draft.characterAsset = '';
+    markDirty();
   });
   action('#save-price', () => {
     const model = $('#price-model').value.trim(),

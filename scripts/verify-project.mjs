@@ -15,6 +15,9 @@ const suite = [
   ]),
   ...['startup', 'position', 'follow', 'bubble', 'bubble-refresh', 'facing', 'eyes', 'blink', 'expression', 'menu', 'sad', 'account-tests', 'performance']
     .map((name) => [name, [`scripts/${name}-smoke.mjs`]]),
+  // 新角色从默认选择、逐帧几何与配色到眼部像素都进入正式发布验收。
+  ...['character-smoke', 'maro-frame-audit', 'maro-interaction-smoke', 'maro-gaze-audit']
+    .map((name) => [name, [`scripts/${name}.mjs`]]),
 ];
 
 // 桌面检查串行运行，避免测试窗口互抢焦点；独立检查失败后仍继续收集其他结果。

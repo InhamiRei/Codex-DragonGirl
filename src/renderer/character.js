@@ -3,6 +3,8 @@ import { PressSpring } from '../shared/spring.js';
 import { imagePoint, opaqueAt } from '../shared/hit-test.js';
 import { EyeTracker } from './eyes.js';
 import { FlipMotion } from '../shared/facing.js';
+import { CharacterSprites } from './character-sprites.js';
+import { characterByAsset, isCharacterMenuPoint } from '../shared/characters.js';
 
 const bridge = window.dragonGirl;
 const stage = document.getElementById('stage');
@@ -18,6 +20,8 @@ let layout;
 let assetLoading = '';
 let decodedPortrait;
 let mask;
+let baseMask;
+let menuPress = null;
 let activePointer = null;
 let animation = 0;
 let previousTime = 0;
@@ -26,6 +30,11 @@ let bodyPose = { translateX: 0, translateY: 0, angle: 0 };
 let renderedPose = pose;
 let lastCursor = null;
 let lastInteractive = null;
+// 每次换表情或动作帧都同步命中，切回普通图片时恢复原始透明图。
+const sprites = new CharacterSprites(character, portrait, (next) => {
+  mask = next || baseMask;
+  updateInteractive();
+});
 
 // 从原图读取一次透明度，不按白色抠图，因此白发、衣服和眼睛高光都能正常响应。
 function buildAlphaMask(image) {
@@ -66,7 +75,10 @@ function updateInteractive() {
 // 只有真实鼠标消息改变目标，原生输入状态仍只在命中变化时切换。
 function routeCursor(point) {
   lastCursor = point;
-  if (point) eyes.follow(point);
+  if (point) {
+    eyes.follow(point);
+    sprites.follow(point);
+  }
   updateInteractive();
 }
 
@@ -77,6 +89,9 @@ function configureEyes() {
     ...pose,
     scaleX: pose.scaleX * flip.value,
   }, reducedMotion.matches, activePointer !== null);
+  sprites.configure(layout, reducedMotion.matches, activePointer !== null, {
+    ...pose, scaleX: pose.scaleX * flip.value,
+  });
 }
 
 // 先完整解码再替换画面与命中图，快速切换图片时丢弃过期结果，避免错套默认眼区。
@@ -91,6 +106,7 @@ async function loadPortrait(asset) {
     portrait.src = asset;
     decodedPortrait = image;
     mask = nextMask;
+    baseMask = nextMask;
     configureEyes();
     routeCursor(lastCursor);
   } catch {
@@ -108,6 +124,9 @@ function applyLayout(model) {
   flip.setFlipped(model.flipped ?? !!model.appearance?.settings?.flip, immediate);
   if (model.appearance?.settings) sound.configure(model.appearance.settings);
   stage.dataset.status = model.appearance?.status || 'idle';
+  const definition = characterByAsset(model.asset);
+  portrait.alt = definition ? `${definition.name}桌面角色` : '自定义桌面角色';
+  stage.setAttribute('aria-label', `${definition?.name || '桌面角色'}，可以拖动，轻点说话，右键切换角色`);
   if (portrait.src !== model.asset && assetLoading !== model.asset) void loadPortrait(model.asset);
   paintPose(pose);
   character.style.left = `${model.rect.x}px`;
@@ -183,6 +202,9 @@ function beginPointer(event) {
     return;
   event.preventDefault();
   activePointer = event.pointerId;
+  menuPress = isCharacterMenuPoint(layout.asset,
+    imagePoint({ x: event.clientX, y: event.clientY }, layout.rect, renderedPose))
+    ? screenPoint(event) : null;
   stage.setPointerCapture(event.pointerId);
   stage.dataset.gesture = 'pressed';
   spring.press(((event.clientX - layout.rect.x) / layout.rect.width) * 2 - 1);
@@ -194,6 +216,7 @@ function beginPointer(event) {
 
 // 捕获期间即使鼠标移出角色，也继续发送移动直到松手或取消。
 function movePointer(event) {
+  if (menuPress && Math.hypot(event.screenX - menuPress.x, event.screenY - menuPress.y) > 5) menuPress = null;
   routeCursor({ x: event.clientX, y: event.clientY });
   if (activePointer === event.pointerId) bridge.moveGesture(screenPoint(event));
 }
@@ -202,6 +225,9 @@ function movePointer(event) {
 function finishPointer(event, cancelled, notify = true) {
   if (activePointer === null || (event && event.pointerId !== activePointer)) return;
   const pointer = activePointer;
+  const openCharacterMenu = !cancelled && menuPress && event && stage.dataset.gesture !== 'dragging'
+    && Math.hypot(event.screenX - menuPress.x, event.screenY - menuPress.y) <= 5;
+  menuPress = null;
   activePointer = null;
   if (stage.hasPointerCapture(pointer)) stage.releasePointerCapture(pointer);
   if (cancelled || stage.dataset.gesture === 'dragging') sound.cancelInteraction();
@@ -210,7 +236,10 @@ function finishPointer(event, cancelled, notify = true) {
   spring.release();
   wakeSpring();
   if (notify) {
-    if (cancelled) bridge.cancelGesture();
+    if (openCharacterMenu) {
+      bridge.cancelGesture();
+      bridge.characterMenu(screenPoint(event));
+    } else if (cancelled) bridge.cancelGesture();
     else bridge.endGesture(screenPoint(event));
   }
   routeCursor(lastCursor);
@@ -222,6 +251,7 @@ async function start() {
   portrait.src = model.asset;
   await Promise.all([portrait.decode(), eyes.prepareSad()]);
   mask = buildAlphaMask(portrait);
+  baseMask = mask;
   decodedPortrait = portrait;
   applyLayout(model);
   stage.dataset.gesture = 'idle';
@@ -231,10 +261,11 @@ async function start() {
     void sound.play(event);
   });
   // 主进程区分轻点、成功与失败；声音关闭仍可显示表情，拖拽不会误触。
-  bridge.onExpression((name) => {
-    if (!['happy', 'sad'].includes(name)) return;
+  bridge.onExpression((message) => {
+    const name = typeof message === 'string' ? message : message?.name;
+    if (!['happy', 'sad', 'hair'].includes(name)) return;
     configureEyes();
-    eyes.showExpression(name);
+    if (!sprites.showExpression(name, { source: message?.source })) eyes.showExpression(name);
   });
   // 手动修复后立即重新读取原声，不依赖其他布局或设置变化才能恢复播放。
   bridge.onAudioReady(() => {
@@ -277,6 +308,7 @@ async function start() {
     animation = 0;
     flip.finish();
     eyes.reset();
+    sprites.destroy();
   });
   bridge.ready();
 }

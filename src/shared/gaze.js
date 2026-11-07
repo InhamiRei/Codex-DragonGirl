@@ -1,4 +1,5 @@
 import { imagePoint } from './hit-test.js';
+import { MARO_ASSET } from './characters.js';
 
 // 眼区只标定内置原画；自定义图片没有相同的五官位置，不能套用这组坐标。
 export const DEFAULT_CHARACTER_ASSET = 'dragon://app/assets/characters/codex-dragon-girl.png';
@@ -30,18 +31,18 @@ export const EYE_ARTWORK = Object.freeze({
 
 // 主进程和界面共用启用条件，关闭开关或导入图片后停止屏幕外的视线消息。
 export function eyeTrackingEnabled(asset = DEFAULT_CHARACTER_ASSET, settings = {}) {
-  return asset === DEFAULT_CHARACTER_ASSET && settings.eyeTracking !== false;
+  return (asset === DEFAULT_CHARACTER_ASSET || asset === MARO_ASSET) && settings.eyeTracking !== false;
 }
 
 // 逆转角色的翻转、按压和旋转，以双眼中点计算同向视线，避免近距离变成对眼。
-export function gazeTarget(point, rect, pose) {
+export function gazeTarget(point, rect, pose, artwork = EYE_ARTWORK) {
   if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)
     || !(rect?.width > 0) || !(rect?.height > 0)) return { x: 0, y: 0 };
   const local = imagePoint(point, rect, pose);
   // 水平翻转经过零宽时暂时回到中性视线，不把不可逆矩阵送入眼区绘制。
   if (!Number.isFinite(local.x) || !Number.isFinite(local.y)) return { x: 0, y: 0 };
-  const x = (local.x - EYE_ARTWORK.center.x / EYE_ARTWORK.width) / 0.65;
-  const y = (local.y - EYE_ARTWORK.center.y / EYE_ARTWORK.height) * rect.height / rect.width / 0.65;
+  const x = (local.x - artwork.center.x / artwork.width) / 0.65;
+  const y = (local.y - artwork.center.y / artwork.height) * rect.height / rect.width / 0.65;
   const length = Math.max(1, Math.hypot(x, y));
   return { x: x / length, y: y / length };
 }

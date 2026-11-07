@@ -10,6 +10,7 @@ import { Companion } from './companion.js';
 import { followWindowFrame } from '../shared/follow-window.js';
 import { AccountTests } from '../core/account-tests.js';
 import { extractTestHtml } from '../shared/account-tests.js';
+import { CHARACTERS, characterById } from '../shared/characters.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const DASHBOARD_URL = 'dragon://app/src/renderer/dashboard.html';
 
@@ -41,6 +42,7 @@ export class Dashboard {
       bubbleFor: (c) => this.bubbleFor(c),
       onDrag: (c) => this.onDrag(c),
       stackWindows: (host, overlays, owned) => monitor.stackWindows(host, overlays, owned),
+      selectCharacter: (id) => this.selectCharacter(id),
     };
     primary.delegate = this.delegate;
     ipcMain.handle('dg:command', (event, command, value) => {
@@ -234,15 +236,16 @@ export class Dashboard {
     if (this.stopping || this.monitor.stopped) return;
     for (const pet of [this.primary, ...this.pets.values()]) {
       const i = this.latest?.instances.find((i) => i.id === pet.instanceId);
+      const character = characterById(settings.characterId);
       const asset = settings.characterAsset
         ? `dragon://app/user-assets/${settings.characterAsset}`
-        : 'dragon://app/assets/characters/codex-dragon-girl.png';
+        : `dragon://app/${character.image}`;
       const appearance = {
         settings,
         asset,
         assetPath: settings.characterAsset
           ? path.join(this.assetDirectory, settings.characterAsset)
-          : path.join(ROOT, 'assets/characters/codex-dragon-girl.png'),
+          : path.join(ROOT, character.image),
         status: i?.taskState || 'idle',
       };
       const key = JSON.stringify(appearance);
@@ -255,6 +258,14 @@ export class Dashboard {
     }
     this.follow();
   }
+  // 从角色菜单保存单个外观字段，保留最新位置、账户和其他偏好。
+  async selectCharacter(id) {
+    if (!CHARACTERS.some((character) => character.id === id)) return false;
+    await this.monitor.saveSettings((current) => ({ ...current, characterId: id, characterAsset: '' }));
+    await this.updatePets();
+    return true;
+  }
+
   // 选择文件等模态弹窗、最小化或不可见时隐藏关联角色；恢复后沿用相对位置。
   follow() {
     if (this.stopping || this.monitor.stopped) return;

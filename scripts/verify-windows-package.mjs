@@ -78,7 +78,8 @@ try {
   if (bubble.status !== 0) throw new Error(bubble.stderr || bubble.stdout || '安装包气泡排版失败');
   console.log(bubble.stdout.trim());
   // 窗口遮挡、菜单、气泡和表情都在解压后的便携包运行，避免仅在源码目录中通过。
-  for (const script of ['follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'performance-smoke.mjs']) {
+  for (const script of ['follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'performance-smoke.mjs',
+    'character-smoke.mjs', 'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs']) {
     const expression = spawnSync(process.execPath, [path.join(root, 'scripts', script)], {
       env: { ...process.env, DRAGONGIRL_TEST_EXECUTABLE: executable }, encoding: 'utf8', timeout: 120000,
     });
@@ -86,6 +87,8 @@ try {
     console.log(expression.stdout.trim());
   }
   const report = { passed: true, version: manifest.version, checks: ['ZIP SHA-256', '源码一致', 'x64 二进制', '中文空格路径解压', '脱离源码启动', '桌面功能测试', '静默启动与宿主退出', '位置恢复与内置音效', '四档显示比例与无原生滚动条', '跟随窗口遮挡层级与最小化恢复', '气泡并发刷新保持显示与阅读位置', '拖拽松手自动朝向、镜像命中与动画偏好', '成功与失败表情及素材完整性', '原生菜单与表情预览', '后台刷新性能与常驻信息更新'] };
+  // 发行验收记录明确列出新角色检查，避免只有源码检查通过而成品遗漏素材。
+  report.checks.push('首次默认龙娘与角色切换', '三十帧 1254 像素动作、配色和几何一致', '两种角色眨眼与视线、麻吕眼眶和脸部逐像素保持固定');
   await fs.writeFile(path.join(output, 'verification-Windows-x64.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally {

@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld(
     endGesture: (point) => ipcRenderer.send('dg:gesture-end', point),
     cancelGesture: () => ipcRenderer.send('dg:gesture-cancel'),
     menu: (point) => ipcRenderer.send('dg:menu', point),
+    // 发饰只请求受限的角色菜单，不提供任意命令或脚本执行入口。
+    characterMenu: (point) => ipcRenderer.send('dg:character-menu', point),
     closeBubble: () => ipcRenderer.send('dg:close-bubble'),
     // 仅发送气泡交互意图，由主进程根据当前内容决定显示语录还是收起。
     advanceBubble: () => ipcRenderer.send('dg:advance-bubble'),

@@ -7,6 +7,10 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .character img { display: block; width: 100%; height: 100%; object-fit: contain; -webkit-user-drag: none; }
 .eye-layer { position: absolute; pointer-events: none; }
 .eye-layer[hidden] { display: none; }
+.maro-eye-layer { position: absolute; pointer-events: none; }
+.maro-eye-layer[hidden] { display: none; }
+.character-sprites { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.character-sprites[hidden] { display: none; }
 
 .stage[data-status="working"] .character { filter: drop-shadow(0 0 7px #9b8fdb70); }
 .stage[data-status="error"] .character { filter: drop-shadow(0 0 7px #dc957060); }

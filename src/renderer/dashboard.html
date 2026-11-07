@@ -398,7 +398,7 @@
                   <div class="setting-row">
                     <div class="setting-copy">
                       <label for="eye-tracking">眼睛跟随</label>
-                      <p>默认角色的眼睛、眼眶和睫毛跟随鼠标，身体轻轻配合；自定义图片保持原样。</p>
+                      <p>龙娘和麻吕的眼睛会跟随鼠标；龙娘的身体会轻轻配合，自定义图片保持原样。</p>
                     </div>
                     <div class="setting-control">
                       <input
@@ -456,12 +456,24 @@
                   </div>
                   <div class="setting-row">
                     <div class="setting-copy">
-                      <span class="setting-label">角色图片</span>
+                      <label for="character-id">内置角色</label>
+                      <p>龙娘可点击发饰切换；也可使用右键菜单。</p>
+                    </div>
+                    <div class="setting-control">
+                      <select id="character-id" name="characterId">
+                        <option value="dragon">龙娘</option>
+                        <option value="maro">麻吕</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <span class="setting-label">自定义角色图片</span>
                       <p>选择带透明背景的角色图片。</p>
                     </div>
                     <div class="setting-control button-group">
                       <button type="button" id="import-character">导入图片</button
-                      ><button type="button" id="reset-character">恢复默认</button>
+                      ><button type="button" id="reset-character">使用内置角色</button>
                     </div>
                   </div>
                   <div class="setting-row">

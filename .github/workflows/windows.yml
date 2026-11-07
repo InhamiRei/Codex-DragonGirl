@@ -71,6 +71,13 @@ jobs:
       - name: 验证账号测智界面与本地协议
         run: npm run test:accounts
         timeout-minutes: 3
+      - name: 验证角色切换与麻吕逐帧像素
+        run: |
+          foreach ($script in @('test:characters', 'test:character-frames', 'test:maro-interaction', 'test:maro-gaze-pixels')) {
+            npm run $script
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+        timeout-minutes: 5
       - name: 构建 Windows 便携包
         run: npm run package:win
       - name: 验证解压后的安装包
@@ -118,6 +125,18 @@ jobs:
             .artifacts/sad-*.json
             .artifacts/facing-*.png
             .artifacts/facing-report.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Windows-character-validation
+          path: |
+            .artifacts/maro-integration/
+            .artifacts/maro-audit/frame-audit.json
+            .artifacts/maro-interaction/
+            .artifacts/maro-gaze-pixels/
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14

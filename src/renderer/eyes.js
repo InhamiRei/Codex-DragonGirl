@@ -5,12 +5,21 @@ import { EyeSparkles } from './expression.js';
 import { sadFrame, sadEyeWeight, sadBodyPose } from '../shared/sad.js';
 import { SadEyes, loadSadArtwork } from './sad.js';
 
-// 将原画中的眼眶、睫毛和虹膜整体移动，周围像素平滑衔接，静止时还原原画。
+// 按角色标定绘制视线与眨眼，支持整眼联动和固定眼眶的小幅虹膜活动。
 export class EyeTracker {
   // 两块小画布跟随角色共同缩放和翻转，所有输入仍由原来的透明命中图处理。
-  constructor(character, onBodyPose = () => {}) {
+  constructor(character, onBodyPose = () => {}, options = {}) {
     this.character = character;
     this.onBodyPose = onBodyPose;
+    this.artwork = options.artwork || EYE_ARTWORK;
+    this.asset = options.asset || DEFAULT_CHARACTER_ASSET;
+    this.className = options.className || 'eye-layer';
+    this.nativeResolution = options.nativeResolution === true;
+    this.supportsExpressions = options.expressions !== false;
+    this.supportsBodyFollow = options.bodyFollow !== false;
+    this.foregroundMask = options.foregroundMask || null;
+    this.gazeMask = options.gazeMask || null;
+    this.skinSample = options.skinSample || [640, 800, 20, 20];
     this.patches = [];
     this.point = null;
     this.current = { x: 0, y: 0 };
@@ -49,17 +58,18 @@ export class EyeTracker {
     if (this.pose && (this.pose.scaleX < 0) !== (pose.scaleX < 0)) this.body.x *= -1;
     this.pose = pose;
     const settings = model.appearance?.settings || {};
-    this.enabled = model.asset === DEFAULT_CHARACTER_ASSET
-      && (settings.eyeTracking !== false || settings.blinkEnabled !== false || settings.expressionsEnabled !== false)
+    this.enabled = model.asset === this.asset
+      && (settings.eyeTracking !== false || settings.blinkEnabled !== false
+        || (this.supportsExpressions && settings.expressionsEnabled !== false))
       && model.visible !== false && !reducedMotion && !document.hidden && image.src === model.asset
-      && image.naturalWidth === EYE_ARTWORK.width && image.naturalHeight === EYE_ARTWORK.height;
+      && image.naturalWidth === this.artwork.width && image.naturalHeight === this.artwork.height;
     if (!this.enabled) {
       this.reset();
       return;
     }
     // 拖拽或按压期间身体平滑回正，关闭动画反馈则即时回正；眼睛继续跟随。
     let redraw = false;
-    this.expressionAllowed = settings.expressionsEnabled !== false && !pressed;
+    this.expressionAllowed = this.supportsExpressions && settings.expressionsEnabled !== false && !pressed;
     this.expressionMotion = settings.motion !== false;
     if (!this.expressionAllowed) {
       redraw = this.expression.amount > 0;
@@ -71,7 +81,7 @@ export class EyeTracker {
       this.current = { x: 0, y: 0 };
       this.target = { x: 0, y: 0 };
     }
-    this.bodyEnabled = this.trackingEnabled && settings.motion !== false && !pressed;
+    this.bodyEnabled = this.supportsBodyFollow && this.trackingEnabled && settings.motion !== false && !pressed;
     if (!this.trackingEnabled || settings.motion === false) this.body = { x: 0, y: 0 };
     this.blinkingEnabled = settings.blinkEnabled !== false && !pressed;
     if (!this.blinkingEnabled) {
@@ -80,11 +90,12 @@ export class EyeTracker {
     }
     this.paintBody();
     // 只按实际显示密度创建眼区，放大区域后仍不在每帧处理原图全部像素。
-    const resolution = Math.min(1, Math.max(0.2, model.rect.width / EYE_ARTWORK.width * window.devicePixelRatio));
+    const resolution = this.nativeResolution ? 1
+      : Math.min(1, Math.max(0.2, model.rect.width / this.artwork.width * window.devicePixelRatio));
     if (!this.patches.length || resolution !== this.resolution) {
       for (const { canvas } of this.patches) canvas.remove();
       this.resolution = resolution;
-      this.patches = EYE_ARTWORK.eyes.map((eye, index) => this.createPatch(image, eye, index));
+      this.patches = this.artwork.eyes.map((eye, index) => this.createPatch(image, eye, index));
       redraw = true;
     }
     if (redraw) this.paint();
@@ -99,23 +110,25 @@ export class EyeTracker {
       const sample = document.createElement('canvas');
       sample.width = sample.height = 1;
       const context = sample.getContext('2d', { willReadFrequently: true });
-      context.drawImage(image, 640, 800, 20, 20, 0, 0, 1, 1);
+      context.drawImage(image, ...this.skinSample, 0, 0, 1, 1);
       this.skin = context.getImageData(0, 0, 1, 1).data;
     }
     const canvas = document.createElement('canvas');
-    canvas.className = 'eye-layer';
+    canvas.className = this.className;
     canvas.setAttribute('aria-hidden', 'true');
     canvas.width = Math.ceil(eye.width * this.resolution);
     canvas.height = Math.ceil(eye.height * this.resolution);
-    canvas.style.left = `${eye.x / EYE_ARTWORK.width * 100}%`;
-    canvas.style.top = `${eye.y / EYE_ARTWORK.height * 100}%`;
-    canvas.style.width = `${eye.width / EYE_ARTWORK.width * 100}%`;
-    canvas.style.height = `${eye.height / EYE_ARTWORK.height * 100}%`;
+    canvas.style.left = `${eye.x / this.artwork.width * 100}%`;
+    canvas.style.top = `${eye.y / this.artwork.height * 100}%`;
+    canvas.style.width = `${eye.width / this.artwork.width * 100}%`;
+    canvas.style.height = `${eye.height / this.artwork.height * 100}%`;
     const context = canvas.getContext('2d', { willReadFrequently: true });
     context.imageSmoothingQuality = 'high';
     context.drawImage(image, eye.x, eye.y, eye.width, eye.height, 0, 0, canvas.width, canvas.height);
     const source = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const foreground = this.foregroundMask?.(source, canvas.width, canvas.height, eye);
     const output = context.createImageData(canvas.width, canvas.height);
+    const gazeWeights = this.gazeMask?.(source, canvas.width, canvas.height, eye);
     const scaleX = canvas.width / eye.width, scaleY = canvas.height / eye.height;
     const columns = Array.from({ length: canvas.width }, (_, x) => blinkColumn(eye.x + (x + 0.5) / scaleX, eye));
     const pixels = [];
@@ -123,25 +136,31 @@ export class EyeTracker {
       for (let x = 0; x < canvas.width; x += 1) {
         const ax = eye.x + (x + 0.5) / scaleX, ay = eye.y + (y + 0.5) / scaleY;
         const weight = eyeWarpWeight(ax, ay, eye);
+        const offset = (y * canvas.width + x) * 4;
+        const protection = foreground?.[y * canvas.width + x] || 0;
+        const gazeWeight = gazeWeights ? (protection > 0 ? 0 : gazeWeights[y * canvas.width + x]) : weight;
+        if (gazeWeights) gazeWeights[y * canvas.width + x] = gazeWeight;
+        if (protection >= 1) continue;
         // 眉毛和泪珠仍在同一眼区内绘制，眼睛外的像素不跟随视线拉扯。
-        const tearRegion = index === 1 && ax >= 884 && ax <= 918 && ay >= 800 && ay <= 904;
-        if (weight > 0 || sadEyeWeight(ax, ay, index) > 0 || tearRegion)
-          pixels.push({ x, y, index: (y * canvas.width + x) * 4, weight });
+        const tearRegion = this.supportsExpressions && index === 1 && ax >= 884 && ax <= 918 && ay >= 800 && ay <= 904;
+        if (weight > 0 || (this.supportsExpressions && sadEyeWeight(ax, ay, index) > 0) || tearRegion)
+          pixels.push({ x, y, index: offset, weight, gazeWeight, protection });
       }
     }
     context.clearRect(0, 0, canvas.width, canvas.height);
     canvas.hidden = true;
     this.character.append(canvas);
-    const sparkles = new EyeSparkles(eye, canvas.width, canvas.height, index);
+    const sparkles = this.supportsExpressions ? new EyeSparkles(eye, canvas.width, canvas.height, index) : null;
     const sad = this.sadImage ? new SadEyes(eye, canvas.width, canvas.height, index, this.sadImage) : null;
-    return { canvas, context, source, output, pixels, columns, eye, index, sparkles, sad, width: canvas.width, height: canvas.height, scaleX, scaleY };
+    return { canvas, context, source, output, pixels, columns, eye, index, sparkles, sad, foreground, gazeWeights,
+      width: canvas.width, height: canvas.height, scaleX, scaleY };
   }
 
   // 原生消息允许携带窗口外或副屏上的负坐标，不能把它们当作鼠标离开。
   follow(point) {
     this.point = point;
     if (!this.enabled) return;
-    this.target = this.trackingEnabled ? gazeTarget(point, this.rect, this.pose) : { x: 0, y: 0 };
+    this.target = this.trackingEnabled ? gazeTarget(point, this.rect, this.pose, this.artwork) : { x: 0, y: 0 };
     const bodyTarget = this.bodyEnabled ? this.target : { x: 0, y: 0 };
     if (this.frame || (Math.hypot(this.target.x - this.current.x, this.target.y - this.current.y) < 0.002
       && Math.hypot(bodyTarget.x - this.body.x, bodyTarget.y - this.body.y) < 0.002)) return;
@@ -201,7 +220,7 @@ export class EyeTracker {
     this.expression = { amount: 0, hop: 0 };
     this.expressionTime = 0;
     this.expressionName = null;
-    delete this.character.dataset.expression;
+    if (this.supportsExpressions) delete this.character.dataset.expression;
   }
 
   // 传出屏幕方向的身体姿态，计算目标仍使用原来的锚点，避免身体追逐自身位移而抖动。
@@ -216,7 +235,7 @@ export class EyeTracker {
     this.onBodyPose(pose);
   }
 
-  // 同一位移带动整个眼部，双线性采样保持轮廓平滑，周围过渡带连续填充原位置。
+  // 按角色的视线范围取样，双线性采样保持轮廓平滑，眨眼单独控制眼睑。
   paint() {
     const closure = this.blink;
     for (const patch of this.patches) {
@@ -226,32 +245,57 @@ export class EyeTracker {
       const renderer = this.expressionName === 'sad' ? patch.sad : patch.sparkles;
       const source = this.expression.amount > 0 && renderer
         ? renderer.illuminate(patch.source, this.expression.amount, this.expressionTime) : patch.source;
-      for (const { x, y, index, weight } of pixels) {
-        const sx = Math.max(0, Math.min(width - 1, x - this.current.x * EYE_ARTWORK.travel.x * scaleX * weight));
-        let sy = y - this.current.y * EYE_ARTWORK.travel.y * scaleY * weight;
-        const ix = Math.min(width - 2, Math.floor(sx)), dx = sx - ix;
+      // 局部视线模式每次清除上一轮覆盖；未移动的区域直接显示原图，像素与透明度都不改。
+      if (this.gazeMask) output.data.fill(0);
+      for (const { x, y, index, gazeWeight, protection } of pixels) {
+        if (this.gazeMask && closure === 0 && gazeWeight === 0) continue;
+        let sx = x, sy = y;
         let cover = 0;
-        // 先还原视线位移再闭合眼皮，两只眼睛始终使用同一个眨眼进度。
-        if (closure > 0) {
-          const originalY = eye.y + (sy + 0.5) / scaleY;
-          cover = blinkSkinCoverage(originalY, columns[ix], closure, columns[ix + 1], dx);
-          sy = (blinkSourceY(originalY, columns[ix], closure, columns[ix + 1], dx) - eye.y) * scaleY - 0.5;
+        if (this.gazeMask) {
+          // 先用固定坐标闭合眼皮，再只移动仍可见的虹膜，鼠标不能改变半闭眼的眼睑形状。
+          if (closure > 0) {
+            const originalY = eye.y + (y + 0.5) / scaleY;
+            cover = blinkSkinCoverage(originalY, columns[x], closure);
+            sy = (blinkSourceY(originalY, columns[x], closure) - eye.y) * scaleY - 0.5;
+          }
+          const sourceRow = Math.max(0, Math.min(height - 1, Math.round(sy)));
+          const weight = protection > 0 ? 0 : patch.gazeWeights[sourceRow * width + x] * (1 - closure);
+          sx -= this.current.x * this.artwork.travel.x * scaleX * weight;
+          sy -= this.current.y * this.artwork.travel.y * scaleY * weight;
+        } else {
+          // 龙娘保留原有整眼联动，先还原视线位移再闭合眼皮。
+          sx = Math.max(0, Math.min(width - 1, x - this.current.x * this.artwork.travel.x * scaleX * gazeWeight));
+          sy -= this.current.y * this.artwork.travel.y * scaleY * gazeWeight;
+          if (closure > 0) {
+            const column = Math.min(width - 2, Math.floor(sx)), mix = sx - column;
+            const originalY = eye.y + (sy + 0.5) / scaleY;
+            cover = blinkSkinCoverage(originalY, columns[column], closure, columns[column + 1], mix);
+            sy = (blinkSourceY(originalY, columns[column], closure, columns[column + 1], mix) - eye.y) * scaleY - 0.5;
+          }
         }
+        sx = Math.max(0, Math.min(width - 1, sx));
+        const ix = Math.min(width - 2, Math.floor(sx)), dx = sx - ix;
         sy = Math.max(0, Math.min(height - 1, sy));
         const iy = Math.min(height - 2, Math.floor(sy)), dy = sy - iy;
         const top = (iy * width + ix) * 4, bottom = top + width * 4;
+        // 刘海遮挡属于固定前景，不能把移动前采到的橘发颜色带进眼白。
+        const blocked = (patch.foreground?.[iy * width + ix] || 0) >= 0.5;
         for (let channel = 0; channel < 3; channel += 1) {
-          const sampled =
+          let sampled =
             (source[top + channel] * (1 - dx) + source[top + 4 + channel] * dx) * (1 - dy)
             + (source[bottom + channel] * (1 - dx) + source[bottom + 4 + channel] * dx) * dy;
-          output.data[index + channel] = sampled * (1 - cover) + this.skin[channel] * cover;
+          if (blocked) sampled = closure > 0 ? this.skin[channel] : patch.source[index + channel];
+          const animated = sampled * (1 - cover) + this.skin[channel] * cover;
+          output.data[index + channel] = animated * (1 - protection) + patch.source[index + channel] * protection;
         }
         output.data[index + 3] = 255;
       }
       context.putImageData(output, 0, 0);
     }
-    if (this.expression.amount > 0) this.character.dataset.expression = this.expressionName;
-    else delete this.character.dataset.expression;
+    if (this.supportsExpressions) {
+      if (this.expression.amount > 0) this.character.dataset.expression = this.expressionName;
+      else delete this.character.dataset.expression;
+    }
   }
 
   // 眼睛先看过去，身体稍慢跟上；两者收敛后一起停止动画，身体帧不重复重绘眼区。
@@ -289,6 +333,7 @@ export class EyeTracker {
 
   // 开关即时生效，清除待执行的帧和上次姿态，重新启用时从原画平滑转向鼠标。
   reset() {
+    this.enabled = false;
     this.cancelExpression();
     this.cancelBlink();
     this.blinkingEnabled = false;

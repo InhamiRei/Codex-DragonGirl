@@ -27,9 +27,10 @@ import {
 import { DragGesture } from '../shared/gesture.js';
 import { StateStore } from './state-store.js';
 import { dialogueLine } from '../shared/dialogue.js';
-import { DEFAULT_CHARACTER_ASSET, eyeTrackingEnabled } from '../shared/gaze.js';
+import { eyeTrackingEnabled } from '../shared/gaze.js';
 import { shouldFaceLeft } from '../shared/facing.js';
 import { followWindowStack, followWindowFloating } from '../shared/follow-window.js';
+import { CHARACTERS, characterByAsset } from '../shared/characters.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const ORIGIN = 'dragon://app';
@@ -253,6 +254,11 @@ export class Companion {
     ipcMain.on('dg:menu', (event, point) => {
       const c = locate(event, 'character');
       if (c) c.showMenu(point);
+    });
+    // 发饰菜单复用原生定位和来源校验，不扩大透明角色窗口。
+    ipcMain.on('dg:character-menu', (event, point) => {
+      const c = locate(event, 'character');
+      if (c?.delegate?.selectCharacter) c.showMenu(point, true);
     });
     ipcMain.on('dg:close-bubble', (event) => locate(event, 'bubble')?.hideBubble());
     // 推进消息只路由到发送它的气泡实例，角色页或其他窗口不能跨实例触发对话。
@@ -567,11 +573,11 @@ export class Companion {
   }
 
   // 在实际右击位置打开菜单，整个生命周期保留菜单对象与鼠标输入。
-  showMenu(point = screen.getCursorScreenPoint()) {
+  showMenu(point = screen.getCursorScreenPoint(), characterOnly = false) {
     const window = this.windows.get('character');
     if (this.stopping || this.contextMenu || !this.validPoint(point)
       || !window || window.isDestroyed() || !window.isVisible()) return;
-    const menu = this.buildMenu();
+    const menu = characterOnly ? Menu.buildFromTemplate(this.characterMenuItems()) : this.buildMenu();
     // 菜单不改变人物窗口，关闭后只恢复输入与轮询，避免为恢复布局而触发额外重绘。
     const closed = () => {
       if (this.contextMenu !== menu) return;
@@ -595,6 +601,18 @@ export class Companion {
     }
   }
 
+  // 角色入口同时用于发饰下拉框、右键和托盘，选中状态依据实际展示的内置素材。
+  characterMenuItems() {
+    return CHARACTERS.map((character) => ({
+      label: character.name,
+      type: 'radio',
+      checked: characterByAsset(this.appearance.asset)?.id === character.id,
+      enabled: !!this.delegate?.selectCharacter,
+      click: () => void this.delegate?.selectCharacter?.(character.id)
+        ?.catch((error) => console.error('切换角色失败：', error.message)),
+    }));
+  }
+
   // 原生菜单让透明挂件不必常驻额外按钮，角色本体和设置入口保持分离。
   buildMenu() {
     return Menu.buildFromTemplate([
@@ -606,6 +624,7 @@ export class Companion {
           ]
         : []),
       { type: 'separator' },
+      ...(this.delegate?.selectCharacter ? [{ label: '切换角色', submenu: this.characterMenuItems() }] : []),
       { label: this.visible ? '暂时收起' : '叫出龙娘', click: () => this.toggleVisibility() },
       {
         label: '说句话',
@@ -614,13 +633,16 @@ export class Companion {
       // 手动预览复用现有动画并自动恢复；托盘操作先叫出角色，自定义图片和关闭动态表情时禁用。
       {
         label: '表情',
-        enabled: (!this.appearance.asset || this.appearance.asset === DEFAULT_CHARACTER_ASSET)
+        enabled: !!characterByAsset(this.appearance.asset)
           && this.appearance.settings?.expressionsEnabled !== false,
-        submenu: [['开心', 'happy'], ['伤心', 'sad']].map(([label, name]) => ({
+        submenu: (characterByAsset(this.appearance.asset)?.id === 'maro'
+          ? [['完成', 'happy'], ['失败', 'sad'], ['捋头发', 'hair']]
+          : [['开心', 'happy'], ['伤心', 'sad']]).map(([label, name]) => ({
           label,
+          enabled: name !== 'hair' || this.appearance.settings?.motion !== false,
           click: () => {
             this.show();
-            this.showExpression(name);
+            this.showExpression(name, { preview: true });
           },
         })),
       },
@@ -850,13 +872,17 @@ export class Companion {
   }
 
   // 表情与声音独立；只接受已知表情，隐藏或拖动期间不积压表情消息。
-  showExpression(name) {
+  showExpression(name, { preview = false } = {}) {
     const window = this.windows.get('character');
-    if (!['happy', 'sad'].includes(name) || this.stopping || this.gesture.active || this.appearance.settings?.expressionsEnabled === false
+    const supported = ['happy', 'sad'].includes(name)
+      || (name === 'hair' && characterByAsset(this.appearance.asset)?.id === 'maro');
+    if (!supported || this.stopping || this.gesture.active || this.appearance.settings?.expressionsEnabled === false
       || !this.ready.has('character') || !window || window.isDestroyed() || !window.isVisible()) return;
     // 先同步当前可见性，再发出表情；正常桌面点击不能因渲染层残留的隐藏状态而被丢弃。
     this.sendCharacterLayout();
-    window.webContents.send('dg:expression', name);
+    // 手动捋发与后台待机动作分开标记；工作中也能响应用户主动点开的预览。
+    window.webContents.send('dg:expression', name === 'hair'
+      ? { name, source: preview ? 'preview' : 'idle' } : name);
   }
 
   // 事件声和状态提示复用角色窗口，不额外创建音频后台进程。

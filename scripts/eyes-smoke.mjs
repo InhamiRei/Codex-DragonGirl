@@ -125,11 +125,15 @@ try {
       y: Math.round(area.y + 100),
     };
     companion.applyCharacter();
+    companion.windows.get('character').showInactive();
     const bounds = companion.windows.get('character').getBounds();
     companion.cursorPositions.clear();
     companion.__pollCursor();
     clearTimeout(companion.cursorTimer);
-    return { x: point.x - bounds.x, y: point.y - bounds.y, width: bounds.width, height: bounds.height };
+    // 验收实际发出的取样，避免真实鼠标在窗口布局期间移动导致坐标误报。
+    const sent = companion.cursorPositions.get('character');
+    if (!sent) throw new Error('没有生成窗口外的视线消息');
+    return { ...sent, width: bounds.width, height: bounds.height };
   });
   assert.ok(actualCursor.x < 0 || actualCursor.x > actualCursor.width || actualCursor.y < 0 || actualCursor.y > actualCursor.height);
   await until(() => page.evaluate((expected) => window.__cursorMessages.some((point) => point.x === expected.x && point.y === expected.y), actualCursor), '窗口外系统鼠标没有传到角色');
