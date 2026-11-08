@@ -1,0 +1,67 @@
+name: 1.5.1 Windows 试用包验收
+
+on:
+  push:
+    branches: [codex/windows-prayer-1-5-1]
+    paths: [.github/workflows/windows-prayer-package.yml, scripts/windows-prayer-package-smoke.mjs]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: 核对试用版提交
+        run: |
+          if ((git rev-parse HEAD^) -ne '095770672027206e04756bd153d527761f309181') {
+            throw '验收分支不是 v1.5.1 的直接子提交'
+          }
+          git diff --exit-code HEAD^ HEAD -- src assets native package.json package-lock.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 安装测试依赖
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci
+      - name: 下载校验并解压公开试用包
+        id: extract
+        run: |
+          # 使用发布包的 Electron，避免再次下载开发运行时。
+          $zip = Join-Path $env:RUNNER_TEMP 'Codex-DragonGirl-1.5.1-Windows-x64.zip'
+          curl.exe --fail --location --silent --show-error --retry 4 --retry-all-errors --retry-max-time 120 --max-time 150 --output $zip 'https://github.com/InhamiRei/Codex-DragonGirl/releases/download/v1.5.1/Codex-DragonGirl-1.5.1-Windows-x64.zip'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant() -ne 'b232beffac9ccc47b78b875fc25d211bf368e794f1c87a20c082cea07175ebf4') {
+            throw '发布附件摘要不符'
+          }
+          $folder = Join-Path $env:RUNNER_TEMP 'dragon-release'
+          Expand-Archive -LiteralPath $zip -DestinationPath $folder
+          $exe = Join-Path $folder 'Codex-DragonGirl-1.5.1-Windows-x64/DragonGirl.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw '发布包缺少应用程序' }
+          "DRAGONGIRL_TEST_EXECUTABLE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: 试用包启动与页脚版本
+        run: npm run test:windows
+      - name: 祈祷菜单合掌与逐字祷文
+        if: ${{ always() && steps.extract.outcome == 'success' }}
+        run: npm run test:menu
+      - name: 气泡立即收起与渐变震荡波
+        if: ${{ always() && steps.extract.outcome == 'success' }}
+        run: node scripts/windows-prayer-package-smoke.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Windows-1.5.1-prayer
+          path: |
+            .artifacts/menu-report.json
+            .artifacts/windows-smoke.json
+            .artifacts/prayer-*.png
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
