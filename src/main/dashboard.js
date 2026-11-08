@@ -14,6 +14,14 @@ import { CHARACTERS, characterById } from '../shared/characters.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const DASHBOARD_URL = 'dragon://app/src/renderer/dashboard.html';
 
+// 角色跟随与祈祷特效共用宿主几何，Windows 的物理坐标只在这里转成逻辑坐标。
+function codexWindowFrame(codexProcess) {
+  const frame = followWindowFrame(codexProcess);
+  if (frame && codexProcess.coordinateSpace === 'physical' && process.platform === 'win32')
+    return { ...frame, ...screen.screenToDipRect(null, frame) };
+  return frame;
+}
+
 // 总览窗口统一管理 N 个采集源，桌宠窗口只负责各自展示和交互。
 export class Dashboard {
   // 绑定主角色、采集器和经过来源校验的界面命令。
@@ -42,6 +50,7 @@ export class Dashboard {
       bubbleFor: (c) => this.bubbleFor(c),
       onDrag: (c) => this.onDrag(c),
       stackWindows: (host, overlays, owned) => monitor.stackWindows(host, overlays, owned),
+      prayerWaveTarget: (c) => this.prayerWaveTarget(c),
       selectCharacter: (id) => this.selectCharacter(id),
     };
     primary.delegate = this.delegate;
@@ -266,6 +275,15 @@ export class Dashboard {
     return true;
   }
 
+  // 跟随模式取所属宿主，桌面模式优先取前台 Codex，找不到有效窗口时不创建特效层。
+  prayerWaveTarget(pet) {
+    const hosts = this.monitor.processes;
+    const linked = hosts.find((host) => host.pid === pet.followPID);
+    const frame = pet.followMode ? codexWindowFrame(linked)
+      : codexWindowFrame(hosts.find((host) => host.frontmost)) || codexWindowFrame(linked);
+    return frame && { frame, order: this.monitor.windowOrder, normalWindows: this.monitor.normalWindows };
+  }
+
   // 选择文件等模态弹窗、最小化或不可见时隐藏关联角色；恢复后沿用相对位置。
   follow() {
     if (this.stopping || this.monitor.stopped) return;
@@ -281,16 +299,14 @@ export class Dashboard {
           pet.applyCharacter();
           if (pet.visible) pet.show();
         }
+        pet.syncPrayerWave();
         continue;
       }
-      const process = this.monitor.processes.find((p) => p.pid === pet.followPID);
-      let frame = followWindowFrame(process);
-      // Windows 转换为逻辑坐标时保留原生窗口编号，位置与前后层级都绑定到同一宿主。
-      if (frame && process.coordinateSpace === 'physical' && globalThis.process.platform === 'win32')
-        frame = { ...frame, ...screen.screenToDipRect(null, frame) };
+      const frame = codexWindowFrame(this.monitor.processes.find((p) => p.pid === pet.followPID));
       pet.followFrame(frame, settings.followOffsets[pet.home] || { x: 1, y: 1 }, {
         order: this.monitor.windowOrder, topmost: this.monitor.topmostWindows, normalWindows: this.monitor.normalWindows,
       });
+      pet.syncPrayerWave();
     }
   }
   // 跟随模式中的拖拽保存窗口内相对锚点，屏幕缩放不会破坏用户意图。

@@ -26,11 +26,13 @@ import {
 } from '../shared/geometry.js';
 import { DragGesture } from '../shared/gesture.js';
 import { StateStore } from './state-store.js';
-import { dialogueLine } from '../shared/dialogue.js';
+import { dialogueLine, PRAYER_TEXT } from '../shared/dialogue.js';
 import { eyeTrackingEnabled } from '../shared/gaze.js';
 import { shouldFaceLeft } from '../shared/facing.js';
 import { followWindowStack, followWindowFloating } from '../shared/follow-window.js';
 import { CHARACTERS, characterByAsset } from '../shared/characters.js';
+import { PRAYER_PALM } from '../shared/prayer-wave.js';
+import { PrayerWave } from './prayer-wave.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const ORIGIN = 'dragon://app';
@@ -66,6 +68,7 @@ export class Companion {
       text: dialogueLine('chat'),
       usage: null,
       kind: 'speech',
+      typingId: null,
       showId: 0,
       revision: 0,
       measuredRevision: -1,
@@ -263,6 +266,8 @@ export class Companion {
     ipcMain.on('dg:close-bubble', (event) => locate(event, 'bubble')?.hideBubble());
     // 推进消息只路由到发送它的气泡实例，角色页或其他窗口不能跨实例触发对话。
     ipcMain.on('dg:advance-bubble', (event) => locate(event, 'bubble')?.advanceBubble());
+    // 只有所属气泡正常播完才释放震荡波，上一轮的完成消息无效。
+    ipcMain.on('dg:prayer-typed', (event, typingId) => locate(event, 'bubble')?.finishPrayerTyping(typingId, true));
     ipcMain.on('dg:bubble-measured', (event, measurement) =>
       locate(event, 'bubble')?.resizeBubble(measurement),
     );
@@ -314,6 +319,7 @@ export class Companion {
       },
       asset: this.appearance.asset || `${ORIGIN}/assets/characters/codex-dragon-girl.png`,
       visible: !!window && !window.isDestroyed() && window.isVisible(),
+      praying: this.bubbleModel.typingId !== null || Boolean(this.prayerWave && !this.prayerWave.started),
       snapEnabled: this.state.snapEnabled,
       // 手动镜像作为基础方向，关闭自动朝向后仍完整保留原来的手动翻转行为。
       flipped: !!this.appearance.settings?.flip !== (this.appearance.settings?.autoFlip !== false && this.facingLeft),
@@ -419,19 +425,25 @@ export class Companion {
   // 文本与默认用量卡片共用内容版本，异步测量不能覆盖后来显示的新消息。
   setBubbleContent(content, kind = this.bubbleKind) {
     this.bubbleKind = kind;
+    const wasTyping = this.bubbleModel.typingId !== null;
+    const revision = this.bubbleModel.revision + 1;
     this.bubbleModel = {
       ...this.bubbleModel,
       text: typeof content === 'string' ? content : content.text,
       usage: typeof content === 'string' ? null : content.usage,
       kind,
-      revision: this.bubbleModel.revision + 1,
+      // 逐字播放编号只在换内容时变化，移动气泡或重新测量不会重新打字。
+      typingId: kind === 'prayer' ? revision : null,
+      revision,
       measuredRevision: -1,
     };
+    if (wasTyping !== (this.bubbleModel.typingId !== null)) this.sendCharacterLayout();
   }
 
   // 所有气泡共用显示和计时逻辑，内容来源用于避免通知被后台数据覆盖。
   showBubble(content, kind) {
     if (!this.visible || this.suppressedByFollow || !this.ready.has('bubble')) return;
+    this.cancelPrayerWave();
     const opening = !this.bubbleVisible;
     this.setBubbleContent(content, kind);
     // 显示轮次独立于内容版本，后台额度更新与气泡内换句不能被当作重新打开。
@@ -439,7 +451,8 @@ export class Companion {
     this.bubbleVisible = true;
     this.positionBubble();
     clearTimeout(this.bubbleTimer);
-    if (!this.appearance.settings?.pinnedBubble)
+    // 祷文由释放震荡波的流程收起，普通气泡仍使用各自的自动关闭设置。
+    if (kind !== 'prayer' && !this.appearance.settings?.pinnedBubble)
       this.bubbleTimer = setTimeout(
         () => this.hideBubble(),
         (this.appearance.settings?.bubbleSeconds || 7) * 1000,
@@ -450,6 +463,77 @@ export class Companion {
   speak() {
     this.show();
     this.showBubble(dialogueLine('chat', this.lineIndex++), 'speech');
+  }
+
+  // 主动祈祷只在本地播放，气泡打字期间让龙娘保持合掌。
+  prayForCode() {
+    if (this.stopping || characterByAsset(this.appearance.asset)?.id !== 'dragon') return;
+    this.show();
+    this.showBubble(PRAYER_TEXT, 'prayer');
+  }
+
+  // 正常结束后先释放震荡波，手动收起只取消本轮打字。
+  finishPrayerTyping(typingId, completed = false) {
+    if (typingId == null || typingId !== this.bubbleModel.typingId) return;
+    this.bubbleModel.typingId = null;
+    const window = this.windows.get('bubble');
+    if (window && !window.isDestroyed()) window.webContents.send('dg:bubble', this.bubbleModel);
+    if (completed && this.bubbleVisible) {
+      this.releasePrayer();
+    } else {
+      this.sendCharacterLayout();
+    }
+  }
+
+  // 震荡波沿用宿主的几何和层级，开场时同步收起气泡并让龙娘放下双手。
+  releasePrayer() {
+    const target = this.delegate?.prayerWaveTarget?.(this);
+    const settings = this.appearance.settings;
+    if (this.stopping || !target || settings?.motion === false || settings?.expressionsEnabled === false) {
+      this.sendCharacterLayout();
+      this.hideBubble();
+      return;
+    }
+    const wave = this.prayerWave = new PrayerWave(target.frame.id, {
+      getTarget: () => this.delegate?.prayerWaveTarget?.(this),
+      getOrigin: () => ({
+        x: this.character.x + this.character.width * PRAYER_PALM.x,
+        y: this.character.y + this.character.height * PRAYER_PALM.y,
+      }),
+      ownedWindowIds: () => Companion.ownedWindowIds(),
+      stackOnWindows: (host, id, owned) => {
+        if (this.followMode && this.followTarget?.id === host && !this.contextMenu) this.syncWindowStacking();
+        else this.delegate?.stackWindows?.(host, [id], owned);
+      },
+      onStart: () => {
+        this.hideBubble({ keepWave: true });
+        this.sendCharacterLayout();
+      },
+      onFinish: () => {
+        if (this.prayerWave !== wave) return;
+        this.prayerWave = null;
+        // 特效在开场前结束时，补做气泡和合掌的收尾。
+        if (this.bubbleVisible) {
+          this.hideBubble();
+          this.sendCharacterLayout();
+        }
+      },
+    });
+    void wave.play();
+  }
+
+  // 跟随快照更新时只维护正在播放的特效，宿主不再有效就收起。
+  syncPrayerWave() {
+    this.prayerWave?.update(this.delegate?.prayerWaveTarget?.(this));
+  }
+
+  // 先清空引用再销毁窗口，防止旧一轮的完成回调关闭新气泡。
+  cancelPrayerWave() {
+    const wave = this.prayerWave;
+    if (!wave) return;
+    this.prayerWave = null;
+    wave.close();
+    if (!wave.started) this.sendCharacterLayout();
   }
 
   // 用量气泡切换为一条语录，其余气泡点击收起；迟到点击不能重新叫出已隐藏的角色或气泡。
@@ -510,12 +594,14 @@ export class Companion {
     window.webContents.send('dg:bubble', this.bubbleModel);
   }
 
-  // 隐藏气泡时同时释放其输入区域，透明窗口不会继续遮挡桌面。
-  hideBubble() {
+  // 隐藏气泡时释放输入区域，震荡波开场可单独收起气泡。
+  hideBubble({ keepWave = false } = {}) {
     clearTimeout(this.bubbleTimer);
     this.bubbleVisible = false;
     this.setInteractive('bubble', false);
     this.windows.get('bubble')?.hide();
+    if (!keepWave) this.cancelPrayerWave();
+    this.finishPrayerTyping(this.bubbleModel.typingId);
   }
 
   // 手势和原生菜单展开期间保留输入，移出角色后仍能悬停子菜单。
@@ -615,6 +701,7 @@ export class Companion {
 
   // 原生菜单让透明挂件不必常驻额外按钮，角色本体和设置入口保持分离。
   buildMenu() {
+    const characterId = characterByAsset(this.appearance.asset)?.id;
     return Menu.buildFromTemplate([
       { label: this.instanceName || '龙娘', enabled: false },
       ...(this.delegate
@@ -625,19 +712,25 @@ export class Companion {
         : []),
       { type: 'separator' },
       ...(this.delegate?.selectCharacter ? [{ label: '切换角色', submenu: this.characterMenuItems() }] : []),
+      // 只有默认龙娘有合掌素材；托盘与右键共用此入口。
+      {
+        label: '祈祷式编程',
+        enabled: characterId === 'dragon',
+        click: () => this.prayForCode(),
+      },
       { label: this.visible ? '暂时收起' : '叫出龙娘', click: () => this.toggleVisibility() },
       {
         label: '说句话',
         click: () => this.speak(),
       },
-      // 手动预览复用现有动画并自动恢复；托盘操作先叫出角色，自定义图片和关闭动态表情时禁用。
+      // 手动预览走统一表情事件并自动恢复；托盘操作先叫出角色，自定义图片和关闭动态表情时禁用。
       {
         label: '表情',
-        enabled: !!characterByAsset(this.appearance.asset)
+        enabled: !!characterId
           && this.appearance.settings?.expressionsEnabled !== false,
-        submenu: (characterByAsset(this.appearance.asset)?.id === 'maro'
+        submenu: (characterId === 'maro'
           ? [['完成', 'happy'], ['失败', 'sad'], ['捋头发', 'hair']]
-          : [['开心', 'happy'], ['伤心', 'sad']]).map(([label, name]) => ({
+          : [['开心', 'happy'], ['伤心', 'sad'], ['祈祷', 'prayer']]).map(([label, name]) => ({
           label,
           enabled: name !== 'hair' || this.appearance.settings?.motion !== false,
           click: () => {
@@ -752,6 +845,11 @@ export class Companion {
   setAppearance(appearance) {
     const assetChanged = appearance.asset !== this.appearance.asset;
     this.appearance = appearance;
+    // 切换到不支持合掌的角色时收起祷文，避免沿用龙娘的动作和气泡。
+    if (assetChanged && this.bubbleKind === 'prayer' && characterByAsset(appearance.asset)?.id !== 'dragon')
+      this.hideBubble();
+    if (this.prayerWave && (appearance.settings?.motion === false || appearance.settings?.expressionsEnabled === false))
+      this.hideBubble();
     if (assetChanged && appearance.assetPath) {
       const img = nativeImage.createFromPath(appearance.assetPath);
       if (!img.isEmpty()) {
@@ -785,16 +883,22 @@ export class Companion {
       [...this.windows.values()].filter((window) => !window.isDestroyed()).map((window) => window.getMediaSourceId().split(':')[1]), []);
   }
 
+  // 桌宠自己的透明窗口和临时震荡波都参与层级判断，不能把彼此当成其他应用的遮挡。
+  static ownedWindowIds() {
+    return [...Companion.registry].flatMap((pet) => [...pet.windows.values(), pet.prayerWave?.window])
+      .filter((window) => window && !window.isDestroyed()).map((window) => window.getMediaSourceId().split(':')[1]);
+  }
+
   // 使用原生窗口编号直接调整相对层级，不截屏、不聚焦宿主，也不把后台角色提升到其他应用上方。
   syncWindowStacking(force = false) {
     const hostId = this.followTarget?.id;
     if (!this.followMode || this.suppressedByFollow || this.stopping || this.contextMenu || !Number.isSafeInteger(hostId) || hostId <= 0) return;
     if (this.followOrder && !this.followOrder.some((id) => String(id) === String(hostId))) { this.followFrame(null); return; }
-    const owned = [...Companion.registry].flatMap((pet) => [...pet.windows.values()])
-      .filter((window) => !window.isDestroyed()).map((window) => window.getMediaSourceId().split(':')[1]);
+    const owned = Companion.ownedWindowIds();
     // Windows 由原生桥按实时句柄排序，避免 Electron 对普通宿主的相对排序隐式改变置顶组。
     if (process.platform === 'win32') {
-      const overlays = [...this.windows.values()].filter((window) => !window.isDestroyed())
+      const wave = this.prayerWave?.hostId === hostId ? this.prayerWave.window : null;
+      const overlays = [...(wave?.isVisible() ? [wave] : []), ...this.windows.values()].filter((window) => !window.isDestroyed())
         .map((window) => window.getMediaSourceId().split(':')[1]);
       this.delegate?.stackWindows?.(hostId, overlays, owned);
       return;
@@ -875,7 +979,8 @@ export class Companion {
   showExpression(name, { preview = false } = {}) {
     const window = this.windows.get('character');
     const supported = ['happy', 'sad'].includes(name)
-      || (name === 'hair' && characterByAsset(this.appearance.asset)?.id === 'maro');
+      || (name === 'hair' && characterByAsset(this.appearance.asset)?.id === 'maro')
+      || (name === 'prayer' && characterByAsset(this.appearance.asset)?.id === 'dragon');
     if (!supported || this.stopping || this.gesture.active || this.appearance.settings?.expressionsEnabled === false
       || !this.ready.has('character') || !window || window.isDestroyed() || !window.isVisible()) return;
     // 先同步当前可见性，再发出表情；正常桌面点击不能因渲染层残留的隐藏状态而被丢弃。
@@ -888,7 +993,9 @@ export class Companion {
   // 事件声和状态提示复用角色窗口，不额外创建音频后台进程。
   notify(event, text) {
     this.windows.get('character')?.webContents.send('dg:sound', event);
-    if (text && this.state.speechEnabled) this.showBubble(text, 'notice');
+    // 祷文与震荡波期间暂停显示任务通知，提示音仍然照常播放。
+    if (text && this.state.speechEnabled && !this.prayerWave && !(this.bubbleVisible && this.bubbleKind === 'prayer'))
+      this.showBubble(text, 'notice');
   }
 
   // 测试只读快照包含窗口布局和当前开关，不暴露任意系统操作。
@@ -909,6 +1016,7 @@ export class Companion {
   async stop() {
     this.stopping = true;
     this.started = false;
+    this.cancelPrayerWave();
     this.contextMenu?.closePopup(this.windows.get('character'));
     Companion.registry.delete(this);
     clearTimeout(this.cursorTimer);

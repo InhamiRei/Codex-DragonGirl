@@ -5,6 +5,72 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .stage[data-gesture="dragging"] { cursor: grabbing; }
 .character { position: absolute; transform-origin: 50% 100%; will-change: transform; pointer-events: none; }
 .character img { display: block; width: 100%; height: 100%; object-fit: contain; -webkit-user-drag: none; }
+#prayer-portrait, #prayer-half { position: absolute; inset: 0; }
+#prayer-portrait[hidden], #prayer-half[hidden] { display: none; }
+.character[data-expression="prayer"]:not([data-prayer-moving]) #portrait { visibility: hidden; }
+.character[data-prayer-moving] #prayer-portrait {
+  clip-path: inset(51% 22% 26% 24%);
+  opacity: var(--prayer-eyes-opacity);
+}
+#prayer-hands { position: absolute; inset: 0; overflow: hidden; }
+#prayer-hands img { transform: translateY(var(--prayer-hands-offset)); }
+.prayer-energy {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: none;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  opacity: var(--prayer-energy-opacity, 0);
+}
+.character[data-expression="prayer"] .prayer-energy { display: block; }
+.prayer-streams { visibility: hidden; }
+.prayer-streams path {
+  --flight: 2.1s;
+  --phase: 0s;
+  stroke: #ad7ce9;
+  stroke-width: 1.22;
+  stroke-linecap: round;
+  stroke-dasharray: 4 110;
+  opacity: 0;
+}
+.prayer-streams path:nth-child(even) { stroke: #c59af4; stroke-width: .95; }
+.prayer-streams path:nth-child(2) { --flight: 1.9s; --phase: -.7s; }
+.prayer-streams path:nth-child(3) { --flight: 2.55s; --phase: -1.1s; }
+.prayer-streams path:nth-child(4) { --flight: 2.3s; --phase: -.4s; }
+.prayer-streams path:nth-child(5) { --flight: 1.8s; --phase: -.2s; }
+.prayer-streams path:nth-child(6) { --flight: 2.2s; --phase: -1.2s; }
+.prayer-streams path:nth-child(7) { --flight: 2.7s; --phase: -1.6s; stroke-width: .85; }
+.prayer-streams path:nth-child(8) { --flight: 1.65s; --phase: -.9s; }
+.prayer-glow {
+  transform-box: fill-box;
+  transform-origin: center;
+  opacity: .66;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .character[data-prayer-flow] .prayer-streams { visibility: visible; }
+  .character[data-expression="prayer"][data-prayer-flow] .prayer-streams path {
+    animation: prayer-inward var(--flight) var(--phase) linear infinite;
+  }
+  .character[data-expression="prayer"][data-prayer-flow] .prayer-glow {
+    animation: prayer-gather 2.4s ease-out both;
+  }
+}
+@keyframes prayer-inward {
+  0% { stroke-dashoffset: 5; opacity: 0; }
+  15% { stroke-dashoffset: -6; opacity: .85; }
+  57% { stroke-dashoffset: -38; opacity: .9; }
+  92% { stroke-dashoffset: -91; opacity: .95; }
+  100% { stroke-dashoffset: -104; opacity: 0; }
+}
+@keyframes prayer-gather {
+  0%, 12% { transform: scale(.48); opacity: 0; }
+  65% { transform: scale(.84); opacity: .6; }
+  100% { transform: scale(1); opacity: .95; }
+}
+
 .eye-layer { position: absolute; pointer-events: none; }
 .eye-layer[hidden] { display: none; }
 .maro-eye-layer { position: absolute; pointer-events: none; }

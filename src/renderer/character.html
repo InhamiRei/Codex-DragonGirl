@@ -12,6 +12,38 @@
     <main id="stage" class="stage" aria-label="龙娘，可以拖动，轻点说话，右键设置">
       <div id="character" class="character">
         <img id="portrait" alt="白发紫眼睛、带龙角的 龙娘" draggable="false">
+        <img id="prayer-half" src="../../assets/characters/codex-dragon-girl-prayer-half.png" alt="" draggable="false" hidden>
+        <img id="prayer-portrait" src="../../assets/characters/codex-dragon-girl-prayer.png" alt="" draggable="false" hidden>
+        <div id="prayer-hands" aria-hidden="true" hidden>
+          <img src="../../assets/characters/codex-dragon-girl-prayer-hands.png" alt="" draggable="false">
+        </div>
+        <!-- 光束和手心光晕以合掌定稿的手心为终点，随人物整体缩放和翻转。 -->
+        <svg class="prayer-energy" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <radialGradient id="prayer-halo">
+              <stop offset="0" stop-color="#f1d6ff" stop-opacity=".98"/>
+              <stop offset=".25" stop-color="#c68bff" stop-opacity=".83"/>
+              <stop offset=".56" stop-color="#9a54ed" stop-opacity=".53"/>
+              <stop offset="1" stop-color="#7135ce" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <!-- 八条细弧从龙娘周围汇入合掌处。 -->
+          <g class="prayer-streams" fill="none">
+            <path pathLength="100" d="M-4 27 C9 38 16 66 34 78 Q43 84 50 89"/>
+            <path pathLength="100" d="M104 36 C91 40 94 65 72 78 Q59 84 50 89"/>
+            <path pathLength="100" d="M15 3 C15 22 32 40 25 56 S30 82 50 89"/>
+            <path pathLength="100" d="M87 4 C84 29 68 40 76 56 S72 79 50 89"/>
+            <path pathLength="100" d="M-6 83 C8 98 32 100 50 89"/>
+            <path pathLength="100" d="M106 90 C87 103 67 99 50 89"/>
+            <path pathLength="100" d="M47 -5 C42 19 53 40 55 61 S58 77 50 89"/>
+            <path pathLength="100" d="M76 105 Q64 103 50 89"/>
+          </g>
+          <g class="prayer-glow">
+            <ellipse cx="50" cy="89" rx="21" ry="20" fill="url(#prayer-halo)"/>
+            <path fill="#efdaff" stroke="#a363f0" stroke-width=".38"
+              d="M50 84.8 Q50.6 88.4 54.2 89 Q50.6 89.6 50 93.2 Q49.4 89.6 45.8 89 Q49.4 88.4 50 84.8Z"/>
+          </g>
+        </svg>
       </div>
     </main>
     <script type="module" src="character.js"></script>

@@ -5,11 +5,19 @@ import { EyeTracker } from './eyes.js';
 import { FlipMotion } from '../shared/facing.js';
 import { CharacterSprites } from './character-sprites.js';
 import { characterByAsset, isCharacterMenuPoint } from '../shared/characters.js';
+import { DEFAULT_CHARACTER_ASSET, EYE_ARTWORK } from '../shared/gaze.js';
 
+// 将短过渡计入原来的祈祷时长，中间停留在定稿姿势。
+const PRAYER_DURATION = 2400;
+const PRAYER_ENTER = 360;
+const PRAYER_EXIT = 320;
 const bridge = window.dragonGirl;
 const stage = document.getElementById('stage');
 const character = document.getElementById('character');
 const portrait = document.getElementById('portrait');
+const prayerPortrait = document.getElementById('prayer-portrait');
+const prayerHalf = document.getElementById('prayer-half');
+const prayerHands = document.getElementById('prayer-hands');
 const eyes = new EyeTracker(character, paintBodyPose);
 const spring = new PressSpring();
 const flip = new FlipMotion();
@@ -30,6 +38,11 @@ let bodyPose = { translateX: 0, translateY: 0, angle: 0 };
 let renderedPose = pose;
 let lastCursor = null;
 let lastInteractive = null;
+let prayerReady = false;
+let prayerMotionReady = false;
+let prayerProgress = null;
+let prayerFrame = 0;
+let prayerTimer = 0;
 // 每次换表情或动作帧都同步命中，切回普通图片时恢复原始透明图。
 const sprites = new CharacterSprites(character, portrait, (next) => {
   mask = next || baseMask;
@@ -82,9 +95,125 @@ function routeCursor(point) {
   updateInteractive();
 }
 
+// 提前解码定稿、半闭眼和手部图层，尺寸一致才可在原画坐标中合成。
+async function preparePrayer() {
+  const images = [prayerPortrait, prayerHalf, prayerHands.firstElementChild];
+  const results = await Promise.allSettled(images.map((image) => image.decode()));
+  const [portraitReady, halfReady, handsReady] = images.map((image, index) =>
+    results[index].status === 'fulfilled'
+      && image.naturalWidth === EYE_ARTWORK.width && image.naturalHeight === EYE_ARTWORK.height);
+  prayerReady = portraitReady;
+  prayerMotionReady = halfReady && handsReady;
+  if (!prayerReady) console.warn('无法加载祈祷表情素材');
+  else if (!prayerMotionReady) console.warn('无法加载祈祷动作素材');
+}
+
+// 只在已解码的默认角色可见时播放，按压、换图或关闭动态表情都会结束预览。
+function canPray() {
+  return prayerReady && layout?.asset === DEFAULT_CHARACTER_ASSET && decodedPortrait?.src === layout.asset
+    && layout.visible !== false && !document.hidden && activePointer === null
+    && layout.appearance?.settings?.expressionsEnabled !== false;
+}
+
+// 动作素材齐全且应用动画已开启时，才启用光束与合掌过渡。
+function canAnimatePrayer() {
+  return prayerMotionReady && layout.appearance?.settings?.motion !== false;
+}
+
+// 集中取消待机计时和过渡帧，连选时直接接上当前动作进度。
+function clearPrayerTiming() {
+  clearTimeout(prayerTimer);
+  cancelAnimationFrame(prayerFrame);
+  prayerTimer = prayerFrame = 0;
+}
+
+// 清除图层和动作，恢复原画、视线和后续表情的控制权。
+function stopPrayer() {
+  if (prayerProgress === null) return;
+  clearPrayerTiming();
+  prayerProgress = null;
+  prayerPortrait.hidden = true;
+  prayerHalf.hidden = true;
+  prayerHands.hidden = true;
+  character.removeAttribute('data-prayer-moving');
+  delete character.dataset.expression;
+}
+
+// 眼睛经过半闭帧，合掌从原画下缘抬起；到位时使用完整定稿。
+function paintPrayer(progress) {
+  prayerProgress = progress;
+  const moving = progress < 1;
+  const closed = progress >= 0.42;
+  // 光随抬手出现，放手时一起淡出，合掌期间由样式驱动光束。
+  character.style.setProperty('--prayer-energy-opacity', String(progress));
+  character.toggleAttribute('data-prayer-moving', moving);
+  prayerHalf.hidden = !moving || progress < 0.12 || closed;
+  prayerHands.hidden = !moving;
+  if (!moving) return;
+  const lift = Math.max(0, (progress - 0.12) / 0.88);
+  prayerPortrait.style.setProperty('--prayer-eyes-opacity', closed ? '1' : '0');
+  prayerHands.style.setProperty('--prayer-hands-offset', `${19 * (1 - lift)}%`);
+}
+
+// 只在抬手和放手时请求动画帧，合掌停留期间只保留一次计时。
+function transitionPrayer(target) {
+  clearPrayerTiming();
+  const from = prayerProgress;
+  const started = performance.now();
+  const duration = (target === 1 ? PRAYER_ENTER : PRAYER_EXIT) * Math.abs(target - from);
+  // 按经过时间插值，掉帧或临时切换减少动态效果时仍能正常结束。
+  function step(time) {
+    if (!canPray()) {
+      stopPrayer();
+      configureEyes();
+      return;
+    }
+    const animated = canAnimatePrayer() && !reducedMotion.matches;
+    const amount = animated && duration > 0 ? Math.max(0, (time - started) / duration) : 1;
+    if (amount < 1) {
+      const eased = amount * amount * (3 - 2 * amount);
+      paintPrayer(from + (target - from) * eased);
+      prayerFrame = requestAnimationFrame(step);
+    } else if (target === 1) {
+      paintPrayer(1);
+      prayerFrame = 0;
+      // 表情预览按原时长结束；祈祷式编程由气泡打完或收起时解除合掌。
+      if (!layout.praying) {
+        const hold = animated ? PRAYER_DURATION - PRAYER_ENTER - PRAYER_EXIT : PRAYER_DURATION;
+        prayerTimer = setTimeout(() => transitionPrayer(0), hold);
+      }
+    } else {
+      stopPrayer();
+      configureEyes();
+    }
+  }
+  step(started);
+}
+
+// 接管祈祷眼区，连续触发时从当前姿势进入，结束后恢复自然眨眼。
+function showPrayer() {
+  if (!canPray()) return;
+  if (prayerProgress === null) {
+    eyes.reset();
+    prayerProgress = 0;
+    prayerPortrait.hidden = false;
+    character.dataset.expression = 'prayer';
+  }
+  transitionPrayer(1);
+}
+
 // 目标依据固定锚点和按压姿态计算，身体跟随的微小位移不反过来改变目标方向。
 function configureEyes() {
   if (!layout || !decodedPortrait) return;
+  if (prayerProgress !== null) {
+    if (canPray()) return;
+    stopPrayer();
+  }
+  // 换回龙娘原画或重新允许动态表情时，仍在打字才补上合掌姿势。
+  if (layout.praying && canPray()) {
+    showPrayer();
+    return;
+  }
   eyes.configure(decodedPortrait, layout, {
     ...pose,
     scaleX: pose.scaleX * flip.value,
@@ -118,9 +247,15 @@ async function loadPortrait(asset) {
 
 // 布局变化不重建元素或手势监听，拖动中的指针捕获不会因此失效。
 function applyLayout(model) {
+  const wasPraying = !!layout?.praying;
   const immediate = !layout || model.visible === false || document.hidden || model.asset !== layout.asset
     || reducedMotion.matches || model.appearance?.settings?.motion === false;
   layout = model;
+  // 应用设置控制光束开关，系统减少动态效果由 CSS 媒体查询即时响应。
+  character.toggleAttribute('data-prayer-flow', canAnimatePrayer());
+  // 正在预览时开启祷文会延长停留，打完则从当前动作进度放下双手。
+  if (prayerProgress !== null && wasPraying !== !!model.praying && canPray())
+    transitionPrayer(model.praying ? 1 : 0);
   flip.setFlipped(model.flipped ?? !!model.appearance?.settings?.flip, immediate);
   if (model.appearance?.settings) sound.configure(model.appearance.settings);
   stage.dataset.status = model.appearance?.status || 'idle';
@@ -249,7 +384,7 @@ function finishPointer(event, cancelled, notify = true) {
 async function start() {
   const model = await bridge.bootstrap();
   portrait.src = model.asset;
-  await Promise.all([portrait.decode(), eyes.prepareSad()]);
+  await Promise.all([portrait.decode(), eyes.prepareSad(), preparePrayer()]);
   mask = buildAlphaMask(portrait);
   baseMask = mask;
   decodedPortrait = portrait;
@@ -260,10 +395,16 @@ async function start() {
     setTimeout(() => delete stage.dataset.cue, 900);
     void sound.play(event);
   });
-  // 主进程区分轻点、成功与失败；声音关闭仍可显示表情，拖拽不会误触。
+  // 短表情可互相接替；读祷文时保留合掌，后台任务不能打断。
   bridge.onExpression((message) => {
+    if (layout.praying) return;
     const name = typeof message === 'string' ? message : message?.name;
+    if (name === 'prayer') {
+      showPrayer();
+      return;
+    }
     if (!['happy', 'sad', 'hair'].includes(name)) return;
+    stopPrayer();
     configureEyes();
     if (!sprites.showExpression(name, { source: message?.source })) eyes.showExpression(name);
   });
@@ -307,6 +448,7 @@ async function start() {
     cancelAnimationFrame(animation);
     animation = 0;
     flip.finish();
+    stopPrayer();
     eyes.reset();
     sprites.destroy();
   });

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { PRAYER_TEXT } from '../src/shared/dialogue.js';
 
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-menu-'));
@@ -45,11 +46,12 @@ async function snapshot() {
 
 // 从真实脸颊发出右键事件，覆盖渲染器、预加载和所属角色的主进程入口。
 async function openMenu() {
-  // 等待上一轮原生菜单真正消失、网页收到窗口坐标，避免把关闭动画或旧坐标当成本轮菜单。
+  // 等待原生菜单关闭、窗口坐标同步和翻转结束，防止点在角色暂时穿透的中间帧。
   if (process.platform === 'darwin') await until(() => nativeMenus().length === 0, '上一轮原生菜单尚未关闭');
   const bounds = await application.evaluate(() => globalThis.__dragonGirlTest.windows.get('character').getContentBounds());
   await until(() => page.evaluate((bounds) => innerWidth === bounds.width && innerHeight === bounds.height
-    && Math.abs(screenX - bounds.x) <= 1 && Math.abs(screenY - bounds.y) <= 1, bounds), '网页尚未同步人物窗口坐标');
+    && Math.abs(screenX - bounds.x) <= 1 && Math.abs(screenY - bounds.y) <= 1
+    && document.getElementById('character').dataset.flipping === 'false', bounds), '网页尚未同步人物窗口坐标或完成翻转');
   const point = await page.evaluate(async () => {
     const { rect } = await window.dragonGirl.bootstrap();
     return { x: rect.x + rect.width * 0.48, y: rect.y + rect.height * 0.72 };
@@ -92,7 +94,7 @@ try {
   await application.evaluate(() => {
     const c = globalThis.__dragonGirlTest;
     // 保留真实一级菜单长度，使用空委托避免测试打开管理页或触发账户查询。
-    c.delegate = { openDashboard: () => {}, refresh: () => {} };
+    c.delegate = { openDashboard: () => {}, refresh: () => {}, selectCharacter: async () => {} };
     c.setAppearance({ settings: { motion: false, eyeTracking: false, blinkEnabled: false, soundEnabled: false, expressionsEnabled: true } });
     c.setScale(0.6);
     c.character.x = c.display.workArea.x + 300;
@@ -109,10 +111,12 @@ try {
       window[name] = (...args) => { globalThis.__menuGeometryCalls.push(name); return original(...args); };
     }
   });
-  for (const [label, name] of [['开心', 'happy'], ['伤心', 'sad']]) {
+  // 通过同一个原生表情菜单逐个播放，验证素材显示和自动恢复。
+  const expressions = [['开心', 'happy'], ['伤心', 'sad'], ['祈祷', 'prayer']];
+  for (const [label, name] of expressions) {
     await openMenu();
     const opened = await snapshot();
-    assert.deepEqual(opened.expressions, ['开心', '伤心']);
+    assert.deepEqual(opened.expressions, expressions.map(([label]) => label));
     assert.deepEqual(opened.position, before.position, '菜单展开移动了屏幕上的角色');
     assert.deepEqual(opened.state, before.state, '菜单展开改写了偏好');
     assert.deepEqual(opened.bounds, before.bounds, '右键菜单改变了人物原生窗口，可能先显示一帧旧坐标');
@@ -140,11 +144,119 @@ try {
     if (process.platform === 'darwin') await until(() => nativeMenus().length === 0, '原生菜单关闭动画没有结束');
     assert.deepEqual((await snapshot()).bounds, before.bounds, '菜单关闭后没有恢复角色小窗口');
     await until(() => page.locator('#character').getAttribute('data-expression').then((value) => value === name), `${label}没有播放`);
+    if (name === 'prayer') {
+      assert.equal(await page.locator('#prayer-portrait').isVisible(), true, '祈祷素材没有显示');
+      assert.equal(await page.locator('#portrait').isVisible(), false, '祈祷与原画叠在一起');
+      assert.equal(await page.locator('.eye-layer:not([hidden])').count(), 0, '祈祷期间仍在绘制眼区');
+      await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
+      await page.screenshot({ path: path.join(root, '.artifacts/prayer-menu.png'), omitBackground: true });
+    }
     await until(() => page.locator('#character').getAttribute('data-expression').then((value) => value === null), `${label}没有自动恢复`);
+    assert.equal(await page.locator('#portrait').isVisible(), true, `${label}结束后没有恢复原画`);
     await page.evaluate(() => window.dragonGirl.interactive(false));
     await until(async () => !(await snapshot()).interactive, '菜单关闭后透明区域没有恢复穿透');
   }
   assert.deepEqual(await application.evaluate(() => globalThis.__menuGeometryCalls), [], '菜单开关仍修改了人物原生窗口');
+
+  // 从真实右键菜单触发祈祷；设为一秒收起，验证长祷文不受普通气泡计时干扰。
+  const bubble = application.windows().find((window) => window.url().endsWith('/bubble.html'));
+  bubble.on('pageerror', (error) => errors.push(error.message));
+  const beforePrayerSettings = await application.evaluate(() => {
+    const c = globalThis.__dragonGirlTest;
+    const settings = c.appearance.settings;
+    c.setAppearance({ ...c.appearance, settings: { ...settings, motion: true, bubbleSeconds: 1 } });
+    return settings;
+  });
+  await openMenu();
+  const prayerStarted = Date.now();
+  await application.evaluate(() => {
+    const c = globalThis.__dragonGirlTest, menu = c.contextMenu;
+    const index = menu.items.findIndex((item) => item.label === '切换角色');
+    const item = menu.items[index + 1];
+    if (index < 0 || item?.label !== '祈祷式编程' || !item.enabled) throw new Error('切换角色下方缺少可用的祈祷式编程');
+    item.click();
+    menu.closePopup(c.windows.get('character'));
+  });
+  const character = page.locator('#character');
+  const message = bubble.locator('#message');
+  await until(async () => {
+    const partial = await message.textContent();
+    return partial.length >= 4 && partial.length < PRAYER_TEXT.length && PRAYER_TEXT.startsWith(partial);
+  }, '气泡没有从开头逐字打出祷文');
+  await until(async () => await character.getAttribute('data-expression') === 'prayer'
+    && await character.getAttribute('data-prayer-moving') === null, '龙娘没有抬手合掌');
+
+  // 在实际渲染的光束上采样，核对动画向手心推进，而非仅检查图层出现。
+  const energy = page.locator('.prayer-energy');
+  assert.equal(await energy.isVisible(), true, '合掌时没有光效');
+  const inward = await energy.evaluate((svg) => {
+    const streams = Array.from(svg.querySelectorAll('.prayer-streams path'));
+    const palm = svg.querySelector('.prayer-glow ellipse');
+    const [stream] = streams;
+    const [animation] = stream?.getAnimations() || [];
+    if (!animation || svg.querySelector('.prayer-ring')) return false;
+    const savedTime = animation.currentTime;
+    animation.currentTime = 500;
+    const nearStart = Number.parseFloat(getComputedStyle(stream).strokeDashoffset);
+    animation.currentTime = 1800;
+    const nearPalm = Number.parseFloat(getComputedStyle(stream).strokeDashoffset);
+    animation.currentTime = savedTime;
+    return nearPalm < nearStart - 35 && streams.every((stream) => {
+      const end = stream.getPointAtLength(stream.getTotalLength());
+      return Math.hypot(end.x - palm.cx.baseVal.value, end.y - palm.cy.baseVal.value) < 0.1;
+    });
+  });
+  assert.ok(inward, '光束没有向合掌处汇聚');
+
+  // 文本超过一屏时自动跟着末尾滚动；背景任务不会打断合掌，滚回上方也不会被拉回去。
+  await application.evaluate(() => {
+    const c = globalThis.__dragonGirlTest;
+    c.notify('complete', '测试：后台任务已完成');
+    c.showExpression('happy');
+  });
+  await until(() => bubble.evaluate(() => {
+    const pane = document.querySelector('#bubble-content');
+    return pane.scrollTop > 0 && pane.scrollHeight - pane.clientHeight - pane.scrollTop <= 2;
+  }), '长祷文没有自动滚动到最新文字');
+  assert.equal(await character.getAttribute('data-expression'), 'prayer', '祷文还没打完就结束了合掌');
+  assert.equal(await page.locator('#prayer-portrait').isVisible(), true, '祈祷式编程没有显示合掌姿势');
+  assert.equal(await application.evaluate(() => globalThis.__dragonGirlTest.windows.get('bubble').isVisible()), true);
+  await page.screenshot({ path: path.join(root, '.artifacts/prayer-energy.png'), omitBackground: true });
+  const beforeReview = await bubble.evaluate(() => {
+    document.querySelector('#bubble-content').scrollTop = 0;
+    return document.querySelector('#message').textContent.length;
+  });
+  await until(() => message.textContent().then((value) => value.length > beforeReview + 5), '回看上文时停止了打字');
+  assert.equal(await bubble.locator('#bubble-content').evaluate((pane) => pane.scrollTop), 0, '打字改变了回看位置');
+  await bubble.screenshot({ path: path.join(root, '.artifacts/prayer-typing.png'), omitBackground: true });
+
+  // 让真实计时走到最后一个字；没有 Codex 宿主时仍完整打完并自动收势、关气泡。
+  await until(() => message.textContent().then((value) => value === PRAYER_TEXT), '祷文没有完整打完', 45000);
+  const prayerTypingMs = Date.now() - prayerStarted;
+  await until(() => character.getAttribute('data-expression').then((value) => value === null), '祷文打完后没有恢复原画');
+  assert.equal(await energy.isVisible(), false, '收势后光效仍在播放');
+  await until(() => application.evaluate(() => !globalThis.__dragonGirlTest.bubbleVisible), '祷文结束后没有自动收起气泡');
+
+  // 再次点击从第一字开始；中途收起会取消计时，旧文字和动作不会残留。
+  await application.evaluate(() => {
+    globalThis.__dragonGirlTest.buildMenu().items.find((item) => item.label === '祈祷式编程').click();
+  });
+  await until(() => message.textContent().then((value) => value.length > 0 && value.length < 30 && PRAYER_TEXT.startsWith(value)), '再次祈祷没有从头打字');
+  // 先确认第二轮确实开始，再切换减少动态效果，验证飞行停止并保留静态光晕。
+  await until(() => energy.isVisible(), '再次祈祷没有亮起光效');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await until(async () => await energy.isVisible() && await energy.evaluate((svg) => svg.getAnimations({ subtree: true }).length === 0), '减少动态效果后光束仍在飞行');
+  await bubble.locator('#bubble').click();
+  await until(() => bubble.locator('body').getAttribute('data-typing').then((value) => value === null), '收起后仍在打字');
+  await until(() => character.getAttribute('data-expression').then((value) => value === null), '收起后仍保持合掌');
+  assert.equal(await energy.isVisible(), false, '收起气泡后仍有光效');
+  assert.equal(await application.evaluate(() => Boolean(globalThis.__dragonGirlTest.prayerWave)), false, '手动取消触发了震荡波');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  // 还原祈祷用例的设置，后续四角菜单保持原先固定姿势的测试条件。
+  await application.evaluate((_, settings) => {
+    const c = globalThis.__dragonGirlTest;
+    c.setAppearance({ ...c.appearance, settings });
+  }, beforePrayerSettings);
 
   // 用户主动选择大小时应正常调整原生窗口，不能因移除菜单扩窗而只放大网页中的图片。
   await openMenu();
@@ -171,6 +283,26 @@ try {
   assert.equal(hidden.visible, false);
   assert.equal(hidden.interactive, false);
   assert.deepEqual(hidden.bounds, before.bounds);
+  // 触发实际交给托盘的菜单回调，收起的龙娘也能出现并播放祈祷。
+  await application.evaluate(() => {
+    const c = globalThis.__dragonGirlTest;
+    const setContextMenu = c.tray.setContextMenu;
+    let trayMenu;
+    c.tray.setContextMenu = (menu) => {
+      trayMenu = menu;
+      return setContextMenu.call(c.tray, menu);
+    };
+    try {
+      c.menuKey = null;
+      c.updateMenu();
+    } finally {
+      c.tray.setContextMenu = setContextMenu;
+    }
+    trayMenu.items.find((item) => item.label === '表情').submenu.items.find((item) => item.label === '祈祷').click();
+  });
+  await until(async () => (await snapshot()).visible && await page.locator('#prayer-portrait').isVisible(), '收起后从托盘选择祈祷没有显示');
+  await application.evaluate(() => globalThis.__dragonGirlTest.hide());
+  await until(() => page.locator('#character').getAttribute('data-expression').then((value) => value === null), '收起后没有结束祈祷');
   await application.evaluate(() => globalThis.__dragonGirlTest.show());
   assert.equal(await page.locator('#character').getAttribute('data-expression'), null);
   // 四角连续开关必须保持人物窗口与屏幕位置不变，尤其覆盖靠右时菜单向左展开的情况。
@@ -198,8 +330,8 @@ try {
   }
   assert.deepEqual(errors, []);
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
-  await fs.writeFile(path.join(root, '.artifacts/menu-report.json'), JSON.stringify({ passed: true, platform: process.platform, before, errors }, null, 2));
-  console.log('原生菜单验证通过：展开和关闭不移动、不缩放、不隐藏人物，四角菜单完整展开、二级动作、主动缩放、跟随暂停、表情与穿透恢复、收起关闭。');
+  await fs.writeFile(path.join(root, '.artifacts/menu-report.json'), JSON.stringify({ passed: true, platform: process.platform, before, prayerTypingMs, errors }, null, 2));
+  console.log('原生菜单验证通过：四角展开、二级动作、主动缩放、跟随暂停、祈祷合掌、逐字播放全文与回看、表情与穿透恢复、收起关闭。');
 } finally {
   await application?.close().catch(() => {});
   await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

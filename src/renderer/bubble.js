@@ -15,6 +15,7 @@ let lastInteractive = null;
 let renderedRevision = -1;
 let renderedShowId = -1;
 let animatedShowId = -1;
+let prayerTyping = null;
 
 // 所有动态内容都通过文本节点写入，账户名称与自定义模板不能注入 HTML。
 function element(tag, className, text) {
@@ -122,8 +123,9 @@ function measure(model, scrollTop = 0) {
   contentPane.scrollTop = Math.min(scrollTop, Math.max(0, contentPane.scrollHeight - contentPane.clientHeight));
   const label = model.kind === 'usage'
     ? '点击查看一句语录，点击龙娘可收起气泡'
+    : model.kind === 'prayer' ? '点击收起祷文，可用滚轮回看'
     : '点击收起龙娘的气泡';
-  bubble.setAttribute('aria-label', scrollable
+  bubble.setAttribute('aria-label', scrollable && model.kind !== 'prayer'
     ? `${label}，长内容可用滚轮查看`
     : label);
   bridge.measureBubble({
@@ -131,6 +133,46 @@ function measure(model, scrollTop = 0) {
     width: model.maxWidth,
     height: model.maxHeight,
   });
+}
+
+// 收起或更换内容时清理唯一的计时器，旧祷文不能再写入新的气泡。
+function stopPrayerTyping() {
+  if (!prayerTyping) return;
+  clearTimeout(prayerTyping.timer);
+  prayerTyping = null;
+  delete document.body.dataset.typing;
+  message.setAttribute('aria-live', 'polite');
+}
+
+// 每次只写一个字，标点和分段留出停顿；用户滚回上方时保留阅读位置。
+function typePrayerCharacter() {
+  const typing = prayerTyping;
+  if (!typing) return;
+  const atEnd = contentPane.scrollHeight - contentPane.clientHeight - contentPane.scrollTop <= 2;
+  const letter = typing.letters[typing.next++];
+  typing.node.appendData(letter);
+  if (atEnd) contentPane.scrollTop = contentPane.scrollHeight;
+  if (typing.next === typing.letters.length) {
+    // 给最后一个字留出一拍，再通知主进程释放震荡波；中途收起会取消计时。
+    delete document.body.dataset.typing;
+    message.setAttribute('aria-live', 'polite');
+    typing.timer = setTimeout(() => bridge.prayerTyped(typing.id), 210);
+    return;
+  }
+  const pause = /[。！？]/.test(letter) ? 220 : letter === '\n' ? 150 : /[，；：]/.test(letter) ? 120 : 55;
+  typing.timer = setTimeout(typePrayerCharacter, pause);
+}
+
+// 在气泡完成排版后开打，正文用纯文本写入，逐字变化不打扰屏幕阅读器。
+function startPrayerTyping(model) {
+  const node = document.createTextNode('');
+  message.setAttribute('aria-live', 'off');
+  message.replaceChildren(node);
+  document.body.dataset.typing = 'true';
+  prayerTyping = {
+    id: model.typingId, node, letters: Array.from(model.text), next: 0,
+    timer: setTimeout(typePrayerCharacter, 220),
+  };
 }
 
 // 文字和椭圆轮廓共用交互入口，用量切换为一条语录，再点收起。
@@ -186,8 +228,11 @@ function render(model) {
   if (model.revision < renderedRevision || showId < renderedShowId) return;
   const opening = showId !== renderedShowId;
   const keepVisible = !opening && document.body.dataset.ready === 'true';
-  const scrollTop = !opening && document.body.dataset.kind === 'usage' && model.kind === 'usage'
-    ? contentPane.scrollTop : 0;
+  const sameTyping = prayerTyping !== null && prayerTyping.id === model.typingId;
+  const keepScroll = !opening && document.body.dataset.kind === model.kind &&
+    (model.kind === 'usage' || (model.kind === 'prayer' && (sameTyping || model.typingId == null)));
+  const scrollTop = keepScroll ? contentPane.scrollTop : 0;
+  if (!sameTyping) stopPrayerTyping();
   if (opening) {
     renderedShowId = showId;
     // 只有新一轮打开才结束旧动画，后台更新不能打断正在进行的淡入或把透明度跳回零。
@@ -206,13 +251,14 @@ function render(model) {
     document.documentElement.style.setProperty('--max-height', `${model.maxHeight}px`);
     plan.hidden = true;
     if (model.usage) renderUsage(model.usage);
-    else message.textContent = model.text;
+    else if (!sameTyping) message.textContent = model.typingId == null ? model.text : '';
     measure(model, scrollTop);
   }
   drawOutline(model);
   const measured = model.measuredRevision === model.revision;
   const ready = keepVisible || measured;
   document.body.dataset.ready = String(ready);
+  if (ready && model.typingId != null && !sameTyping) startPrayerTyping(model);
   if (!measured || animatedShowId === showId) return;
   animatedShowId = showId;
   if (showId === 0 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -242,6 +288,7 @@ async function start() {
   });
   window.addEventListener('pointermove', (event) => routeCursor({ x: event.clientX, y: event.clientY }));
   window.addEventListener('pointerleave', () => routeCursor({ x: -1, y: -1 }));
+  window.addEventListener('pagehide', stopPrayerTyping);
   bubble.addEventListener('click', advanceFromContent);
   outline.addEventListener('click', advanceFromContent);
   bubble.addEventListener('keydown', (event) => {

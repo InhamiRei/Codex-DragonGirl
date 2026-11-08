@@ -30,6 +30,11 @@ contextBridge.exposeInMainWorld(
     closeBubble: () => ipcRenderer.send('dg:close-bubble'),
     // 仅发送气泡交互意图，由主进程根据当前内容决定显示语录还是收起。
     advanceBubble: () => ipcRenderer.send('dg:advance-bubble'),
+    // 气泡只回报当前祈祷播放编号，角色动作由主进程统一收尾。
+    prayerTyped: (typingId) => ipcRenderer.send('dg:prayer-typed', typingId),
+    // 特效页只接收本地波心和回报动画结束。
+    onPrayerWave: (listener) => subscribe('dg:prayer-wave', listener),
+    prayerWaveFinished: () => ipcRenderer.send('dg:prayer-wave-finished'),
     measureBubble: (measurement) => ipcRenderer.send('dg:bubble-measured', measurement),
     assetError: () => ipcRenderer.send('dg:asset-error'),
     onCursor: (listener) => subscribe('dg:cursor', listener),
