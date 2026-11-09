@@ -11,6 +11,14 @@ const message = document.getElementById('message');
 const plan = document.getElementById('plan');
 const quotaTitle = document.getElementById('quota-title');
 const tail = document.getElementById('tail');
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const prayerWords = new Intl.Segmenter('zh-CN', { granularity: 'word' });
+const prayerGraphemes = new Intl.Segmenter('zh-CN', { granularity: 'grapheme' });
+// 二十秒包含气泡开场和最后一个字的渐显。标点用稍长的节拍，空格快速带过。
+const PRAYER_PLAYBACK_MS = 20_000;
+const PRAYER_START_MS = 100;
+const PRAYER_END_MS = 400;
+const PRAYER_BEATS = { '，': 1.28, '、': 1.28, '；': 1.28, '：': 1.28, '。': 1.65, '！': 1.65, '？': 1.65, '\n': 1.55, ' ': 0.5 };
 let lastInteractive = null;
 let renderedRevision = -1;
 let renderedShowId = -1;
@@ -135,43 +143,79 @@ function measure(model, scrollTop = 0) {
   });
 }
 
-// 收起或更换内容时清理唯一的计时器，旧祷文不能再写入新的气泡。
+// 收起或更换内容时取消动画帧和预留字宽，旧祷文不能再写入新的气泡。
 function stopPrayerTyping() {
   if (!prayerTyping) return;
-  clearTimeout(prayerTyping.timer);
+  cancelAnimationFrame(prayerTyping.frame);
   prayerTyping = null;
   delete document.body.dataset.typing;
+  delete message.dataset.pending;
   message.setAttribute('aria-live', 'polite');
 }
 
-// 每次只写一个字，标点和分段留出停顿；用户滚回上方时保留阅读位置。
-function typePrayerCharacter() {
-  const typing = prayerTyping;
-  if (!typing) return;
-  const atEnd = contentPane.scrollHeight - contentPane.clientHeight - contentPane.scrollTop <= 2;
-  const letter = typing.letters[typing.next++];
-  typing.node.appendData(letter);
-  if (atEnd) contentPane.scrollTop = contentPane.scrollHeight;
-  if (typing.next === typing.letters.length) {
-    // 给最后一个字留出一拍，再通知主进程释放震荡波；中途收起会取消计时。
-    delete document.body.dataset.typing;
-    message.setAttribute('aria-live', 'polite');
-    typing.timer = setTimeout(() => bridge.prayerTyped(typing.id), 210);
+// 新行出现后缓缓滚到末尾。对比上次写入的坐标，用户开始回看时让出滚动控制。
+function followPrayerEnd(typing, now, scrollTop, atEnd) {
+  const following = atEnd || scrollTop === typing.followedTop;
+  const remaining = following ? contentPane.scrollHeight - contentPane.clientHeight - scrollTop : 0;
+  if (remaining <= 0) {
+    typing.followedTop = null;
     return;
   }
-  const pause = /[。！？]/.test(letter) ? 220 : letter === '\n' ? 150 : /[，；：]/.test(letter) ? 120 : 55;
-  typing.timer = setTimeout(typePrayerCharacter, pause);
+  // 按帧间隔减速，最后至少滚动一像素，避免取整后停在终点前。
+  const fraction = reducedMotion.matches ? 1 : 1 - Math.exp((typing.frameTime - now) / 45);
+  contentPane.scrollTop = scrollTop + Math.max(1, remaining * fraction);
+  typing.followedTop = contentPane.scrollTop;
+}
+
+// 按绘制帧逐字显现并平滑跟随；轻微迟到可补偿，长时间挂起后也只补一个字。
+function typePrayerFrame(now) {
+  const typing = prayerTyping;
+  if (!typing) return;
+  const reveal = now >= typing.nextAt;
+  if (reveal && typing.next === typing.letters.length) {
+    // 最后的渐显和停留结束后才通知主进程，让气泡跟着震荡波收起。
+    delete document.body.dataset.typing;
+    message.setAttribute('aria-live', 'polite');
+    bridge.prayerTyped(typing.id);
+    return;
+  }
+  if (reveal || typing.followedTop !== null) {
+    const scrollTop = contentPane.scrollTop;
+    const atEnd = contentPane.scrollHeight - contentPane.clientHeight - scrollTop <= 2;
+    if (reveal) {
+      const { letter, pending } = typing.letters[typing.next++];
+      message.append(element('span', 'prayer-letter', letter));
+      message.dataset.pending = pending;
+      typing.nextAt = typing.next === typing.letters.length
+        ? now + PRAYER_END_MS
+        : Math.max(typing.nextAt, now - 16) + typing.beatMs * (PRAYER_BEATS[letter] ?? 1);
+    }
+    followPrayerEnd(typing, now, scrollTop, atEnd);
+  }
+  typing.frameTime = now;
+  typing.frame = requestAnimationFrame(typePrayerFrame);
 }
 
 // 在气泡完成排版后开打，正文用纯文本写入，逐字变化不打扰屏幕阅读器。
 function startPrayerTyping(model) {
-  const node = document.createTextNode('');
+  // 按字素播放，给同一单词和不能开行的标点预留字宽，避免半个单词打到一半才换行。
+  const letters = Array.from(prayerWords.segment(model.text)).flatMap(({ segment: word, index }) => {
+    const punctuation = model.text.slice(index + word.length).match(/^[，。！？、；：]+/)?.[0] ?? '';
+    return Array.from(prayerGraphemes.segment(word), ({ segment: letter, index: offset }) => ({
+      letter,
+      pending: word.slice(offset + letter.length) + punctuation,
+    }));
+  });
+  // 按节拍分配正文时长。短句也沿用接近默认祷文的语速。
+  const beats = letters.slice(0, -1).reduce((sum, { letter }) => sum + (PRAYER_BEATS[letter] ?? 1), 0);
+  const beatMs = Math.min(60, (PRAYER_PLAYBACK_MS - PRAYER_START_MS - PRAYER_END_MS) / Math.max(1, beats));
   message.setAttribute('aria-live', 'off');
-  message.replaceChildren(node);
+  message.replaceChildren();
   document.body.dataset.typing = 'true';
+  const now = performance.now();
   prayerTyping = {
-    id: model.typingId, node, letters: Array.from(model.text), next: 0,
-    timer: setTimeout(typePrayerCharacter, 220),
+    id: model.typingId, letters, beatMs, next: 0, nextAt: now + PRAYER_START_MS, frameTime: now, followedTop: null,
+    frame: requestAnimationFrame(typePrayerFrame),
   };
 }
 
@@ -261,7 +305,7 @@ function render(model) {
   if (ready && model.typingId != null && !sameTyping) startPrayerTyping(model);
   if (!measured || animatedShowId === showId) return;
   animatedShowId = showId;
-  if (showId === 0 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (showId === 0 || reducedMotion.matches) return;
   for (const node of [outline, bubble, tail])
     node.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
 }

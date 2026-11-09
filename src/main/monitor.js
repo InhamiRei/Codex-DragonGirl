@@ -14,6 +14,7 @@ import { digest } from '../core/usage-parser.js';
 import { dialogueLine } from '../shared/dialogue.js';
 import { nativeBridgePath } from '../core/platform.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
+const QUOTA_FRESH_MS = 120000;
 
 // 多实例采集调度器：原生窗口、官方额度、历史索引彼此独立，任一路失败不阻塞其他数据。
 export class Monitor extends EventEmitter {
@@ -42,7 +43,8 @@ export class Monitor extends EventEmitter {
     this.settings = await this.settingsStore.load();
     if (this.stopped) return;
     try {
-      const saved = JSON.parse(await fs.readFile(path.join(this.directory, 'snapshots.json'), 'utf8'));
+      const data = await fs.readFile(path.join(this.directory, 'snapshots.json'), 'utf8');
+      const saved = JSON.parse(data);
       // 缓存仅恢复仍在使用的账户字段，旧版废弃统计不会继续发布或保存。
       for (const [id, value] of Object.entries(saved.readings || {}))
         this.readings.set(id, {
@@ -54,6 +56,7 @@ export class Monitor extends EventEmitter {
           loading: false,
         });
       this.alerts = new AlertTracker(saved.alerts || []);
+      this.savedCacheData = data;
     } catch {}
     if (this.stopped) return;
     this.worker = new Worker(new URL('../workers/usage-worker.js', import.meta.url), {
@@ -184,10 +187,15 @@ export class Monitor extends EventEmitter {
     try {
       for (const i of this.instances) {
         if (this.stopped) return;
+        // 账户接口有新鲜读数时，界面会采用该读数，无需另行遍历会话目录。
+        const quota = this.readings.get(i.id)?.quota;
+        if (quota && Date.now() - quota.capturedAt <= QUOTA_FRESH_MS) continue;
         const recent = await readRecentQuota(i.home).catch(() => null);
-        if (recent) this.logs.set(i.id, recent);
+        if (recent) {
+          this.logs.set(i.id, recent);
+          this.publish();
+        }
       }
-      this.publish();
     } finally {
       this.readingLogs = false;
     }
@@ -199,7 +207,6 @@ export class Monitor extends EventEmitter {
     if (this.stopped) return Promise.reject(new Error('应用正在退出'));
     this.refreshPromise = this.refreshBatch(force, details).finally(() => {
       this.refreshPromise = null;
-      this.publish();
     });
     return this.refreshPromise;
   }
@@ -230,7 +237,8 @@ export class Monitor extends EventEmitter {
       await Promise.all([consume(), consume()]);
       await this.saveCache().catch(() => {});
     } finally {
-      this.publish();
+      // 退避期间没有账户更新，额度过期状态由现有目录和索引心跳发布。
+      if (targets.length) this.publish();
     }
     return result;
   }
@@ -346,8 +354,11 @@ export class Monitor extends EventEmitter {
     this.cacheQueue = (this.cacheQueue || Promise.resolve())
       .catch(() => {})
       .then(async () => {
+        // 在串行队列内对比最后一次成功写入，空闲检查和相同缓存的退出保存不触盘。
+        if (data === this.savedCacheData) return;
         await fs.writeFile(file + '.tmp', data, { mode: 0o600 });
         await fs.rename(file + '.tmp', file);
+        this.savedCacheData = data;
       });
     await this.cacheQueue;
   }
@@ -355,6 +366,13 @@ export class Monitor extends EventEmitter {
   // Worker 推送使用固定字段，初始扫描的历史事件不触发声音。
   workerMessage(m) {
     if (this.stopped) return;
+    // 手动扫描和自动扫描失败都应解除忙碌状态，下次成功后重新发布汇总。
+    if (m.type === 'index-error' && (!m.id || m.operation === 'scan' || m.operation === 'rebuild')) {
+      this.scanning = false;
+      this.summaryRevision = null;
+      this.indexError = '本机账本扫描失败，请重试刷新';
+      this.publish();
+    }
     if (m.id) {
       const promise = this.pending.get(m.id);
       if (promise) {
@@ -371,10 +389,6 @@ export class Monitor extends EventEmitter {
     if (m.type === 'thread-state') this.activeTasks.set(`${m.home}:${m.thread}`, m);
     if (m.type === 'thread-states')
       this.activeTasks = new Map(m.states.map((state) => [`${state.home}:${state.thread}`, state]));
-    if (m.type === 'index-error') {
-      this.scanning = false;
-      this.indexError = '本机账本扫描失败，请重试刷新';
-    }
     if (m.type === 'task') {
       const i = this.instances.find((i) => i.id === m.task.home);
       if (i && m.task.source === '主任务') {
@@ -475,6 +489,7 @@ export class Monitor extends EventEmitter {
   }
   // 按实际新鲜度选择数据，不将几小时前的日志当作实时额度。
   snapshot() {
+    const now = Date.now();
     return {
       settings: this.settings,
       instances: this.instances.map((i) => {
@@ -482,24 +497,24 @@ export class Monitor extends EventEmitter {
           log = this.logs.get(i.id);
         let quota = r.quota;
         if (
-          (!quota || Date.now() - quota.capturedAt > 120000) &&
+          (!quota || now - quota.capturedAt > QUOTA_FRESH_MS) &&
           log?.quota &&
-          Date.now() - log.quota.capturedAt <= 120000 &&
+          now - log.quota.capturedAt <= QUOTA_FRESH_MS &&
           (!r.identity || r.identity === log.account)
         )
           quota = { ...log.quota, source: r.identity ? log.quota.source : '会话快照（账户待核实）' };
-        const stale = !quota || Date.now() - quota.capturedAt > 120000;
+        const stale = !quota || now - quota.capturedAt > QUOTA_FRESH_MS;
         const tasks = [...this.activeTasks.values()].filter((t) => t.home === i.id);
         return {
           ...publicInstance({ ...i, processes: this.processes.filter((p) => p.home === i.home) }),
           ...r,
           quota,
           stale,
-          taskState: tasks.some((t) => t.status === 'working' && Date.now() - (t.lastAt || 0) < 600000)
+          taskState: tasks.some((t) => t.status === 'working' && now - (t.lastAt || 0) < 600000)
             ? 'working'
-            : tasks.some((t) => t.status === 'error' && Date.now() - (t.lastAt || 0) < 600000)
+            : tasks.some((t) => t.status === 'error' && now - (t.lastAt || 0) < 600000)
               ? 'error'
-              : tasks.some((t) => t.status === 'complete' && Date.now() - (t.lastAt || 0) < 600000)
+              : tasks.some((t) => t.status === 'complete' && now - (t.lastAt || 0) < 600000)
                 ? 'complete'
                 : 'unknown',
         };
@@ -514,12 +529,12 @@ export class Monitor extends EventEmitter {
       projects: this.summary?.projects || [],
       summary: this.summary
         ? Object.fromEntries(
-            Object.entries(this.summary).filter(([k]) => !['threads', 'tasks', 'projects'].includes(k)),
+            Object.entries(this.summary).filter(([k]) => !['threads', 'projects'].includes(k)),
           )
         : null,
       today: this.today
         ? Object.fromEntries(
-            Object.entries(this.today).filter(([k]) => !['threads', 'tasks', 'projects'].includes(k)),
+            Object.entries(this.today).filter(([k]) => !['threads', 'projects'].includes(k)),
           )
         : null,
     };

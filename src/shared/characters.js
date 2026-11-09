@@ -8,10 +8,10 @@ export const CHARACTERS = Object.freeze([
 export const MARO_ASSET = ORIGIN + CHARACTERS[1].image;
 export const HAIR_FRAMES = 30;
 export const MARO_FRAME_SIZE = 1254;
-// 动作原图保持原生 1254 像素；首尾复用待机图，避免保存重复文件，播放仍为三十帧。
+// 动作帧使用原生 1254 像素的无损 WebP，首尾复用待机图，播放仍为三十帧。
 export const MARO_HAIR_ASSETS = Object.freeze(Array.from({ length: HAIR_FRAMES }, (_, index) =>
   index === 0 || index === HAIR_FRAMES - 1 ? MARO_ASSET
-    : ORIGIN + `assets/characters/maro/hair/frame-${String(index + 1).padStart(2, '0')}.png`));
+    : ORIGIN + `assets/characters/maro/hair/frame-${String(index + 1).padStart(2, '0')}.webp`));
 // 抬手和放手较快，沿发束整理与偷瞄稍停留；整段五秒，不把所有帧机械地等速切换。
 export const HAIR_FRAME_DURATIONS = Object.freeze([
   180, 90, 100, 110, 120, 130, 140, 150, 160, 200,

@@ -15,9 +15,21 @@ body[data-layout="usage"] .bubble-header { display: flex; }
 .message { flex-shrink: 0; width: 100%; max-width: 100%; margin: 0; font-size: 13px; line-height: 1.6; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; }
 body[data-layout="text"] .message { text-wrap: balance; }
 body[data-kind="prayer"] { --prayer-line-height: 20px; }
-body[data-kind="prayer"] .bubble-content { height: min(calc(4 * var(--prayer-line-height)), 100%); overscroll-behavior: contain; }
+body[data-kind="prayer"] .bubble-content { height: min(calc(4 * var(--prayer-line-height)), 100%); overscroll-behavior: contain; overflow-anchor: none; }
 body[data-kind="prayer"] .message { line-height: var(--prayer-line-height); text-align: left; text-wrap: wrap; }
-body[data-typing="true"] .message::after { content: ""; display: inline-block; height: 1em; border-inline-start: 1px solid var(--ink); vertical-align: text-bottom; }
+.message[data-pending]::after { content: attr(data-pending); visibility: hidden; }
+@media (prefers-reduced-motion: no-preference) {
+  .prayer-letter { animation: prayer-letter-reveal 185ms linear; }
+}
+@keyframes prayer-letter-reveal {
+  from, to {
+    mask-image: linear-gradient(90deg, #000 33.333%, transparent 66.667%);
+    mask-size: 300% 100%;
+    mask-repeat: no-repeat;
+  }
+  from { mask-position: 100% 0; opacity: 0; }
+  to { mask-position: 0 0; opacity: 1; }
+}
 body[data-layout="usage"] .message { width: 160px; white-space: normal; }
 .usage { display: grid; justify-items: center; gap: 4px; width: 100%; }
 .quota { display: grid; width: 100%; --meter-color: var(--text); --meter-track: #f0ecf7; --meter-border: #d4cbe6; }

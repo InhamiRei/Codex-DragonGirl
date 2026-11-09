@@ -74,6 +74,11 @@ try {
   await until(() => application.evaluate(() => globalThis.__dragonGirlTest?.ready.size === 2), '角色没有启动');
   page = application.windows().find((item) => item.url().endsWith('/character.html'));
   page.on('pageerror', (error) => errors.push(error.message));
+  const hairRequests = new Set();
+  // 在真实页面区分待机表情与捋发素材请求，防止切换角色时又抢先解码全部动作帧。
+  page.on('request', (request) => {
+    if (request.url().includes('/assets/characters/maro/hair/')) hairRequests.add(request.url());
+  });
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await application.evaluate(({ app }, asset) => {
     const c = globalThis.__dragonGirlTest;
@@ -203,8 +208,10 @@ try {
   assert.ok(natural.reopened, '没有完成一次自然眨眼并恢复');
   await appearance({ eyeTracking: true, blinkEnabled: true });
   await look(8000, 160);
+  assert.equal(hairRequests.size, 0, '工作中待机和点击表情不应提前加载捋发素材');
   await application.evaluate(() => globalThis.__dragonGirlTest.showExpression('hair', { preview: true }));
   await until(() => page.locator('#character').getAttribute('data-sprite-state').then((state) => state === 'hair'), '捋发未开始');
+  assert.equal(hairRequests.size, 28, '捋发时必须加载全部独立动作帧');
   assert.equal(await page.locator('.maro-eye-layer:not([hidden])').count(), 0, '眼部贴层遮住了捋发表情');
   await appearance({ motion: false, eyeTracking: false, blinkEnabled: false });
   assert.equal(await page.locator('.maro-eye-layer:not([hidden])').count(), 0);

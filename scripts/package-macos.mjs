@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { verifyAudioLibrary } from '../src/core/audio-library-store.js';
+import { copyReleasePayload } from './release-payload.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = path.join(root, 'output');
 const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
@@ -32,24 +33,7 @@ for (const notice of ['LICENSE', 'LICENSES.chromium.html'])
     path.join(root, 'node_modules/electron/dist', notice),
     path.join(contents, 'Resources', notice),
   );
-for (const folder of ['src', 'assets'])
-  await fs.cp(path.join(root, folder), path.join(application, folder), { recursive: true });
-await fs.mkdir(path.join(application, 'native/bin'), { recursive: true });
-await fs.copyFile(
-  path.join(root, 'native/bin/dragongirl-native'),
-  path.join(application, 'native/bin/dragongirl-native'),
-);
-await fs.copyFile(path.join(root, 'native/bin/dragongirl-startup'), path.join(application, 'native/bin/dragongirl-startup'));
-await fs.mkdir(path.join(application, 'scripts'), { recursive: true });
-await fs.copyFile(
-  path.join(root, 'scripts/native-harness.mjs'),
-  path.join(application, 'scripts/native-harness.mjs'),
-);
-const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
-delete pkg.devDependencies;
-delete pkg.scripts;
-await fs.writeFile(path.join(application, 'package.json'), JSON.stringify(pkg, null, 2));
-await fs.copyFile(path.join(root, 'README.md'), path.join(application, 'README.md'));
+await copyReleasePayload(root, application);
 await fs.rename(path.join(contents, 'MacOS/Electron'), path.join(contents, 'MacOS/CodexDragonGirl'));
 const plist = path.join(contents, 'Info.plist');
 for (const [key, value] of Object.entries({

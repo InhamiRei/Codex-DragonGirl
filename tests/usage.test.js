@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -209,6 +210,44 @@ test('增量账本处理半行和重复扫描，不串账号', async (t) => {
   assert.equal(ledger.report({ home: 'a' }).total, 170);
   assert.equal(ledger.report({ home: 'b' }).total, 250);
   assert.equal(ledger.report().total, 420);
+});
+
+// 模拟跨重启的设备号变化，验证旧检查点迁移、偏移续读及同编号文件替换。
+test('重启后复用未变日志的旧检查点，追加时只读取新增内容', async (t) => {
+  const { dir, ledger } = await fixture(t);
+  const file = path.join(dir, 'reboot.jsonl');
+  const meta = event('session_meta', { id: 'reboot' }, 0);
+  await fs.writeFile(file, [meta, count(100, 2)].map(JSON.stringify).join('\n') + '\n');
+  await ledger.scanFile(file, 'home');
+  const saved = ledger.findFile.get(file);
+  const original = await fs.stat(file);
+  ledger.db.prepare('UPDATE files SET inode=? WHERE path=?').run(`${original.dev}:${original.ino}`, file);
+
+  let device = original.dev + 1;
+  let createdAt = original.birthtimeMs;
+  const stat = fs.stat.bind(fs);
+  // 两次设备号变化模拟重启，创建时间变化模拟同一个编号被新文件复用。
+  t.mock.method(fs, 'stat', async (target, ...args) => {
+    const info = await stat(target, ...args);
+    if (target === file) Object.assign(info, { dev: device, ino: original.ino, birthtimeMs: createdAt });
+    return info;
+  });
+  const read = t.mock.method(fsSync, 'createReadStream');
+  await ledger.scanFile(file, 'home');
+  assert.equal(read.mock.callCount(), 0, '旧检查点迁移时不应重新打开日志');
+  assert.equal(ledger.report().total, 100);
+
+  device++;
+  await fs.appendFile(file, JSON.stringify(count(170, 3)) + '\n');
+  await ledger.scanFile(file, 'home');
+  assert.equal(read.mock.calls[0].arguments[1].start, saved.offset);
+  assert.equal(ledger.report().total, 170);
+
+  createdAt += 1000;
+  await fs.writeFile(file, [meta, count(250, 2), count(250, 3), count(250, 4)].map(JSON.stringify).join('\n') + '\n');
+  await ledger.scanFile(file, 'home');
+  assert.equal(read.mock.calls[1].arguments[1].start, 0);
+  assert.equal(ledger.report().total, 250);
 });
 
 // 明细记录与累计快照同存时只算一份；更早的旧格式用量必须保留。

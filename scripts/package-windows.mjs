@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { verifyAudioLibrary } from '../src/core/audio-library-store.js';
+import { copyReleasePayload } from './release-payload.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 if (process.platform !== 'win32' || process.arch !== 'x64')
@@ -24,17 +25,7 @@ await fs.mkdir(output, { recursive: true });
 await fs.rm(bundle, { recursive: true, force: true });
 await fs.cp(path.join(root, 'node_modules/electron/dist'), bundle, { recursive: true });
 await fs.rename(path.join(bundle, 'electron.exe'), path.join(bundle, 'DragonGirl.exe'));
-await fs.mkdir(application, { recursive: true });
-for (const folder of ['src', 'assets'])
-  await fs.cp(path.join(root, folder), path.join(application, folder), { recursive: true });
-await fs.copyFile(path.join(root, 'README.md'), path.join(application, 'README.md'));
-await fs.mkdir(path.join(application, 'native/bin'), { recursive: true });
-await fs.copyFile(native, path.join(application, 'native/bin/dragongirl-native.exe'));
-await fs.copyFile(path.join(root, 'native/bin/dragongirl-startup.exe'), path.join(application, 'native/bin/dragongirl-startup.exe'));
-const runtimePackage = { ...pkg };
-delete runtimePackage.scripts;
-delete runtimePackage.devDependencies;
-await fs.writeFile(path.join(application, 'package.json'), JSON.stringify(runtimePackage, null, 2));
+await copyReleasePayload(root, application, '.exe');
 await fs.writeFile(path.join(bundle, '使用说明.txt'), '\ufeff' + [
   'GPT龙娘 · 作者 Hey、小怪兽',
   '请先完整解压 ZIP，再双击 DragonGirl.exe。不要只拖出单个 EXE。',

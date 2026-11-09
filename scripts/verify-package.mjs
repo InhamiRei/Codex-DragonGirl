@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { verifyReleasePayload } from './release-payload.mjs';
 const root = process.cwd(),
   output = path.join(root, 'output'),
   manifest = JSON.parse(await fs.readFile(path.join(output, 'release-manifest.json'), 'utf8')),
@@ -15,22 +16,6 @@ function run(command, args, env = process.env) {
     throw new Error(`${path.basename(command)}: ${result.stderr || result.stdout}`);
   return result.stdout;
 }
-// 递归验证打包源码与当前源码完全一致，防止旧产物被当作本次版本。
-async function compareFolder(relative, packaged) {
-  const sourceNames = (await fs.readdir(path.join(root, relative))).sort();
-  const packagedNames = (await fs.readdir(path.join(packaged, relative))).sort();
-  if (JSON.stringify(sourceNames) !== JSON.stringify(packagedNames))
-    throw new Error(`安装包文件清单不一致：${relative}`);
-  for (const e of await fs.readdir(path.join(root, relative), { withFileTypes: true })) {
-    const name = path.join(relative, e.name);
-    if (e.isDirectory()) await compareFolder(name, packaged);
-    else {
-      const a = await fs.readFile(path.join(root, name)),
-        b = await fs.readFile(path.join(packaged, name));
-      if (!a.equals(b)) throw new Error(`安装包内容过期：${name}`);
-    }
-  }
-}
 try {
   for (const f of manifest.files) {
     const data = await fs.readFile(path.join(output, f.name));
@@ -41,21 +26,7 @@ try {
   run('/usr/bin/ditto', ['-x', '-k', path.join(output, zip.name), temp]);
   const application = path.join(temp, 'Codex 龙娘.app'),
     code = path.join(application, 'Contents/Resources/app');
-  await compareFolder('src', code);
-  await compareFolder('assets', code);
-  // 新发行包保留 README，已删除的文档目录与更新日志不能从旧产物混入。
-  const packagedNames = await fs.readdir(code);
-  if (packagedNames.includes('docs') || packagedNames.includes('CHANGELOG.md'))
-    throw new Error('安装包混入已删除的文档');
-  for (const binary of ['dragongirl-native', 'dragongirl-startup'])
-    if (!(await fs.readFile(path.join(root, 'native/bin', binary))).equals(await fs.readFile(path.join(code, 'native/bin', binary))))
-      throw new Error(`原生组件过期：${binary}`);
-  // 说明和版本信息也必须来自当前源码，避免文档修改后误用旧包。
-  if (!(await fs.readFile(path.join(root, 'README.md'))).equals(await fs.readFile(path.join(code, 'README.md'))))
-    throw new Error('安装包 README 过期');
-  const metadata = JSON.parse(await fs.readFile(path.join(code, 'package.json'), 'utf8'));
-  if (metadata.version !== manifest.version || metadata.author !== 'Hey、小怪兽')
-    throw new Error('安装包版本或作者不符');
+  await verifyReleasePayload(root, code, manifest.version);
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', application]);
   run('/usr/bin/hdiutil', ['verify', path.join(output, dmg.name)]);
   const mount = path.join(temp, 'mounted');

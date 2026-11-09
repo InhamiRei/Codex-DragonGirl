@@ -38,7 +38,7 @@
 
 ## 下载与安装
 
-前往 [Releases](https://github.com/InhamiRei/Codex-DragonGirl/releases/latest)，展开 **Assets**，按电脑系统选择文件。运行发行包不需要 Node.js、npm 或工程源码。
+前往 [v1.5.1 测试版](https://github.com/InhamiRei/Codex-DragonGirl/releases/tag/v1.5.1)，展开 **Assets**，按电脑系统选择文件。运行发行包不需要 Node.js、npm 或工程源码。
 
 | 电脑 | 下载文件 | 打开方法 |
 | --- | --- | --- |
@@ -83,7 +83,10 @@ Windows 跟随针对同一系统用户运行的 Codex / ChatGPT 桌面窗口。�
 ### v1.5.1
 
 - 新增龙娘「祈祷」表情和「祈祷式编程」入口，支持合掌、紫光汇聚和逐字祷文。
+- 默认祷文约 20 秒播完，文字连续渐显。气泡跟随新行滚动，向上回看时保留阅读位置。
 - 祷文播完后，气泡立即收起，渐变震荡波继续扫过 Codex 窗口并淡出。
+- 修复 macOS 重启后误判旧日志变化的问题，直接复用已建立的账本，后台仅处理新增或变化的日志。
+- 减少后台重复写盘和统计。麻吕捋发帧使用无损压缩，播放时按需加载。
 
 ### v1.5.0
 

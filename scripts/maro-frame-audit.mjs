@@ -31,6 +31,7 @@ try {
     const sprites = new CharacterSprites(document.createElement('div'), new Image(), () => {});
     const prepareStart = performance.now();
     await sprites.prepare();
+    await sprites.prepareHair();
     const prepareMilliseconds = performance.now() - prepareStart;
     const pages = [], frames = [], nativeFrames = [], metrics = [];
     // 审阅图缩至 512 像素便于比较，生产画布和打包原图始终是 1254 像素。

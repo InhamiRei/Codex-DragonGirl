@@ -130,9 +130,10 @@ if (!hasLock) {
         if (startup.reason === 'manual') await dashboard.open();
       }
       await reportLaunch('ready');
-      // 原生实点验收必须同时具备测试标记、显式参数和独立报告路径。
+      // 原生实点验收只从源码运行，发行包不携带调试脚本。
       if (
         testMode &&
+        !app.isPackaged &&
         process.argv.includes('--native-preview') &&
         path.isAbsolute(process.env.DRAGONGIRL_NATIVE_REPORT || '')
       ) {

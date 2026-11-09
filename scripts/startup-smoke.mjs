@@ -47,7 +47,16 @@ async function launch(reason) {
 }
 
 try {
-  await fs.mkdir(path.join(env.DRAGONGIRL_FIXTURE_HOME, '.codex/sessions'), { recursive: true });
+  const sessions = path.join(env.DRAGONGIRL_FIXTURE_HOME, '.codex/sessions');
+  await fs.mkdir(sessions, { recursive: true });
+  // 首次启动建立账本，第二次启动必须直接使用这份已落盘的用量。
+  const timestamp = new Date().toISOString();
+  await fs.writeFile(path.join(sessions, 'startup.jsonl'), [
+    { type: 'session_meta', timestamp, payload: { id: 'startup-fixture' } },
+    { type: 'token_usage_record', timestamp, payload: {
+      response_id: 'startup-response', usage: { input_tokens: 42, total_tokens: 42 },
+    } },
+  ].map(JSON.stringify).join('\n') + '\n');
   await writeStartupJson(path.join(data, 'settings.json'), { startupMode: 'codex', mode: 'follow' });
   await writeStartupJson(path.join(data, 'startup/config.json'), { version: 1, revision, mode: 'codex' });
   await publish();
@@ -56,6 +65,7 @@ try {
   assert.equal(await application.evaluate(() => !!globalThis.__dragonGirlApp.dashboard.window), false, '自动启动弹出了管理窗口');
   assert.equal(await application.evaluate(() => globalThis.__dragonGirlApp.startup.managed), true);
   assert.equal(await application.evaluate(() => globalThis.__dragonGirlApp.companion.windows.get('character').isVisible()), false, '无目标窗口时角色不应闪现');
+  await until(() => application.evaluate(() => globalThis.__dragonGirlApp.monitor.summary?.total === 42), '首次建账没有保存测试用量');
   // 再次从操作系统启动同一个实例，必须去重且不抢焦点。
   const duplicate = spawn(executablePath || electronPath, [...(executablePath ? [] : [root]), '--dg-startup=codex'], { env, stdio: 'ignore', windowsHide: true });
   await until(() => duplicate.exitCode !== null, '重复自动启动没有结束');
@@ -69,6 +79,10 @@ try {
   await assert.rejects(fs.access(path.join(data, 'startup/runtime.json')), { code: 'ENOENT' });
   // 手动启动仍显示设置，启动方式只在保存后生效。
   await launch();
+  await until(() => application.evaluate(() => {
+    const { monitor } = globalThis.__dragonGirlApp;
+    return monitor.progress.complete && monitor.progress.building === false && monitor.summary?.total === 42;
+  }), '重启后没有复用已建立的账本');
   await until(() => application.windows().some((page) => page.url().endsWith('/dashboard.html')), '手动打开没有显示管理页');
   const page = application.windows().find((item) => item.url().endsWith('/dashboard.html'));
   await page.locator('[data-tab="settings"]').click();
@@ -89,7 +103,7 @@ try {
   assert.equal(await application.evaluate(() => !!globalThis.__dragonGirlApp.dashboard.window), false);
   assert.equal(await application.evaluate(() => globalThis.__dragonGirlApp.startup.managed), false);
   assert.deepEqual(errors, []);
-  const report = { passed: true, checks: ['自动启动静默', '无窗口不闪现', '重复启动去重', '宿主退出正常保存', '手动启动管理页', '启动方式草稿与保存', '登录启动静默'] };
+  const report = { passed: true, checks: ['自动启动静默', '无窗口不闪现', '重复启动去重', '宿主退出正常保存', '重启复用已有账本', '手动启动管理页', '启动方式草稿与保存', '登录启动静默'] };
   await fs.writeFile(path.join(root, '.artifacts/startup-report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally {

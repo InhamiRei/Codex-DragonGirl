@@ -123,6 +123,44 @@ test('统计进程退出同时拒绝当前和后续请求', async (t) => {
   assert.equal(monitor.scanning, false);
 });
 
+// 账户退避时连续执行自动检查，只在账户缓存或提醒去重记录变化时写盘。
+test('空闲账户检查不重复写缓存和推送界面', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-idle-cache-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const monitor = new Monitor(directory, { testMode: true });
+  monitor.settings = normalizeSettings();
+  monitor.instances = [{ id: 'account' }];
+  monitor.readings.set('account', { attemptedAt: Date.now(), retryMs: 60000 });
+  let publications = 0;
+  monitor.publish = () => publications++;
+  const write = t.mock.method(fs, 'writeFile');
+  for (let index = 0; index < 20; index++) {
+    const result = await monitor.refresh();
+    assert.equal(result.skipped, 1);
+  }
+  assert.equal(write.mock.callCount(), 1);
+  assert.equal(publications, 0);
+  monitor.alerts.seen.add('fixture-budget');
+  await monitor.refresh();
+  await monitor.refresh();
+  assert.equal(write.mock.callCount(), 2);
+  const stored = JSON.parse(await fs.readFile(path.join(directory, 'snapshots.json'), 'utf8'));
+  assert.deepEqual(stored.alerts, ['fixture-budget']);
+});
+
+// 账户额度可用时无需遍历历史，读数过期后仍进入日志兜底。
+test('新鲜账户额度跳过日志兜底扫描', async (t) => {
+  const monitor = new Monitor(os.tmpdir(), { testMode: true });
+  monitor.instances = [{ id: 'account', home: os.tmpdir() }];
+  const enumerate = t.mock.method(fs, 'readdir', async () => []);
+  monitor.readings.set('account', { quota: { capturedAt: Date.now() } });
+  await monitor.refreshLogs();
+  assert.equal(enumerate.mock.callCount(), 0);
+  monitor.readings.set('account', { quota: { capturedAt: Date.now() - 121000 } });
+  await monitor.refreshLogs();
+  assert.equal(enumerate.mock.callCount(), 1);
+});
+
 // 没有新增日志时复用汇总，价格与预算设置变化后仍能重新计算。
 test('空闲扫描不重复汇总，新增日志和偏好变化会更新数据', { timeout: 15000 }, async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-index-cache-'));
@@ -147,21 +185,39 @@ test('空闲扫描不重复汇总，新增日志和偏好变化会更新数据',
   let reports = 0;
   const request = monitor.request.bind(monitor);
   monitor.request = (type, value) => { if (type === 'report') reports++; return request(type, value); };
+  const messages = [];
+  const workerMessage = monitor.workerMessage.bind(monitor);
+  // 从配置开始记录真实 Worker 推送，区分首次建账与已有检查点的扫描。
+  monitor.workerMessage = (message) => {
+    messages.push(message);
+    workerMessage(message);
+  };
   await monitor.start();
   await monitor.request('scan');
   await monitor.summaryPromise;
   assert.equal(monitor.summary.total, 6500);
   assert.equal(monitor.activeTasks.size, 1);
+  assert.ok(messages.some((m) => m.type === 'progress' && m.building && m.done === 8 && m.total === 65));
   const revision = monitor.dataRevision;
   const initialReports = reports;
-  const messages = [];
-  monitor.worker.on('message', (message) => messages.push(message));
+  messages.length = 0;
   await monitor.request('scan');
   await monitor.summaryPromise;
   assert.equal(reports, initialReports, '空闲扫描仍然重复查询全部历史');
   assert.equal(monitor.dataRevision, revision);
+  const progress = messages.filter((m) => m.type === 'progress');
+  assert.equal(progress.length, 2, '已有账本只需要发布检查开始和结束');
+  assert.ok(progress.every((m) => m.building === false && m.total === 65));
   assert.equal(messages.filter((m) => m.type === 'thread-states').length, 1);
   assert.equal(messages.filter((m) => m.type === 'thread-state').length, 0);
+  // 任务完成仍更新界面和提醒，单纯的任务记录不会触发全量用量汇总。
+  await fs.appendFile(path.join(folder, '64.jsonl'), JSON.stringify({ type: 'event_msg', timestamp: stamp,
+    payload: { type: 'task_complete', turn_id: 'turn' } }) + '\n');
+  await monitor.request('scan');
+  await monitor.summaryPromise;
+  assert.equal(monitor.dataRevision, revision);
+  assert.equal(reports, initialReports);
+  assert.equal([...monitor.activeTasks.values()][0].status, 'complete');
   await fs.appendFile(path.join(folder, '64.jsonl'), JSON.stringify({ type: 'token_usage_record', timestamp: stamp,
     payload: { response_id: 'appended', usage: { input_tokens: 50, total_tokens: 50 } } }) + '\n');
   await monitor.request('scan');

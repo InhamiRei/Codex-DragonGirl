@@ -9,15 +9,15 @@ let scanning = false,
   settings = {},
   lastScan = 0,
   ledgerScanErrors = 0;
-const changes = ledger.db.prepare('SELECT total_changes() AS count');
+const hasCheckpoints = ledger.db.prepare('SELECT 1 FROM files LIMIT 1');
 const reports = new Map();
 let revision = 0, revisionKey = '';
 let scanController;
 let recentThreads = new Map();
 
-// 只有数据库或统计口径变化才废弃汇总，空闲扫描继续更新完成时间。
+// 只有用量明细或统计口径变化才废弃汇总，检查点与任务状态各自更新。
 function updateRevision() {
-  const key = JSON.stringify([changes.get().count, settings.timezone, settings.prices]);
+  const key = JSON.stringify([ledger.usageChanges, settings.timezone, settings.prices]);
   if (key !== revisionKey) {
     revisionKey = key;
     revision++;
@@ -31,7 +31,9 @@ parentPort.on('message', (message) => {
   if (message.type === 'close') { stopping = true; scanController?.abort(); }
   queue = queue
     .then(() => handle(message))
-    .catch((error) => parentPort.postMessage({ type: 'index-error', id: message.id, error: error.message }));
+    .catch((error) => parentPort.postMessage({
+      type: 'index-error', id: message.id, operation: message.type, error: error.message,
+    }));
 });
 // 扫描每个目录的变化文件，并把进度和最新额度观测交给主进程。
 async function scan() {
@@ -43,13 +45,15 @@ async function scan() {
   let done = 0,
     total = 0;
   try {
+    // 已有检查点时是后台增量检查，首次建账和主动重建才逐批报告进度。
+    const building = !hasCheckpoints.get();
     const lists = [];
     for (const i of instances) {
       const files = await ledger.filesFor(i.home);
       lists.push([i, files]);
       total += files.length;
     }
-    parentPort.postMessage({ type: 'progress', done, total });
+    parentPort.postMessage({ type: 'progress', done, total, building });
     for (const [instance, files] of lists) {
       if (stopping) break;
       let latest = null,
@@ -81,7 +85,7 @@ async function scan() {
           errors.push({ home: instance.id, file: path.basename(file), message: '无法读取或解析日志' });
         }
         done++;
-        if (done % 8 === 0) parentPort.postMessage({ type: 'progress', done, total });
+        if (building && done % 8 === 0) parentPort.postMessage({ type: 'progress', done, total, building });
       }
       parentPort.postMessage({ type: 'log-quota', home: instance.id, quota: latest, account });
     }
@@ -91,7 +95,7 @@ async function scan() {
     updateRevision();
     recentThreads = threads;
     parentPort.postMessage({ type: 'thread-states', states: [...threads.values()] });
-    parentPort.postMessage({ type: 'progress', done, total, complete: true, errors });
+    parentPort.postMessage({ type: 'progress', done, total, building, complete: true, errors });
     parentPort.postMessage({ type: 'indexed', at: lastScan, revision });
   } finally {
     // 部分文件写入后整体扫描失败，也不能继续提供旧的缓存汇总。

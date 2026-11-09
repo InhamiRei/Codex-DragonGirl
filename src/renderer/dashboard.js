@@ -538,7 +538,7 @@ function renderOverview() {
   const progress = state.progress || {};
   $('#index-state').textContent =
     state.indexError ||
-    (!progress.complete && progress.total
+    (progress.building && !progress.complete && progress.total
       ? `正在建立本机账本 ${progress.done} / ${progress.total} · 账户额度可独立查看`
       : progress.errors?.length
         ? `${progress.errors.length} 份日志无法读取，可导出诊断查看`
@@ -952,7 +952,6 @@ async function start() {
   accountTests = new AccountTestsView({ call, toast, getState: () => state });
   bridge.onAccountTests((run) => accountTests.receive(run));
   appearance = state.appearance;
-  renderOverview();
   receive(state);
   bridge.onMonitor(receive);
   // 修复后的试听与角色播放同步恢复，设置草稿保持当前内容。

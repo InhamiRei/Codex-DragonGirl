@@ -13,6 +13,8 @@ export class Ledger {
     if (!fs.existsSync(file)) fs.closeSync(fs.openSync(file, 'wx', 0o600));
     else fs.chmodSync(file, 0o600);
     this.db = new DatabaseSync(file);
+    // 只用账本明细的变动使汇总失效。旧任务表仍可按保留期限清理。
+    this.usageChanges = 0;
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,home TEXT NOT NULL,inode TEXT,offset INTEGER NOT NULL,state TEXT NOT NULL,mtime REAL,size INTEGER);
       CREATE TABLE IF NOT EXISTS events(key TEXT PRIMARY KEY,home TEXT,account TEXT,thread TEXT,parent TEXT,turn TEXT,time INTEGER,model TEXT,tier TEXT,project TEXT,source TEXT,kind TEXT,input_tokens INTEGER,cached_input_tokens INTEGER,cache_write_input_tokens INTEGER,output_tokens INTEGER,reasoning_output_tokens INTEGER,total_tokens INTEGER);
@@ -37,8 +39,8 @@ export class Ledger {
     );
     // 增量扫描反复使用同一组语句，避免每份日志、每个任务都重新编译 SQL。
     this.findFile = this.db.prepare('SELECT * FROM files WHERE path=?');
+    this.updateFileIdentity = this.db.prepare('UPDATE files SET inode=? WHERE path=?');
     this.saveFile = this.db.prepare('INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?)');
-    this.saveTask = this.db.prepare('INSERT OR REPLACE INTO tasks VALUES (?,?,?,?,?,?,?,?,?)');
   }
   // 流式发现历史记录；同一路径的明文副本优先于压缩副本。
   async filesFor(home) {
@@ -65,27 +67,37 @@ export class Ledger {
   // 文件截断或替换时只清理该文件拥有的事件，其他副本仍可保留。
   resetFile(file) {
     this.db.prepare('DELETE FROM origins WHERE file=?').run(file);
-    this.db.exec('DELETE FROM events WHERE key NOT IN (SELECT key FROM origins)');
+    this.usageChanges += this.db.prepare('DELETE FROM events WHERE key NOT IN (SELECT key FROM origins)').run().changes;
     this.db.prepare('DELETE FROM files WHERE path=?').run(file);
   }
   // 增量读取完整行；最后半行不提交偏移，下次追加后再解析。
   async scanFile(file, homeId, onTask = () => {}, signal) {
-    const stat = await fsp.stat(file),
-      inode = `${stat.dev}:${stat.ino}`,
-      compressed = file.endsWith('.zst');
+    const stat = await fsp.stat(file);
+    const legacyInode = `${stat.dev}:${stat.ino}`;
+    // macOS 重启后设备号可能变化，文件编号与创建时间仍能识别原文件。
+    const inode = stat.ino && stat.birthtimeMs > 0
+      ? `birth:${stat.ino}:${stat.birthtimeMs}`
+      : legacyInode;
+    const compressed = file.endsWith('.zst');
     let saved = this.findFile.get(file);
-    if (
-      saved &&
-      ((compressed && saved.size !== stat.size) ||
-        saved.inode !== inode ||
-        stat.size < saved.size ||
-        (stat.size === saved.size && stat.mtimeMs !== saved.mtime))
-    ) {
-      this.resetFile(file);
-      saved = null;
+    if (saved) {
+      const unchanged = saved.size === stat.size && saved.mtime === stat.mtimeMs;
+      const oldIdentity = saved.inode?.split(':');
+      // 旧检查点缺少创建时间，设备号变化时只迁移元数据能确认未变的文件。
+      const sameFile = saved.inode === inode || saved.inode === legacyInode ||
+        (unchanged && inode !== legacyInode && oldIdentity?.length === 2 &&
+          oldIdentity[1] === String(stat.ino) && stat.birthtimeMs <= saved.mtime);
+      if (sameFile && unchanged) {
+        const state = JSON.parse(saved.state);
+        if (saved.inode !== inode) this.updateFileIdentity.run(inode, file);
+        return state;
+      }
+      // 同一明文文件追加时沿用偏移，替换、截断和变化的压缩归档从头读取。
+      if (!sameFile || compressed || stat.size <= saved.size) {
+        this.resetFile(file);
+        saved = null;
+      }
     }
-    if (saved && saved.size === stat.size && saved.mtime === stat.mtimeMs)
-      return JSON.parse(saved.state);
     const state = saved ? JSON.parse(saved.state) : parserState();
     let offset = saved?.offset || 0,
       pending = Buffer.alloc(0),
@@ -119,7 +131,7 @@ export class Ledger {
           const parsed = parseUsageEvent(event, state, homeId);
           if (parsed.usage) {
             const r = parsed.usage;
-            this.insert.run(
+            const result = this.insert.run(
               ...[
                 'key',
                 'home',
@@ -141,13 +153,11 @@ export class Ledger {
                 'total_tokens',
               ].map((k) => r[k]),
             );
+            this.usageChanges += result.changes;
             this.origin.run(file, r.key);
           }
-          if (parsed.task) {
-            const t = parsed.task;
-            this.saveTask.run(homeId, t.thread, t.turn, t.status, t.time, t.model, t.project, t.parent, t.source);
-            if (saved && t.time > Date.now() - 120000) onTask({ ...t, home: homeId });
-          }
+          // 任务状态随文件检查点恢复，实时提醒直接从解析事件发出。
+          if (saved && parsed.task?.time > Date.now() - 120000) onTask({ ...parsed.task, home: homeId });
           if (++records % 1500 === 0) {
             this.db.exec('COMMIT');
             this.db.exec('BEGIN');
@@ -278,14 +288,12 @@ export class Ledger {
       homes,
       threads: Object.values(threads).sort((a, b) => b.lastAt - a.lastAt),
       projects: [...new Set(rows.map((r) => r.project))],
-      tasks: this.db.prepare('SELECT * FROM tasks ORDER BY time DESC LIMIT 100').all(),
-      files: this.db.prepare('SELECT count(*) n FROM files').get().n,
     };
   }
   // 用户设置的保留期限只裁剪龙娘索引，原始 Codex 文件保持不变。
   prune(days) {
     if (days > 0) {
-      this.db.prepare('DELETE FROM events WHERE time<?').run(Date.now() - days * 86400000);
+      this.usageChanges += this.db.prepare('DELETE FROM events WHERE time<?').run(Date.now() - days * 86400000).changes;
       this.db.exec('DELETE FROM origins WHERE key NOT IN (SELECT key FROM events)');
       this.db.prepare('DELETE FROM tasks WHERE time<?').run(Date.now() - days * 86400000);
     }
@@ -293,6 +301,7 @@ export class Ledger {
   // 索引重建保留旧数据库备份，由调用端在停止扫描后执行。
   clear() {
     this.db.exec('DELETE FROM events; DELETE FROM origins; DELETE FROM files; DELETE FROM tasks;');
+    this.usageChanges++;
   }
   // WAL 在退出时检查点落盘，复制数据库前也调用该操作。
   close() {

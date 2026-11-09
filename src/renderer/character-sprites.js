@@ -41,24 +41,26 @@ export class CharacterSprites {
     return image;
   }
 
-  // 同一角色只解码一次；失败可重试，不把一次失败永久留成无响应状态。
+  // 先准备待机和表情，捋发帧在实际需要时再解码。
   prepare() {
     if (this.loading) return this.loading;
     this.loading = (async () => {
       const images = await Promise.all(['idle.png', 'success.png', 'failure.png'].map((name) => this.loadImage(ROOT + name)));
+      if (this.destroyed) return;
       this.idleImage = images[0];
-      const referencePalette = spritePalette(this.rawFrame(images[0]).rgba.data);
+      const idle = this.rawFrame(images[0]);
+      const referencePalette = spritePalette(idle.rgba.data);
       this.stills = Object.fromEntries(['idle', 'happy', 'sad'].map((name, index) => {
-        const raw = this.rawFrame(images[index]);
+        const raw = index === 0 ? idle : this.rawFrame(images[index]);
         // 点击完成和失败表情也使用待机色板，不能只校准捋发动画。
         if (index > 0) {
           applySpritePalette(raw.rgba.data, spriteColorLookup(spritePalette(raw.rgba.data), referencePalette, referencePalette));
           raw.context.putImageData(raw.rgba, 0, 0);
         }
-        return [name, this.makeFrame(raw.canvas, null, name === 'idle')];
+        const frame = this.makeFrame(raw.canvas, null, name === 'idle');
+        raw.canvas.width = raw.canvas.height = 1;
+        return [name, frame];
       }));
-      await this.prepareHair();
-      if (this.destroyed) return;
       this.loaded = true;
     })().catch((error) => {
       this.loading = null;
@@ -142,7 +144,10 @@ export class CharacterSprites {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
     };
-    await Promise.all([worker(), worker(), worker()]);
+    // 失败时等已派发的解码结束，再释放缓存并允许后续重试。
+    const results = await Promise.allSettled([worker(), worker(), worker()]);
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure) throw failure.reason;
   }
 
   // 隐藏、切换角色、按压或关闭动画时及时取消任务；过期解码结果不会重新唤醒旧角色。
@@ -220,7 +225,7 @@ export class CharacterSprites {
 
   // 首次出现稍早展示一次，之后采用较长随机间隔；空闲时不维持动画帧循环。
   scheduleIdle() {
-    if (!this.loaded || this.state !== 'idle' || !this.canGroom() || this.idleTimer) return;
+    if (!this.loaded || this.state !== 'idle' || !this.canGroom() || this.idleTimer || this.hairLoading) return;
     this.idleTimer = setTimeout(() => {
       this.idleTimer = 0;
       this.firstIdle = false;
@@ -238,6 +243,27 @@ export class CharacterSprites {
       this.pendingExpression = { name, source };
       return true;
     }
+    // 自动触发和连续预览共享一次帧准备，期间仍能正常显示待机与其他表情。
+    if (name === 'hair' && (this.hairLoading || !this.hair)) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = 0;
+      this.pendingExpression = { name, source };
+      if (!this.hairLoading) {
+        this.hairLoading = this.prepareHair().catch((error) => {
+          this.hair = null;
+          this.calibration = null;
+          console.warn('麻吕捋发素材暂不可用：', error.message);
+        }).then(() => {
+          this.hairLoading = null;
+          const pending = this.pendingExpression;
+          this.pendingExpression = null;
+          if (this.hair && pending?.name === 'hair') this.showExpression(pending.name, { source: pending.source });
+          this.scheduleIdle();
+        });
+      }
+      return true;
+    }
+    this.pendingExpression = null;
     this.cancel();
     this.state = name;
     if (name === 'hair') {

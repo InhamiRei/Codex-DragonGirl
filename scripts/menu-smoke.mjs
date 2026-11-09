@@ -161,6 +161,7 @@ try {
   // 从真实右键菜单触发祈祷；设为一秒收起，验证长祷文不受普通气泡计时干扰。
   const bubble = application.windows().find((window) => window.url().endsWith('/bubble.html'));
   bubble.on('pageerror', (error) => errors.push(error.message));
+  await bubble.emulateMedia({ reducedMotion: 'no-preference' });
   const beforePrayerSettings = await application.evaluate(() => {
     const c = globalThis.__dragonGirlTest;
     const settings = c.appearance.settings;
@@ -183,6 +184,14 @@ try {
     const partial = await message.textContent();
     return partial.length >= 4 && partial.length < PRAYER_TEXT.length && PRAYER_TEXT.startsWith(partial);
   }, '气泡没有从开头逐字打出祷文');
+  // 实际采样两个同时渐显的字和遮罩中间状态，防止文字退回到逐字跳显。
+  await until(() => message.evaluate((node) => {
+    const reveals = node.getAnimations({ subtree: true }).filter((animation) => animation.animationName === 'prayer-letter-reveal');
+    return reveals.length >= 2 && reveals.some((animation) => {
+      const style = getComputedStyle(animation.effect.target);
+      return style.maskImage !== 'none' && Number(style.opacity) > 0.1 && Number(style.opacity) < 0.8;
+    });
+  }), '祷文相邻字没有连续渐显');
   await until(async () => await character.getAttribute('data-expression') === 'prayer'
     && await character.getAttribute('data-prayer-moving') === null, '龙娘没有抬手合掌');
 
@@ -232,7 +241,9 @@ try {
 
   // 让真实计时走到最后一个字；没有 Codex 宿主时仍完整打完并自动收势、关气泡。
   await until(() => message.textContent().then((value) => value === PRAYER_TEXT), '祷文没有完整打完', 45000);
+  await until(() => bubble.locator('body').getAttribute('data-typing').then((value) => value === null), '最后一个字渐显后没有结束打字');
   const prayerTypingMs = Date.now() - prayerStarted;
+  assert.ok(prayerTypingMs >= 19500 && prayerTypingMs <= 22000, `默认祷文播放耗时 ${prayerTypingMs} ms，超出二十秒的验收范围`);
   await until(() => character.getAttribute('data-expression').then((value) => value === null), '祷文打完后没有恢复原画');
   assert.equal(await energy.isVisible(), false, '收势后光效仍在播放');
   await until(() => application.evaluate(() => !globalThis.__dragonGirlTest.bubbleVisible), '祷文结束后没有自动收起气泡');

@@ -15,14 +15,22 @@ test('三十帧均为 1254 像素且循环首尾复用待机原图', async () =>
   assert.equal(MARO_HAIR_ASSETS.length, 30);
   const frames = await Promise.all(MARO_HAIR_ASSETS.map((url) =>
     fs.readFile(new URL('../' + url.replace('dragon://app/', ''), import.meta.url))));
-  for (const frame of frames) {
-    assert.equal(frame.subarray(1, 4).toString(), 'PNG');
-    assert.equal(frame.readUInt32BE(16), 1254);
-    assert.equal(frame.readUInt32BE(20), 1254);
-    assert.equal(frame[25], 6, 'PNG 必须保留 RGBA 透明通道');
+  const idle = frames[0];
+  assert.equal(idle.subarray(1, 4).toString(), 'PNG');
+  assert.equal(idle.readUInt32BE(16), 1254);
+  assert.equal(idle.readUInt32BE(20), 1254);
+  assert.equal(idle[25], 6, '待机 PNG 必须保留 RGBA 透明通道');
+  assert.ok(frames.at(-1).equals(idle));
+  for (const frame of frames.slice(1, -1)) {
+    // VP8L 的尺寸位和 Alpha 标志可直接验证，不需要给单元测试引入图片工具。
+    assert.equal(frame.toString('ascii', 0, 4), 'RIFF');
+    assert.equal(frame.toString('ascii', 8, 16), 'WEBPVP8L');
+    assert.equal(frame[20], 0x2f);
+    const header = frame.readUInt32LE(21);
+    assert.equal((header & 0x3fff) + 1, 1254);
+    assert.equal(((header >>> 14) & 0x3fff) + 1, 1254);
+    assert.equal((header >>> 28) & 1, 1, '无损帧必须保留透明通道');
   }
-  const idle = await fs.readFile(new URL('../assets/characters/maro/idle.png', import.meta.url));
-  assert.ok(frames[0].equals(idle) && frames.at(-1).equals(idle));
 });
 
 // 旧配置仍使用龙娘，任意路径或损坏角色编号不能被当作内置资源。
