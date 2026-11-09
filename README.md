@@ -38,7 +38,7 @@
 
 ## 下载与安装
 
-前往 [v1.5.1 测试版](https://github.com/InhamiRei/Codex-DragonGirl/releases/tag/v1.5.1)，展开 **Assets**，按电脑系统选择文件。运行发行包不需要 Node.js、npm 或工程源码。
+前往 [最新正式版](https://github.com/InhamiRei/Codex-DragonGirl/releases/latest)，展开 **Assets**，按电脑系统选择文件。运行发行包不需要 Node.js、npm 或工程源码。
 
 | 电脑 | 下载文件 | 打开方法 |
 | --- | --- | --- |
