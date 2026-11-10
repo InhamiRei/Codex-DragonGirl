@@ -99,7 +99,10 @@ async function companionState() {
 async function expectStack(host, cover, covered, bubble = true, raised = !covered) {
   let last;
   try { return await until(async () => {
-    const { order, normal, raised: actualRaised } = systemState(host.child.pid);
+    const { order: systemOrder, normal, raised: actualRaised } = systemState(host.child.pid);
+    // macOS 只比较本次创建的真实窗口，用户窗口插在中间不会破坏测试的相邻关系。
+    const fixtureIds = new Set([host.id, cover.id, ...Object.values(ids)]);
+    const order = isMac ? systemOrder.filter((id) => fixtureIds.has(id)) : systemOrder;
     const position = order.indexOf(host.id);
     const state = await companionState();
     const characterPosition = order.indexOf(ids.character), bubblePosition = order.indexOf(ids.bubble);
@@ -111,7 +114,7 @@ async function expectStack(host, cover, covered, bubble = true, raised = !covere
     const layered = (isMac ? state.windows.character.topmost : actualRaised.includes(ids.character))
       ? characterPosition >= 0 && characterPosition < position && (!bubble || bubblePosition >= 0 && bubblePosition < characterPosition)
       : position > 0 && order[position - 1] === ids.character && (!bubble || order[position - 2] === ids.bubble);
-    last = { order: order.filter((id) => [host.id, cover.id, ...Object.values(ids)].includes(id)), frontOrder: order.slice(0, 16), normal: normal?.slice(0, 12), ids, host: host.id, cover: cover.id, state, actualRaised };
+    last = { order: order.filter((id) => fixtureIds.has(id)), frontOrder: systemOrder.slice(0, 16), normal: normal?.slice(0, 12), ids, host: host.id, cover: cover.id, state, actualRaised };
     return state.windows.character.visible && (!bubble || state.windows.bubble.visible)
       // Windows 由原生桥直接设置层级，以真实 Win32 样式为准，Electron 缓存仅用于诊断。
       && (!isMac || !covered || !coverOverlaps || !state.windows.character.topmost && !state.windows.bubble.topmost)
@@ -152,15 +155,26 @@ try {
   application = await electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: [root] }), env, timeout: 60000 });
   await until(() => application.evaluate(() => globalThis.__dragonGirlApp?.dashboard.latest?.instances.length === 1
     && globalThis.__dragonGirlApp.dashboard.window?.isVisible()), '隔离应用尚未完成管理窗口与目录初始化');
-  ids = await application.evaluate((_, pid) => {
+  ids = await application.evaluate((_, { pid, hostId, coverId, isMac }) => {
     const { monitor, dashboard, companion } = globalThis.__dragonGirlApp;
     dashboard.window.hide();
-    // 保留真实原生桥、消息接收与跟随链路，只允许本测试宿主进入实例列表。
+    // 保留真实原生桥和两个自建宿主的遮挡关系，避免用户窗口置前干扰 macOS 连续采样。
     const receive = monitor.receiveNative.bind(monitor);
-    monitor.receiveNative = (state, bridge) => receive({ ...state, processes: state.processes.filter((row) => row.pid === pid) }, bridge);
+    monitor.receiveNative = (state, bridge) => {
+      const processes = state.processes.filter((row) => row.pid === pid);
+      if (!isMac) return receive({ ...state, processes }, bridge);
+      // 祈祷特效按需创建，每份快照也要纳入新出现的测试窗口。
+      const overlays = [...companion.windows.values(), companion.prayerWave?.window];
+      const fixtureIds = new Set([hostId, coverId, ...overlays.filter((win) => win && !win.isDestroyed())
+        .map((win) => win.getMediaSourceId().split(':')[1])]);
+      return receive({ ...state, processes,
+        windowOrder: state.windowOrder?.filter((id) => fixtureIds.has(String(id))),
+        normalWindows: state.normalWindows?.filter(({ id }) => fixtureIds.has(String(id))),
+      }, bridge);
+    };
     monitor.startNative();
     return Object.fromEntries([...companion.windows].map(([view, window]) => [view, window.getMediaSourceId().split(':')[1]]));
-  }, host.child.pid);
+  }, { pid: host.child.pid, hostId: host.id, coverId: cover.id, isMac });
   await until(() => application.evaluate(() => globalThis.__dragonGirlApp.companion.windows.get('character').isVisible()), '角色没有跟随真实宿主显示');
   await application.evaluate(() => globalThis.__dragonGirlApp.companion.showBubble('窗口层级验收', 'speech'));
   await until(() => application.evaluate(() => globalThis.__dragonGirlApp.companion.windows.get('bubble').isVisible()), '气泡未显示');

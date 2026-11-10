@@ -37,6 +37,7 @@ import { PrayerWave } from './prayer-wave.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const ORIGIN = 'dragon://app';
 const SHORTCUT = 'CommandOrControl+Shift+Alt+D';
+const RECT_KEYS = ['x', 'y', 'width', 'height'];
 
 // 桌面层只负责窗口、手势与持久化，角色绘制和气泡内容各自独立。
 export class Companion {
@@ -118,25 +119,23 @@ export class Companion {
         }
       });
     }
+    // 工作区变化与唤醒必须沿用当前模式，不能用桌面锚点临时覆盖宿主坐标。
     this.onDisplayChanged = () => {
       this.cancelGesture();
-      this.restore();
-      this.applyCharacter();
+      this.refreshPlacement();
     };
     screen.on('display-added', this.onDisplayChanged);
     screen.on('display-removed', this.onDisplayChanged);
     screen.on('display-metrics-changed', this.onDisplayChanged);
     this.onSuspend = () => this.cancelGesture();
     this.onResume = () => {
-      this.restore();
-      this.applyCharacter();
+      this.refreshPlacement();
       this.pollCursor(true);
     };
     powerMonitor.on('suspend', this.onSuspend);
     powerMonitor.on('resume', this.onResume);
     // 素材加载期间工作区可能变化；监听建立后再同步一次，避免沿用启动前的边界。
-    this.restore();
-    this.applyCharacter();
+    this.refreshPlacement();
     this.shortcutRegistered =
       !this.secondary && globalShortcut.register(SHORTCUT, () => this.toggleVisibility());
     this.updateMenu();
@@ -285,7 +284,7 @@ export class Companion {
     );
   }
 
-  // 根据首选显示器恢复位置；显示器暂时断开时不覆盖原来的显示器与锚点。
+  // 恢复独立桌面的首选位置；显示器暂时断开时不覆盖原来的显示器与锚点。
   restore() {
     this.display =
       screen
@@ -295,6 +294,15 @@ export class Companion {
     const size = characterSize(this.state.scale, this.display.workArea, this.imageRatio);
     this.character = restorePlacement(this.state.placement, this.display, size);
     this.updateFacing();
+  }
+
+  // 重排时优先沿用已知宿主和相对锚点；等待宿主期间保持隐藏。
+  refreshPlacement() {
+    if (this.followTarget) this.applyFollowPlacement(true);
+    else if (!this.followMode && !this.suppressedByFollow) {
+      this.restore();
+      this.applyCharacter();
+    }
   }
 
   // 拖动中锁定原朝向，松手后按所属屏幕或宿主窗口更新，取消拖动会沿原位置恢复。
@@ -343,7 +351,7 @@ export class Companion {
     if (!window || window.isDestroyed()) return;
     // 菜单期间的后台状态更新不重复改动人物窗口；用户主动改大小或恢复位置时仍正常应用。
     const menuKeepsGeometry = this.contextMenu && this.menuCharacter
-      && ['x', 'y', 'width', 'height'].every((key) => this.character[key] === this.menuCharacter[key]);
+      && RECT_KEYS.every((key) => this.character[key] === this.menuCharacter[key]);
     if (!menuKeepsGeometry) window.setBounds(stageBounds(this.character), false);
     this.sendCharacterLayout();
     if (this.bubbleVisible) this.positionBubble();
@@ -850,15 +858,12 @@ export class Companion {
       this.hideBubble();
     if (this.prayerWave && (appearance.settings?.motion === false || appearance.settings?.expressionsEnabled === false))
       this.hideBubble();
-    if (assetChanged && appearance.assetPath) {
-      const img = nativeImage.createFromPath(appearance.assetPath);
-      if (!img.isEmpty()) {
-        const d = img.getSize();
-        this.imageRatio = d.height / d.width;
-        this.restore();
-      }
-    }
-    this.applyCharacter();
+    const image = assetChanged && appearance.assetPath ? nativeImage.createFromPath(appearance.assetPath) : null;
+    if (image && !image.isEmpty()) {
+      const { width, height } = image.getSize();
+      this.imageRatio = height / width;
+      this.refreshPlacement();
+    } else this.applyCharacter();
     this.refreshUsageBubble();
   }
 
@@ -935,7 +940,7 @@ export class Companion {
     }
   }
 
-  // 跟随只改变显示位置，不覆盖独立桌面模式保存的位置意图。
+  // 保留当前宿主和相对锚点，显示器事件到达时无需等待下一份原生快照。
   followFrame(frame, offset = { x: 1, y: 1 }, { order = null, topmost = [], normalWindows = null } = {}) {
     this.followOrder = order;
     this.followTopmost = topmost;
@@ -943,30 +948,57 @@ export class Companion {
     // 菜单展开时固定窗口位置，让二级菜单持续接收悬停；宿主隐藏时仍正常收起。
     if (this.contextMenu && frame) return;
     this.followTarget = frame;
-    this.suppressedByFollow = !frame;
+    this.followOffset = offset;
+    this.applyFollowPlacement();
+  }
+
+  // 宿主或所在屏幕不可见时先收起角色和气泡，保留用户主动隐藏的状态。
+  hideForFollow() {
+    this.suppressedByFollow = true;
+    this.contextMenu?.closePopup(this.windows.get('character'));
+    this.cancelGesture();
+    this.hideBubble();
+    this.setInteractive('character', false);
+    this.windows.get('character')?.hide();
+  }
+
+  // 原生窗口快照和屏幕重排共用宿主坐标，不能回退到独立桌面的位置。
+  applyFollowPlacement(refresh = false) {
+    const frame = this.followTarget;
     if (!frame) {
-      this.contextMenu?.closePopup(this.windows.get('character'));
-      // 弹窗或最小化期间同时释放拖拽和鼠标命中，恢复时不改变用户主动隐藏的状态。
-      this.cancelGesture();
-      this.hideBubble();
-      this.setInteractive('character', false);
-      this.windows.get('character')?.hide();
+      this.hideForFollow();
       return;
     }
+    if (!this.character) return;
     if (this.gesture.active) {
       this.syncWindowStacking();
       return;
     }
-    this.display = screen.getDisplayMatching(frame);
+    const display = screen.getDisplayMatching(frame);
+    const bounds = display?.bounds;
+    // 副屏刚断开时系统可能返回最近的主屏；旧宿主坐标与它不相交，等宿主移屏或副屏恢复。
+    if (!bounds || !(frame.x < bounds.x + bounds.width && frame.x + frame.width > bounds.x
+      && frame.y < bounds.y + bounds.height && frame.y + frame.height > bounds.y)) {
+      this.hideForFollow();
+      return;
+    }
+    if (this.contextMenu) return;
+    const offset = this.followOffset;
+    const size = characterSize(this.state.scale, display.workArea, this.imageRatio);
     const next = constrainCharacter(
       {
-        ...this.character,
-        x: frame.x + Math.max(0, frame.width - this.character.width) * offset.x,
-        y: frame.y + Math.max(0, frame.height - this.character.height) * offset.y,
+        ...size,
+        x: frame.x + Math.max(0, frame.width - size.width) * offset.x,
+        y: frame.y + Math.max(0, frame.height - size.height) * offset.y,
       },
-      this.display.workArea,
+      display.workArea,
     );
-    if (next.x !== this.character.x || next.y !== this.character.y) {
+    // 即使角色本身没有移动，工作区变化也可能需要重新摆放气泡。
+    const layoutChanged = refresh || this.suppressedByFollow || RECT_KEYS.some((key) =>
+      next[key] !== this.character[key] || display.workArea[key] !== this.display.workArea[key]);
+    this.display = display;
+    this.suppressedByFollow = false;
+    if (layoutChanged) {
       this.character = next;
       this.applyCharacter();
     } else if (this.updateFacing()) this.sendCharacterLayout();
