@@ -212,12 +212,16 @@ try {
   await application.evaluate(() => globalThis.__dragonGirlTest.showExpression('hair', { preview: true }));
   await until(() => page.locator('#character').getAttribute('data-sprite-state').then((state) => state === 'hair'), '捋发未开始');
   assert.equal(hairRequests.size, 28, '捋发时必须加载全部独立动作帧');
-  assert.equal(await page.locator('.maro-eye-layer:not([hidden])').count(), 0, '眼部贴层遮住了捋发表情');
+  const visibleEyes = page.locator('.maro-eye-layer:not([hidden])');
+  assert.equal(await visibleEyes.count(), 0, '眼部贴层遮住了捋发表情');
+  // 布局消息和系统媒体偏好都由渲染页异步处理，等待画面变化后再检查。
   await appearance({ motion: false, eyeTracking: false, blinkEnabled: false });
-  assert.equal(await page.locator('.maro-eye-layer:not([hidden])').count(), 0);
+  await until(() => visibleEyes.count().then((count) => count === 0), '关闭眼部互动后贴层未收起');
   await appearance({ motion: true, eyeTracking: true, blinkEnabled: true });
+  await look(8000, 160);
+  await until(() => visibleEyes.count().then((count) => count === 2), '重新开启眼部互动后贴层未恢复');
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  assert.equal(await page.locator('.maro-eye-layer:not([hidden])').count(), 0);
+  await until(() => visibleEyes.count().then((count) => count === 0), '减少动态效果生效后贴层未收起');
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(artifacts, 'report.json'), JSON.stringify({ passed: true, idleColor, happyColor,
     left, right, up, down, flipped, open, half, closed, natural, outsideCursorDelivered: true }, null, 2));
