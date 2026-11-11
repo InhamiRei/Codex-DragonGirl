@@ -11,7 +11,6 @@ import { readAccount, rpcError } from '../core/rpc.js';
 import { normalizeQuota, AlertTracker } from '../core/quota.js';
 import { dayKey, midnight, nextDay } from '../shared/time.js';
 import { digest } from '../core/usage-parser.js';
-import { dialogueLine } from '../shared/dialogue.js';
 import { nativeBridgePath } from '../core/platform.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const QUOTA_FRESH_MS = 120000;
@@ -36,7 +35,6 @@ export class Monitor extends EventEmitter {
     this.activeTasks = new Map();
     this.indexedAt = null;
     this.stopped = false;
-    this.dialogueCounts = {};
   }
   // 加载本应用缓存后立即发现实例，历史索引在 Worker 中执行。
   async start() {
@@ -316,14 +314,14 @@ export class Monitor extends EventEmitter {
       };
       this.readings.set(instance.id, value);
       for (const alert of this.alerts.evaluate(identity || instance.id, quota, this.settings.lowQuota))
-        this.notify(instance, 'quota', alert.text);
+        this.notify(instance, { event: 'quota', text: alert.text });
       // 重置卡到期提示以每日为粒度去重，不兑换卡券。
       for (const card of quota?.resetCredits?.details || []) {
         if (card.expiresAt && card.expiresAt > Date.now() && card.expiresAt - Date.now() < 86400000) {
           const key = `credit:${identity}:${card.expiresAt}`;
           if (!this.alerts.seen.has(key)) {
             this.alerts.seen.add(key);
-            this.notify(instance, 'quota', '有重置卡将在 24 小时内到期');
+            this.notify(instance, { event: 'quota', text: '有重置卡将在 24 小时内到期' });
           }
         }
       }
@@ -392,15 +390,12 @@ export class Monitor extends EventEmitter {
     if (m.type === 'task') {
       const i = this.instances.find((i) => i.id === m.task.home);
       if (i && m.task.source === '主任务') {
-        const kind = m.task.status === 'complete' ? 'complete' : m.task.status === 'cancelled' ? 'cancelled' : 'error';
-        const index = this.dialogueCounts[kind] || 0;
-        this.dialogueCounts[kind] = index + 1;
-        this.notify(
-          i,
-          m.task.status === 'error' ? 'error' : 'complete',
-          dialogueLine(kind, index),
-          m.task.status === 'complete' ? 'happy' : m.task.status === 'error' ? 'sad' : null,
-        );
+        // 只传任务结果，等界面找到对应角色后再选择台词。
+        this.notify(i, {
+          dialogueKind: m.task.status === 'complete' ? 'complete' : m.task.status === 'cancelled' ? 'cancelled' : 'error',
+          event: m.task.status === 'error' ? 'error' : 'complete',
+          expression: m.task.status === 'complete' ? 'happy' : m.task.status === 'error' ? 'sad' : null,
+        });
       }
     }
     if (m.type === 'indexed') {
@@ -439,11 +434,10 @@ export class Monitor extends EventEmitter {
           const key = `budget:${name}:${instance.id}:${today}`;
           if (reached && !this.alerts.seen.has(key)) {
             this.alerts.seen.add(key);
-            this.notify(
-              instance,
-              'quota',
-              name === 'token' ? '今日 Tokens 用量达到预算' : '今日参考费用达到预算',
-            );
+            this.notify(instance, {
+              event: 'quota',
+              text: name === 'token' ? '今日 Tokens 用量达到预算' : '今日参考费用达到预算',
+            });
           }
         }
       }
@@ -455,15 +449,13 @@ export class Monitor extends EventEmitter {
     }
   }
 
-  // 静音时仍更新数据；事件文本不包含对话正文。
-  notify(instance, event, text, expression = null) {
+  // 静音时仍更新数据；额度和预算提醒保留原文，任务只传结果和表情。
+  notify(instance, notice) {
     if (!isQuiet(this.settings))
       this.emit('notice', {
+        ...notice,
         home: instance.id,
         name: instance.name,
-        event,
-        text,
-        expression,
         system: this.settings.notifications,
       });
   }

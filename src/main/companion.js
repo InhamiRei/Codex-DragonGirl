@@ -62,11 +62,11 @@ export class Companion {
     this.visible = true;
     this.suppressedByFollow = initiallySuppressed;
     this.bubbleVisible = false;
-    this.lineIndex = 0;
+    this.dialogueCounts = new Map();
     this.bubbleKind = null;
     this.bubbleSize = { ...BUBBLE_SIZE };
     this.bubbleModel = {
-      text: dialogueLine('chat'),
+      text: '',
       usage: null,
       kind: 'speech',
       typingId: null,
@@ -427,7 +427,7 @@ export class Companion {
       return;
     }
     if (!this.state.speechEnabled) return;
-    this.showBubble(this.delegate?.bubbleFor?.(this) || dialogueLine('chat', this.lineIndex++), 'usage');
+    this.showBubble(this.delegate?.bubbleFor?.(this) || this.nextDialogue('chat'), 'usage');
   }
 
   // 文本与默认用量卡片共用内容版本，异步测量不能覆盖后来显示的新消息。
@@ -467,10 +467,24 @@ export class Companion {
       );
   }
 
-  // 主动互动共用语录顺序与显示逻辑，菜单入口不受“点击时显示气泡”开关限制。
+  // 台词按当前画面上的角色选择，自定义图片使用默认文案。
+  get dialogueCharacterId() {
+    return characterByAsset(this.appearance.asset)?.id ?? 'dragon';
+  }
+
+  // 各角色的日常、完成、取消和失败分别轮换，切回来从原来的顺序接着说。
+  nextDialogue(kind) {
+    const characterId = this.dialogueCharacterId;
+    const key = `${characterId}:${kind}`;
+    const index = this.dialogueCounts.get(key) ?? 0;
+    this.dialogueCounts.set(key, index + 1);
+    return dialogueLine(kind, index, characterId);
+  }
+
+  // 主动互动共用当前角色的语录顺序，菜单入口不受“点击时显示气泡”开关限制。
   speak() {
     this.show();
-    this.showBubble(dialogueLine('chat', this.lineIndex++), 'speech');
+    this.showBubble(this.nextDialogue('chat'), 'speech');
   }
 
   // 主动祈祷只在本地播放，气泡打字期间让龙娘保持合掌。
@@ -852,9 +866,11 @@ export class Companion {
   // 状态变化只更新局部布局，换图时同步更新几何比例。
   setAppearance(appearance) {
     const assetChanged = appearance.asset !== this.appearance.asset;
+    const previousDialogueCharacter = this.dialogueCharacterId;
     this.appearance = appearance;
-    // 切换到不支持合掌的角色时收起祷文，避免沿用龙娘的动作和气泡。
-    if (assetChanged && this.bubbleKind === 'prayer' && characterByAsset(appearance.asset)?.id !== 'dragon')
+    // 换角色时收起上一位的气泡；换成自定义图片时也要结束龙娘的祷文。
+    if ((this.bubbleVisible && previousDialogueCharacter !== this.dialogueCharacterId)
+      || (assetChanged && this.bubbleKind === 'prayer' && characterByAsset(appearance.asset)?.id !== 'dragon'))
       this.hideBubble();
     if (this.prayerWave && (appearance.settings?.motion === false || appearance.settings?.expressionsEnabled === false))
       this.hideBubble();

@@ -260,7 +260,7 @@ try {
   await page.screenshot({ path: path.join(artifacts, 'character.png'), omitBackground: true });
   await bubble.screenshot({ path: path.join(artifacts, 'bubble.png'), omitBackground: true });
   // 点用量内容显示一条现有语录，再点收起；关闭后的迟到 IPC 不得重新弹出气泡。
-  const nextLine = await application.evaluate(() => globalThis.__dragonGirlTest.lineIndex);
+  const nextLine = await application.evaluate(() => globalThis.__dragonGirlTest.dialogueCounts.get('dragon:chat') ?? 0);
   await bubble.locator('#message').click();
   await bubbleLayout(dialogueLine('chat', nextLine));
   assert.equal((await snapshot()).bubbleVisible, true, '点击用量气泡直接关闭，未显示语录。');
@@ -283,7 +283,7 @@ try {
     await until(async () => (await snapshot()).bubbleVisible, '再次点击角色没有打开用量气泡。');
     const current = await application.evaluate(() => ({
       text: globalThis.__dragonGirlTest.bubbleModel.text,
-      index: globalThis.__dragonGirlTest.lineIndex,
+      index: globalThis.__dragonGirlTest.dialogueCounts.get('dragon:chat') ?? 0,
     }));
     await bubbleLayout(current.text);
     await bubble.locator('#bubble').focus();

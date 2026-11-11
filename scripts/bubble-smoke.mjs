@@ -199,17 +199,19 @@ try {
     assert.ok(await page.locator('#bubble-content').evaluate((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1));
     // 切到语录必须重新计时；常驻气泡保持显示，渲染层注入 Esc 时仍按关闭处理。
     if (scale === 1) {
-      // 每类语录实际渲染一轮，完整文案不能超出椭圆，也不能依赖滚动才能读完。
-      for (const kind of ['chat', 'complete', 'cancelled', 'error']) {
-        const first = dialogueLine(kind);
-        for (let index = 0; index < 100; index += 1) {
-          const text = dialogueLine(kind, index);
-          if (index && text === first) break;
-          await show({ text });
-          const result = await metrics();
-          assert.ok(result.scrollHeight <= result.clientHeight + 1, `语录需要滚动才能读完：${text}`);
-          assert.equal(result.outside, false, `语录超出椭圆：${text}`);
-          assert.equal(await page.locator('#message').textContent(), text, '语录显示不完整');
+      // 两位角色的每类语录都实际渲染一轮，完整文案要能在椭圆里一次读完。
+      for (const characterId of ['dragon', 'maro']) {
+        for (const kind of ['chat', 'complete', 'cancelled', 'error']) {
+          const first = dialogueLine(kind, 0, characterId);
+          for (let index = 0; index < 100; index += 1) {
+            const text = dialogueLine(kind, index, characterId);
+            if (index && text === first) break;
+            await show({ text });
+            const result = await metrics();
+            assert.ok(result.scrollHeight <= result.clientHeight + 1, `语录需要滚动才能读完：${text}`);
+            assert.equal(result.outside, false, `语录超出椭圆：${text}`);
+            assert.equal(await page.locator('#message').textContent(), text, '语录显示不完整');
+          }
         }
       }
       await show({ text: dialogueLine('chat', 4) });

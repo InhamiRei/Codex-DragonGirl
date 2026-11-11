@@ -71,13 +71,15 @@ export class Dashboard {
       void this.updatePets().catch((error) => console.error('同步角色失败：', error.message));
     });
     monitor.on('windows', () => this.follow());
+    // 先把提醒路由到对应实例，再用该角色的同一句台词填充气泡和系统通知。
     monitor.on('notice', (notice) => {
       const pet =
         [this.primary, ...this.pets.values()].find((c) => c.instanceId === notice.home) || this.primary;
-      pet.notify(notice.event, notice.text);
+      const text = notice.dialogueKind ? pet.nextDialogue(notice.dialogueKind) : notice.text;
+      pet.notify(notice.event, text);
       if (notice.expression) pet.showExpression(notice.expression);
       if (notice.system && Notification.isSupported()) {
-        const n = new Notification({ title: `GPT龙娘 · ${notice.name}`, body: notice.text, silent: true });
+        const n = new Notification({ title: `GPT龙娘 · ${notice.name}`, body: text, silent: true });
         n.on('click', () => {
           monitor.focus(notice.home);
           this.open();

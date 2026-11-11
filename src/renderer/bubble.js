@@ -130,9 +130,9 @@ function measure(model, scrollTop = 0) {
   // 测量在未滚动的坐标中进行，结束后恢复已有阅读位置，不让后台刷新把长内容推回顶部。
   contentPane.scrollTop = Math.min(scrollTop, Math.max(0, contentPane.scrollHeight - contentPane.clientHeight));
   const label = model.kind === 'usage'
-    ? '点击查看一句语录，点击龙娘可收起气泡'
+    ? '点击查看一句语录，点击角色可收起气泡'
     : model.kind === 'prayer' ? '点击收起祷文，可用滚轮回看'
-    : '点击收起龙娘的气泡';
+    : '点击收起气泡';
   bubble.setAttribute('aria-label', scrollable && model.kind !== 'prayer'
     ? `${label}，长内容可用滚轮查看`
     : label);

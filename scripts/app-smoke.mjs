@@ -759,7 +759,7 @@ try {
     path: path.join(root, '.artifacts/bubble-plan-tokens.png'),
   });
   // 真实用量卡片切到语录后，后台额度更新不得覆盖短句；再次点击关闭，重开回到用量。
-  const quoteIndex = await application.evaluate(() => globalThis.__dragonGirlApp.companion.lineIndex);
+  const quoteIndex = await application.evaluate(() => globalThis.__dragonGirlApp.companion.dialogueCounts.get('dragon:chat') ?? 0);
   await bubble.locator('#message').click();
   await until(() => bubble.locator('#message').textContent().then((text) => text === dialogueLine('chat', quoteIndex)), '点击用量气泡未显示语录');
   const afterQuotaUpdate = await application.evaluate(() => {
@@ -788,7 +788,7 @@ try {
   assert.equal(await bubble.locator('.quota').count(), 0);
   assert.equal(await bubble.locator('body').getAttribute('data-layout'), 'text');
   // 自定义用量模板虽然没有结构化额度，也必须支持“语录 → 收起”的相同交互。
-  const customQuoteIndex = await application.evaluate(() => globalThis.__dragonGirlApp.companion.lineIndex);
+  const customQuoteIndex = await application.evaluate(() => globalThis.__dragonGirlApp.companion.dialogueCounts.get('dragon:chat') ?? 0);
   await bubble.locator('#message').click();
   await until(() => bubble.locator('#message').textContent().then((text) => text === dialogueLine('chat', customQuoteIndex)), '自定义用量模板未切换语录');
   await bubble.locator('#bubble').click();
@@ -905,7 +905,7 @@ try {
     const afterUpdate = c.bubbleModel.text;
     c.state.speechEnabled = true;
     const m = globalThis.__dragonGirlApp.monitor;
-    const completeIndex = m.dialogueCounts.complete || 0;
+    const completeIndex = c.dialogueCounts.get('dragon:complete') ?? 0;
     m.workerMessage({ type: 'task', task: { home: c.instanceId, source: '主任务', status: 'complete' } });
     const complete = c.bubbleModel.text;
     c.setAppearance({ ...c.appearance, status: 'complete' });
@@ -930,6 +930,36 @@ try {
     omitBackground: true,
     path: path.join(root, '.artifacts/bubble-notice.png'),
   });
+  // 切换时旧任务气泡要收起；用量气泡和菜单随后从麻吕自己的日常语录开始轮换。
+  const dragonQuoteAfterSwitch = await application.evaluate(async () => {
+    const { companion, dashboard } = globalThis.__dragonGirlApp;
+    const next = companion.dialogueCounts.get('dragon:chat') ?? 0;
+    await dashboard.selectCharacter('maro');
+    return { next, visible: companion.bubbleVisible };
+  });
+  assert.equal(dragonQuoteAfterSwitch.visible, false, '切换成麻吕后还显示龙娘的任务气泡');
+  await application.evaluate(() => globalThis.__dragonGirlApp.companion.toggleBubble());
+  await until(() => bubble.locator('body').getAttribute('data-kind').then((kind) => kind === 'usage'), '麻吕未打开用量气泡');
+  await bubble.locator('#message').click();
+  await until(() => bubble.locator('#message').textContent().then((text) => text === dialogueLine('chat', 0, 'maro')), '用量气泡未切换成麻吕的语录');
+  await application.evaluate(() => globalThis.__dragonGirlApp.companion.buildMenu().items.find((item) => item.label === '说句话').click());
+  await until(() => bubble.locator('#message').textContent().then((text) => text === dialogueLine('chat', 1, 'maro')), '菜单没有接着播放麻吕的下一句语录');
+  // 复现两次完成后再取消和失败的场景，确认任务提示也按角色和结果独立轮换。
+  for (const [status, index] of [['complete', 0], ['complete', 1], ['cancelled', 0], ['error', 0]]) {
+    const expected = dialogueLine(status, index, 'maro');
+    assert.notEqual(expected, dialogueLine(status, index), `麻吕的 ${status} 仍在复用龙娘的台词`);
+    await application.evaluate((_, status) => {
+      const { monitor, companion } = globalThis.__dragonGirlApp;
+      monitor.workerMessage({ type: 'task', task: { home: companion.instanceId, source: '主任务', status } });
+    }, status);
+    await until(() => bubble.locator('#message').textContent().then((text) => text === expected), `麻吕未显示 ${status} 的第 ${index + 1} 句台词`);
+  }
+  await application.evaluate(async () => {
+    const { companion, dashboard } = globalThis.__dragonGirlApp;
+    await dashboard.selectCharacter('dragon');
+    companion.buildMenu().items.find((item) => item.label === '说句话').click();
+  });
+  await until(() => bubble.locator('#message').textContent().then((text) => text === dialogueLine('chat', dragonQuoteAfterSwitch.next)), '切回龙娘后未续上原来的语录顺序');
   await application.evaluate(() => globalThis.__dragonGirlApp.companion.hideBubble());
   await page.locator('button[data-tab="overview"]').click();
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });

@@ -69,6 +69,7 @@ test('主任务成功开心、失败伤心，取消与子任务不触发表情',
     monitor.workerMessage({ type: 'task', task: { home: 'test-home', source: '子任务', status } });
   assert.deepEqual(notices.map((notice) => notice.expression), ['happy', null, 'sad', null]);
   assert.deepEqual(notices.map((notice) => notice.event), ['complete', 'complete', 'error', 'complete']);
+  assert.deepEqual(notices.map((notice) => notice.dialogueKind), ['complete', 'cancelled', 'error', 'error']);
   assert.ok(notices.every((notice) => notice.system === false));
 });
 
