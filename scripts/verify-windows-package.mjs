@@ -13,14 +13,13 @@ const temp = await fs.mkdtemp(path.join(os.tmpdir(), '龙娘 安装验证-'));
 
 try {
   const file = manifest.files[0];
-  const bytes = await fs.readFile(path.join(output, file.name));
+  const archive = path.join(output, file.name);
+  const bytes = await fs.readFile(archive);
   if (createHash('sha256').update(bytes).digest('hex') !== file.sha256) throw new Error('ZIP 摘要校验失败');
-  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    '$ErrorActionPreference = "Stop"; Expand-Archive -LiteralPath $env:DRAGONGIRL_PACKAGE_ZIP -DestinationPath $env:DRAGONGIRL_VERIFY_DIR'], {
-    env: { ...process.env, DRAGONGIRL_PACKAGE_ZIP: path.join(output, file.name), DRAGONGIRL_VERIFY_DIR: temp },
-    encoding: 'utf8', windowsHide: true,
-  });
-  if (result.status !== 0) throw new Error(result.stderr || 'ZIP 解压失败');
+  // 使用 Windows 自带的 bsdtar 解压 ZIP；参数分开传递，中文和空格路径会完整保留。
+  const tar = path.join(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows', 'System32', 'tar.exe');
+  const result = spawnSync(tar, ['-xf', archive, '-C', temp], { encoding: 'utf8', windowsHide: true });
+  if (result.status !== 0) throw new Error(result.error?.message || result.stderr?.trim() || 'ZIP 解压失败');
   const executable = path.join(temp, manifest.executable);
   const code = path.join(path.dirname(executable), 'resources/app');
   await verifyReleasePayload(root, code, manifest.version, '.exe');
