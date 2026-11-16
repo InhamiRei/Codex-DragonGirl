@@ -4,6 +4,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { extract } from '@electron-internal/extract-zip';
 import { verifyReleasePayload } from './release-payload.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -16,10 +17,8 @@ try {
   const archive = path.join(output, file.name);
   const bytes = await fs.readFile(archive);
   if (createHash('sha256').update(bytes).digest('hex') !== file.sha256) throw new Error('ZIP 摘要校验失败');
-  // 使用 Windows 自带的 bsdtar 解压 ZIP；参数分开传递，中文和空格路径会完整保留。
-  const tar = path.join(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows', 'System32', 'tar.exe');
-  const result = spawnSync(tar, ['-xf', archive, '-C', temp], { encoding: 'utf8', windowsHide: true });
-  if (result.status !== 0) throw new Error(result.error?.message || result.stderr?.trim() || 'ZIP 解压失败');
+  // 复用 Electron 下载时的 ZIP 解压库，保留中文路径，不经过系统命令的代码页转换。
+  await extract(archive, { dir: temp });
   const executable = path.join(temp, manifest.executable);
   const code = path.join(path.dirname(executable), 'resources/app');
   await verifyReleasePayload(root, code, manifest.version, '.exe');
