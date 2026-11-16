@@ -111,8 +111,10 @@ async function verifyOmuriceRender() {
   const frame = () => face.evaluate((canvas, artwork) => {
     const character = document.getElementById('character');
     const bounds = canvas.getBoundingClientRect();
-    const context = canvas.getContext('2d');
     const { width, height } = canvas;
+    // 从独立画布读取像素，避免反复读回时改变正在显示的画布的渲染路径。
+    const context = new OffscreenCanvas(width, height).getContext('2d', { willReadFrequently: true });
+    context.drawImage(canvas, 0, 0);
     // 采样点按原画坐标换算，覆盖桌宠缩放和不同屏幕像素比。
     const sample = (x, y) => context.getImageData(Math.round(x * width / artwork.width),
       Math.round(y * height / artwork.height), 1, 1).data;
@@ -131,22 +133,24 @@ async function verifyOmuriceRender() {
     const x = Math.round(width * .32), y = Math.round(height * .59);
     const sampleWidth = Math.round(width * .68) - x;
     const pixels = context.getImageData(x, y, sampleWidth, height - y).data;
-    let left = 0, right = 0, tip = 0, stream = 0, bottlePixels = 0, bottleSum = 0;
-    let sauceTop = 1, streamLeft = 1, streamRight = 0;
+    let left = 0, right = 0, tip = 0, bottlePixels = 0, bottleSum = 0, sauceTop = 1;
+    const streamStart = Math.ceil(height * .79), streamEnd = Math.ceil(height * .837);
+    const streamRows = Array.from({ length: streamEnd - streamStart }, () => ({ left: width, right: -1 }));
     for (let index = 0; index < pixels.length; index += 4) {
       const r = pixels[index], g = pixels[index + 1], b = pixels[index + 2];
-      const col = (x + (index / 4) % sampleWidth) / width;
-      const row = (y + Math.floor(index / 4 / sampleWidth)) / height;
+      const pixelX = x + (index / 4) % sampleWidth, pixelY = y + Math.floor(index / 4 / sampleWidth);
+      const col = pixelX / width, row = pixelY / height;
       if (row < .92 && r > 168 && g < 119 && b >= 77 && b <= 136 && b > g + 6 && r > g * 1.6) {
         bottlePixels += 1;
         bottleSum += col;
       }
-      if (row < .79 || r < 150 || r <= g * 1.8 || b >= 66) continue;
-      if (row < .837) {
-        stream += 1;
-        streamLeft = Math.min(streamLeft, col);
-        streamRight = Math.max(streamRight, col);
+      // 窄酱流在普通像素密度下会与底色混合，按红色优势识别，再检查连续行的宽度和列位置。
+      if (pixelY >= streamStart && pixelY < streamEnd && r > 140 && r - Math.max(g, b) > 48) {
+        const span = streamRows[pixelY - streamStart];
+        span.left = Math.min(span.left, pixelX);
+        span.right = Math.max(span.right, pixelX);
       }
+      if (row < .79 || r < 150 || r <= g * 1.8 || b >= 66) continue;
       sauceTop = Math.min(sauceTop, row);
       if (col < .47) left += 1;
       if (col > .53) right += 1;
@@ -157,26 +161,41 @@ async function verifyOmuriceRender() {
       && height === Math.round(character.clientHeight * devicePixelRatio);
     const bottle = bottlePixels > 12 ? bottleSum / bottlePixels : null;
     const largeBottle = bottlePixels > width * height * .002;
-    const verticalFlow = stream > 1 && streamRight - streamLeft < .013;
-    return { fixed, smiling, mouthless, left, right, tip, verticalFlow, bottle, largeBottle, sauceTop };
+    const maxStreamSpan = Math.ceil(width * .013);
+    const minStreamRows = Math.max(3, Math.round(height * .018));
+    let verticalFlow = false, run = 0, previousCenter = 0;
+    for (const { left, right } of streamRows) {
+      if (right < left || right - left > maxStreamSpan) {
+        run = 0;
+        continue;
+      }
+      const center = (left + right) / 2;
+      run = run > 0 && Math.abs(center - previousCenter) <= 1 ? run + 1 : 1;
+      previousCenter = center;
+      if (run >= minStreamRows) verticalFlow = true;
+    }
+    // 原门槛来自 60% 尺寸的高分屏画面，按画布面积换算后在各像素密度上检查同一覆盖比例。
+    const areaScale = width * height / (312 * 278);
+    return { fixed, smiling, mouthless, hasLeft: left > 20 * areaScale, hasRight: right > 20 * areaScale,
+      emptyRight: right === 0, hasTip: tip > 10 * areaScale, verticalFlow, bottle, largeBottle, sauceTop };
   }, EYE_ARTWORK);
   let leftBottle;
   await until(async () => {
-    const { smiling, left, right, verticalFlow, bottle, largeBottle } = await frame();
-    if (left > 20) assert.equal(smiling, true, '画爱心时没有显示眯眼笑脸');
-    if (left <= 20 || right !== 0 || !verticalFlow || !largeBottle || bottle >= .48) return false;
+    const { smiling, hasLeft, emptyRight, verticalFlow, bottle, largeBottle } = await frame();
+    if (hasLeft) assert.equal(smiling, true, '画爱心时没有显示眯眼笑脸');
+    if (!hasLeft || !emptyRight || !verticalFlow || !largeBottle || bottle === null || bottle >= .48) return false;
     leftBottle = bottle;
     return true;
   }, '悬空的酱瓶没有把可见的酱流挤到爱心左半边', 1400);
   await until(async () => {
-    const { fixed, smiling, left, right, tip, bottle } = await frame();
+    const { fixed, smiling, hasLeft, hasRight, hasTip, bottle } = await frame();
     assert.equal(fixed, true, '蛋包饭改变了人物的底部位置或画布高度');
     assert.equal(smiling, true, '画爱心时丢失了眯眼笑脸');
-    return left > 20 && right > 20 && tip > 10 && bottle !== null && bottle > leftBottle + .045;
+    return hasLeft && hasRight && hasTip && bottle !== null && bottle > leftBottle + .045;
   }, '悬空的酱瓶没有沿爱心底尖画到右半边', 2300);
   await until(async () => {
-    const { smiling, mouthless, left, right, tip, bottle, sauceTop } = await frame();
-    return smiling && mouthless && left > 20 && right > 20 && tip > 10 && bottle === null && sauceTop < .853;
+    const { smiling, mouthless, hasLeft, hasRight, hasTip, bottle, sauceTop } = await frame();
+    return smiling && mouthless && hasLeft && hasRight && hasTip && bottle === null && sauceTop < .853;
   }, '收瓶后蛋皮中上部没有显示完整爱心', 1700);
 }
 
@@ -271,24 +290,23 @@ try {
     assert.deepEqual(opened.bounds, before.bounds, '右键菜单改变了人物原生窗口，可能先显示一帧旧坐标');
     await verifyNativeMenu(opened);
 
-    // 鼠标移出角色、全局轮询和跟随更新不能中断原生菜单的输入或改变其锚点。
-    await page.evaluate(() => window.dragonGirl.interactive(false));
-    await application.evaluate(() => {
-      const c = globalThis.__dragonGirlTest;
+    // 在同一次主进程检查中观察展开状态和输入保护，避免菜单已被系统关闭后才读取输入。
+    const expanded = await application.evaluate((_, label) => {
+      const c = globalThis.__dragonGirlTest, menu = c.contextMenu;
+      if (!menu) return null;
+      c.setInteractive('character', false);
       c.pollCursor(true);
       c.followFrame({ ...c.display.workArea, x: c.display.workArea.x + 40 });
       c.setAppearance({ ...c.appearance, status: 'working' });
-    });
-    assert.equal((await snapshot()).interactive, true, '子菜单悬停期间窗口重新穿透');
-    assert.deepEqual((await snapshot()).character, before.character, '跟随更新移动了菜单所属角色');
-
-    // 执行原生子菜单的实际回调，并关闭原生菜单来验证生产关闭回调与动画通道。
-    await application.evaluate((_, label) => {
-      const c = globalThis.__dragonGirlTest;
-      const menu = c.contextMenu;
+      const state = { interactive: c.interactive.get('character'), character: { ...c.character } };
+      // 执行原生菜单自己的回调，继续验证关闭后的恢复和动画通道。
       menu.items.find((item) => item.label === '动作').submenu.items.find((item) => item.label === label).click();
       menu.closePopup(c.windows.get('character'));
+      return state;
     }, label);
+    assert.ok(expanded, '原生菜单在检查输入保护之前已关闭');
+    assert.equal(expanded.interactive, true, '子菜单悬停期间窗口重新穿透');
+    assert.deepEqual(expanded.character, before.character, '跟随更新移动了菜单所属角色');
     await until(async () => !(await snapshot()).menuOpen, '选择表情后菜单没有释放');
     if (process.platform === 'darwin') await until(() => nativeMenus().length === 0, '原生菜单关闭动画没有结束');
     assert.deepEqual((await snapshot()).bounds, before.bounds, '菜单关闭后没有恢复角色小窗口');
