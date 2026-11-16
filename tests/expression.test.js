@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { happyFrame, happySparkles, HAPPY_DURATION } from '../src/shared/expression.js';
+import { dragonFaceFrame, happyFrame, happySparkles, HAPPY_DURATION } from '../src/shared/expression.js';
 import { normalizeSettings } from '../src/core/settings.js';
 import { Monitor } from '../src/main/monitor.js';
 import os from 'node:os';
@@ -39,6 +39,38 @@ test('连续触发从当前亮度与弹动接续，仍在新一轮结束后恢�
   assert.equal(next.hop, current.hop);
   assert.equal(happyFrame(180, current).amount, 1);
   assert.deepEqual(happyFrame(HAPPY_DURATION, current), { amount: 0, hop: 0, finished: true });
+});
+
+// 收耳先停一拍再回位，重播续接当前姿态，收耳结束时爱心眼仍可见。
+test('爱心眼收耳停留、回位并续接重播', () => {
+  const neutral = { amount: 0 };
+  const entering = dragonFaceFrame('heart', 200, neutral);
+  assert.ok(entering.tuck > 0 && entering.tuck < 1);
+  const held = dragonFaceFrame('heart', 620, neutral);
+  assert.equal(held.tuck, 1);
+  const recovery = dragonFaceFrame('heart', 1150, neutral);
+  const replay = dragonFaceFrame('heart', 0, recovery);
+  assert.equal(replay.tuck, recovery.tuck);
+  const settled = dragonFaceFrame('heart', 1550, replay);
+  assert.equal(settled.tuck, 0);
+  assert.equal(settled.amount, 1);
+});
+
+// 静止阶段可以暂停更新，但瓶子未退场时仍要逐帧绘制，淡出也不能提前省略。
+test('预览只在画面定格时暂停逐帧更新，到时恢复淡出或退出', () => {
+  const neutral = { amount: 0 };
+  assert.equal(dragonFaceFrame('omurice', 2250, neutral).holdUntil, undefined);
+  for (const [name, time] of [['white-eyes', 1000], ['omurice', 2500]]) {
+    const held = dragonFaceFrame(name, time, neutral);
+    assert.equal(held.amount, 1);
+    assert.ok(held.holdUntil > time);
+    const fade = dragonFaceFrame(name, held.holdUntil + 80, neutral);
+    assert.ok(fade.amount > 0 && fade.amount < 1);
+    assert.equal(fade.holdUntil, undefined);
+  }
+  const still = dragonFaceFrame('omurice', 3450, neutral, true);
+  assert.equal(still.amount, 1);
+  assert.equal(dragonFaceFrame('omurice', still.holdUntil, neutral, true).finished, true);
 });
 
 // 表情保持期间光点仍在移动和变亮，不能退化成一张静态贴图或整体眼球平移。

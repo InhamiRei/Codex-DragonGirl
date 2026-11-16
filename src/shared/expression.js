@@ -1,10 +1,47 @@
 // 开心星光约两秒完成：柔和进入、持续流动，随后恢复原来的视线与眨眼。
 export const HAPPY_DURATION = 2000;
 
+// 「呆住」淡入后没有局部动作，蛋包饭在酱瓶离场后停在完整爱心上。
+const DRAGON_FACE_ENTER = 150;
+export const OMURICE_BOTTLE_EXIT = 2340;
+
+// 菜单、画面和帧调度共用表情时长，停留期间仍保留完整的淡出时间。
+const DRAGON_PREVIEWS = {
+  heart: { label: '爱心', duration: 3500, fade: 360 },
+  'white-eyes': { label: '呆住', duration: 2600, fade: 200, holdAfter: DRAGON_FACE_ENTER },
+  'spiral-eyes': { label: '晕晕', duration: 3200, fade: 280 },
+  omurice: { label: '蛋包饭', duration: 3600, fade: 240, holdAfter: OMURICE_BOTTLE_EXIT },
+};
+export const DRAGON_FACE_EXPRESSIONS = Object.entries(DRAGON_PREVIEWS).map(([name, { label }]) => [label, name]);
+
+// 菜单和渲染器共用表情名称，未知名称不会触发龙娘动作。
+export function isDragonFace(name) {
+  return Object.hasOwn(DRAGON_PREVIEWS, name);
+}
+
 // 平滑连接星光的开始和结束，连续触发时也不会突然熄灭。
 function smooth(value) {
   const t = Math.max(0, Math.min(1, value));
   return t * t * (3 - 2 * t);
+}
+
+// 计算透明度和收耳进度；有静止区间时返回下一次需要更新的时刻。
+export function dragonFaceFrame(name, elapsed, from, reducedMotion = false) {
+  const { duration, fade, holdAfter } = DRAGON_PREVIEWS[name];
+  if (elapsed >= duration) return { amount: 0, hop: 0, finished: true };
+  if (reducedMotion) return { amount: 1, hop: 0, holdUntil: duration, finished: false };
+  const fadeStart = duration - fade;
+  const amount = elapsed < fadeStart ? from.amount + (1 - from.amount) * smooth(elapsed / DRAGON_FACE_ENTER)
+    : 1 - smooth((elapsed - fadeStart) / fade);
+  const frame = { amount, hop: 0, finished: false };
+  if (holdAfter !== undefined && elapsed >= holdAfter && elapsed < fadeStart) frame.holdUntil = fadeStart;
+  if (name !== 'heart') return frame;
+  // 耳尖先收、停一拍再松开，连播时从当前姿态接续。
+  const { tuck = 0 } = from;
+  return {
+    ...frame,
+    tuck: (tuck + (1 - tuck) * smooth((elapsed - 140) / 330)) * (1 - smooth((elapsed - 820) / 680)),
+  };
 }
 
 // 输出星光强度与轻弹高度，旧表情可作为新的起点，避免连续完成事件堆积动画。

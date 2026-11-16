@@ -142,8 +142,8 @@ try {
     delete window.__blinkPreview;
   });
 
-  // 真正的自动眨眼由原有角色实例启动；鼠标跟随关闭、鼠标静止时也应发生。
-  await appearance({ blinkEnabled: true });
+  // 单独验收自动眨眼，先关闭独立的呼吸与身体动作，避免刚好遇到待机起伏。
+  await appearance({ blinkEnabled: true, motion: false });
   await until(() => page.locator('.eye-layer').count().then((count) => count === 2), '自动眨眼没有创建眼区');
   await until(() => page.locator('.eye-layer:not([hidden])').count().then((count) => count === 0), '等待眨眼时没有保持睁眼原画');
   await until(() => page.locator('.eye-layer:not([hidden])').count().then((count) => count === 2), '鼠标静止时没有自动眨眼');

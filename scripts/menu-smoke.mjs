@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { PRAYER_TEXT } from '../src/shared/dialogue.js';
+import { EYE_ARTWORK } from '../src/shared/gaze.js';
 
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-menu-'));
@@ -40,7 +41,7 @@ async function snapshot() {
     return { menuOpen: !!c.contextMenu, interactive: c.interactive.get('character'), visible: c.visible,
       bounds, area: c.display.workArea, screen: c.display.bounds, state: c.state, character: c.character,
       position: { x: bounds.x + model.rect.x, y: bounds.y + model.rect.y },
-      expressions: c.contextMenu?.items.find((item) => item.label === '表情')?.submenu.items.map((item) => item.label) };
+      expressions: c.contextMenu?.items.find((item) => item.label === '动作')?.submenu.items.map((item) => item.label) };
   });
 }
 
@@ -76,6 +77,152 @@ async function verifyNativeMenu(reference) {
   } catch (error) { throw new Error(`${error.message}\n${JSON.stringify({ reference, menus, current: await snapshot() })}`); }
 }
 
+// 在原画分辨率验收贴图，锁住左眼角、左右刘海、侧发和嘴部的透明像素。
+async function verifyDragonEyeAtlas() {
+  const regions = [[390, 614, 36, 30], [376, 706, 13, 40], [586, 617, 45, 113],
+    [687, 620, 47, 122], [957, 751, 46, 87], [600, 847, 131, 106]];
+  const result = await page.evaluate(async ({ artwork, regions }) => {
+    const atlas = new Image();
+    atlas.src = 'dragon://app/assets/characters/codex-dragon-girl-expressions.png';
+    await atlas.decode();
+    const [left, right] = artwork.eyes;
+    const canvas = new OffscreenCanvas(artwork.width, artwork.height);
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    const clear = [];
+    // 按正式切片坐标还原三种眼神，保护区内每一个像素的透明度都必须是零。
+    for (let row = 0; row < 3; row += 1) {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      const top = row * right.height;
+      context.drawImage(atlas, 0, top, left.width, left.height, left.x, left.y, left.width, left.height);
+      context.drawImage(atlas, left.width, top, right.width, right.height, right.x, right.y, right.width, right.height);
+      clear.push(regions.every((region) => context.getImageData(...region).data
+        .every((channel, index) => index % 4 !== 3 || channel === 0)));
+    }
+    return { height: atlas.naturalHeight, clear };
+  }, { artwork: EYE_ARTWORK, regions });
+  assert.equal(result.height, EYE_ARTWORK.eyes[1].height * 3, '贴图应当只有三种眼神');
+  assert.deepEqual(result.clear, [true, true, true], '表情贴图覆盖了发丝、脸线或嘴部的原画像素');
+}
+
+// 蛋包饭保持原画尺寸，悬空的瓶子随酱线依次画过爱心左半边、底尖和右半边。
+async function verifyOmuriceRender() {
+  const face = page.locator('#dragon-expression');
+  // 采样笑脸，再按盘面位置和颜色分别核对爱心、直落酱流和大瓶。
+  const frame = () => face.evaluate((canvas, artwork) => {
+    const character = document.getElementById('character');
+    const bounds = canvas.getBoundingClientRect();
+    const context = canvas.getContext('2d');
+    const { width, height } = canvas;
+    // 采样点按原画坐标换算，覆盖桌宠缩放和不同屏幕像素比。
+    const sample = (x, y) => context.getImageData(Math.round(x * width / artwork.width),
+      Math.round(y * height / artwork.height), 1, 1).data;
+    const eyes = [[548, 742], [765, 760]].every(([x, y]) => {
+      const [r, g, b] = sample(x, y);
+      return r < 65 && g < 65 && b < 90;
+    });
+    // 下半张脸仍是原本的肤色，双颊仅叠加浅淡的粉红。
+    const [skinR, skinG, skinB] = sample(668, 888);
+    const cheeks = [[438, 822], [818, 855]].every(([x, y]) => {
+      const [r, g, b] = sample(x, y);
+      return g >= 195 && r - g >= 17 && r - g < 55 && b >= 192;
+    });
+    const smiling = eyes && cheeks;
+    const mouthless = skinR >= 236 && skinG >= 222 && skinB >= 205;
+    const x = Math.round(width * .32), y = Math.round(height * .59);
+    const sampleWidth = Math.round(width * .68) - x;
+    const pixels = context.getImageData(x, y, sampleWidth, height - y).data;
+    let left = 0, right = 0, tip = 0, stream = 0, bottlePixels = 0, bottleSum = 0;
+    let sauceTop = 1, streamLeft = 1, streamRight = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      const r = pixels[index], g = pixels[index + 1], b = pixels[index + 2];
+      const col = (x + (index / 4) % sampleWidth) / width;
+      const row = (y + Math.floor(index / 4 / sampleWidth)) / height;
+      if (row < .92 && r > 168 && g < 119 && b >= 77 && b <= 136 && b > g + 6 && r > g * 1.6) {
+        bottlePixels += 1;
+        bottleSum += col;
+      }
+      if (row < .79 || r < 150 || r <= g * 1.8 || b >= 66) continue;
+      if (row < .837) {
+        stream += 1;
+        streamLeft = Math.min(streamLeft, col);
+        streamRight = Math.max(streamRight, col);
+      }
+      sauceTop = Math.min(sauceTop, row);
+      if (col < .47) left += 1;
+      if (col > .53) right += 1;
+      if (col > .482 && col < .518 && row > .912 && row < .937) tip += 1;
+    }
+    const fixed = Math.abs(bounds.top - character.offsetTop) < 1
+      && Math.abs(bounds.height - character.clientHeight) < 1
+      && height === Math.round(character.clientHeight * devicePixelRatio);
+    const bottle = bottlePixels > 12 ? bottleSum / bottlePixels : null;
+    const largeBottle = bottlePixels > width * height * .002;
+    const verticalFlow = stream > 1 && streamRight - streamLeft < .013;
+    return { fixed, smiling, mouthless, left, right, tip, verticalFlow, bottle, largeBottle, sauceTop };
+  }, EYE_ARTWORK);
+  let leftBottle;
+  await until(async () => {
+    const { smiling, left, right, verticalFlow, bottle, largeBottle } = await frame();
+    if (left > 20) assert.equal(smiling, true, '画爱心时没有显示眯眼笑脸');
+    if (left <= 20 || right !== 0 || !verticalFlow || !largeBottle || bottle >= .48) return false;
+    leftBottle = bottle;
+    return true;
+  }, '悬空的酱瓶没有把可见的酱流挤到爱心左半边', 1400);
+  await until(async () => {
+    const { fixed, smiling, left, right, tip, bottle } = await frame();
+    assert.equal(fixed, true, '蛋包饭改变了人物的底部位置或画布高度');
+    assert.equal(smiling, true, '画爱心时丢失了眯眼笑脸');
+    return left > 20 && right > 20 && tip > 10 && bottle !== null && bottle > leftBottle + .045;
+  }, '悬空的酱瓶没有沿爱心底尖画到右半边', 2300);
+  await until(async () => {
+    const { smiling, mouthless, left, right, tip, bottle, sauceTop } = await frame();
+    return smiling && mouthless && left > 20 && right > 20 && tip > 10 && bottle === null && sauceTop < .853;
+  }, '收瓶后蛋皮中上部没有显示完整爱心', 1700);
+}
+
+// 「呆住」用独立画布逐像素比对，其他动态眼神用多帧验证眼纹确实在变化。
+async function verifyDragonEyeRender(name) {
+  if (name !== 'white-eyes') {
+    // 越过淡入再对比，避免静止贴图只靠透明度变化通过验证。
+    await page.waitForTimeout(300);
+    const frame = () => page.locator('#dragon-expression').evaluate((canvas) => {
+      const x = Math.round(canvas.width * .27);
+      const y = Math.round(canvas.height * .55);
+      const width = Math.round(canvas.width * .43);
+      const pixels = canvas.getContext('2d').getImageData(x, y, width, Math.round(canvas.height * .17)).data;
+      return Array.from(pixels.filter((_, index) => index % 16 < 3));
+    });
+    const first = await frame();
+    await until(async () => (await frame()).some((value, index) => Math.abs(value - first[index]) > 18),
+      `${name}停在同一帧`, 1700);
+    return;
+  }
+  await until(() => page.evaluate(async ({ artwork, row }) => {
+    const actual = document.getElementById('dragon-expression');
+    if (actual.hidden) return false;
+    const atlas = new Image();
+    atlas.src = 'dragon://app/assets/characters/codex-dragon-girl-expressions.png';
+    await atlas.decode();
+    const [left, right] = artwork.eyes;
+    const composite = new OffscreenCanvas(artwork.width, artwork.height);
+    const context = composite.getContext('2d');
+    context.drawImage(document.getElementById('portrait'), 0, 0);
+    const top = row * right.height;
+    context.drawImage(atlas, 0, top, left.width, left.height, left.x, left.y, left.width, left.height);
+    context.drawImage(atlas, left.width, top, right.width, right.height, right.x, right.y, right.width, right.height);
+    const { width, height } = actual;
+    const expected = new OffscreenCanvas(width, height).getContext('2d');
+    expected.imageSmoothingQuality = 'high';
+    expected.drawImage(composite, 0, 0, width, height);
+    // 只读眼区和发际线，透明外轮廓的预乘色值可能有一档舍入差异。
+    const x = Math.floor(340 * width / artwork.width), y = Math.floor(615 * height / artwork.height);
+    const region = [x, y, Math.ceil(670 * width / artwork.width), Math.ceil(245 * height / artwork.height)];
+    const pixels = expected.getImageData(...region).data;
+    const rendered = actual.getContext('2d').getImageData(...region).data;
+    return pixels.every((value, index) => value === rendered[index]);
+  }, { artwork: EYE_ARTWORK, row: 1 }), '小尺寸表情与原生合成后的缩放画面不一致', 1500);
+}
+
 try {
   if (process.platform === 'darwin') {
     const result = spawnSync('/usr/bin/xcrun', ['swiftc', '-module-cache-path', path.join(os.tmpdir(), 'dragongirl-swift-cache'), path.join(root, 'tests/fixtures/MenuProbe.swift'), '-o', menuProbe], {
@@ -96,11 +243,12 @@ try {
     // 保留真实一级菜单长度，使用空委托避免测试打开管理页或触发账户查询。
     c.delegate = { openDashboard: () => {}, refresh: () => {}, selectCharacter: async () => {} };
     c.setAppearance({ settings: { motion: false, eyeTracking: false, blinkEnabled: false, soundEnabled: false, expressionsEnabled: true } });
-    c.setScale(0.6);
     c.character.x = c.display.workArea.x + 300;
     c.character.y = c.display.workArea.y + c.display.workArea.height - c.character.height - 20;
-    c.applyCharacter();
+    // 通过缩放入口记录测试位置的锚点，工作区刷新时也使用这次摆放。
+    c.setScale(0.6);
   });
+  await verifyDragonEyeAtlas();
   const before = await snapshot();
   await application.evaluate(() => {
     const window = globalThis.__dragonGirlTest.windows.get('character');
@@ -111,8 +259,9 @@ try {
       window[name] = (...args) => { globalThis.__menuGeometryCalls.push(name); return original(...args); };
     }
   });
-  // 通过同一个原生表情菜单逐个播放，验证素材显示和自动恢复。
-  const expressions = [['开心', 'happy'], ['伤心', 'sad'], ['祈祷', 'prayer']];
+  // 通过同一个原生动作菜单逐个播放，验证素材显示和自动恢复。
+  const newEyes = [['爱心', 'heart'], ['呆住', 'white-eyes'], ['晕晕', 'spiral-eyes'], ['蛋包饭', 'omurice']];
+  const expressions = [['发光', 'happy'], ['哭泣', 'sad'], ['祈祷', 'prayer'], ...newEyes];
   for (const [label, name] of expressions) {
     await openMenu();
     const opened = await snapshot();
@@ -137,13 +286,20 @@ try {
     await application.evaluate((_, label) => {
       const c = globalThis.__dragonGirlTest;
       const menu = c.contextMenu;
-      menu.items.find((item) => item.label === '表情').submenu.items.find((item) => item.label === label).click();
+      menu.items.find((item) => item.label === '动作').submenu.items.find((item) => item.label === label).click();
       menu.closePopup(c.windows.get('character'));
     }, label);
     await until(async () => !(await snapshot()).menuOpen, '选择表情后菜单没有释放');
     if (process.platform === 'darwin') await until(() => nativeMenus().length === 0, '原生菜单关闭动画没有结束');
     assert.deepEqual((await snapshot()).bounds, before.bounds, '菜单关闭后没有恢复角色小窗口');
     await until(() => page.locator('#character').getAttribute('data-expression').then((value) => value === name), `${label}没有播放`);
+    if (newEyes.some(([, id]) => id === name)) {
+      const face = page.locator('#dragon-expression');
+      assert.equal(await face.isVisible(), true, `${label}没有显示合成画面`);
+      assert.equal(await page.locator('.eye-layer:not([hidden])').count(), 0, `${label}仍叠加视线画布`);
+      if (name === 'omurice') await verifyOmuriceRender();
+      else await verifyDragonEyeRender(name);
+    }
     if (name === 'prayer') {
       assert.equal(await page.locator('#prayer-portrait').isVisible(), true, '祈祷素材没有显示');
       assert.equal(await page.locator('#portrait').isVisible(), false, '祈祷与原画叠在一起');
@@ -288,12 +444,13 @@ try {
 
   // 主动收起必须关闭菜单并释放输入，重新叫出时不重放旧表情。
   await openMenu();
+  const beforeHide = await snapshot();
   await application.evaluate(() => globalThis.__dragonGirlTest.hide());
   await until(async () => !(await snapshot()).menuOpen, '收起角色没有关闭菜单');
   const hidden = await snapshot();
   assert.equal(hidden.visible, false);
   assert.equal(hidden.interactive, false);
-  assert.deepEqual(hidden.bounds, before.bounds);
+  assert.deepEqual(hidden.bounds, beforeHide.bounds);
   // 触发实际交给托盘的菜单回调，收起的龙娘也能出现并播放祈祷。
   await application.evaluate(() => {
     const c = globalThis.__dragonGirlTest;
@@ -309,7 +466,7 @@ try {
     } finally {
       c.tray.setContextMenu = setContextMenu;
     }
-    trayMenu.items.find((item) => item.label === '表情').submenu.items.find((item) => item.label === '祈祷').click();
+    trayMenu.items.find((item) => item.label === '动作').submenu.items.find((item) => item.label === '祈祷').click();
   });
   await until(async () => (await snapshot()).visible && await page.locator('#prayer-portrait').isVisible(), '收起后从托盘选择祈祷没有显示');
   await application.evaluate(() => globalThis.__dragonGirlTest.hide());
@@ -332,7 +489,7 @@ try {
     assert.deepEqual((await snapshot()).position, positioned.position, '角落菜单造成了人物瞬移');
     await application.evaluate(() => {
       const c = globalThis.__dragonGirlTest;
-      c.contextMenu.closePopup(c.windows.get('character'));
+      c.contextMenu?.closePopup(c.windows.get('character'));
     });
     await until(async () => !(await snapshot()).menuOpen, '角落菜单未关闭');
     if (process.platform === 'darwin') await until(() => nativeMenus().length === 0, '角落菜单的原生窗口尚未关闭');

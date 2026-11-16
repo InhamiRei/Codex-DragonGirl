@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld(
     measureBubble: (measurement) => ipcRenderer.send('dg:bubble-measured', measurement),
     assetError: () => ipcRenderer.send('dg:asset-error'),
     onCursor: (listener) => subscribe('dg:cursor', listener),
+    // 轻戳事件来自主进程的手势判定，渲染层只订阅固定通道。
+    onPoke: (listener) => subscribe('dg:poke', listener),
     onInputState: (listener) => subscribe('dg:input-state', listener),
     onLayout: (listener) => subscribe('dg:layout', listener),
     onDragging: (listener) => subscribe('dg:dragging', listener),

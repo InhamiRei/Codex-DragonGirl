@@ -126,7 +126,7 @@ try {
   assert.equal(await state(), 'sad');
   const previewEnabled = await application.evaluate(() => {
     const c = globalThis.__dragonGirlTest;
-    const item = c.buildMenu().items.find((entry) => entry.label === '表情').submenu.items.find((entry) => entry.label === '捋头发');
+    const item = c.buildMenu().items.find((entry) => entry.label === '动作').submenu.items.find((entry) => entry.label === '捋头发');
     item.click();
     return item.enabled;
   });
@@ -162,7 +162,7 @@ try {
   await appearance({ motion: false });
   await until(async () => await state() === 'idle', '关闭动画没有停止捋发');
   assert.equal(await application.evaluate(() => globalThis.__dragonGirlTest.buildMenu().items
-    .find((entry) => entry.label === '表情').submenu.items.find((entry) => entry.label === '捋头发').enabled), false);
+    .find((entry) => entry.label === '动作').submenu.items.find((entry) => entry.label === '捋头发').enabled), false);
   await appearance({ motion: true });
   await expression('hair');
   await application.evaluate(() => globalThis.__dragonGirlTest.hide());

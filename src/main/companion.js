@@ -31,6 +31,7 @@ import { eyeTrackingEnabled } from '../shared/gaze.js';
 import { shouldFaceLeft } from '../shared/facing.js';
 import { followWindowStack, followWindowFloating } from '../shared/follow-window.js';
 import { CHARACTERS, characterByAsset } from '../shared/characters.js';
+import { DRAGON_FACE_EXPRESSIONS, isDragonFace } from '../shared/expression.js';
 import { PRAYER_PALM } from '../shared/prayer-wave.js';
 import { PrayerWave } from './prayer-wave.js';
 
@@ -387,6 +388,9 @@ export class Companion {
       this.delegate?.onDrag?.(this);
     } else {
       this.toggleBubble();
+      // 只有手势状态机判定为轻戳才通知双耳，独立于点击后的气泡和表情。
+      if (characterByAsset(this.appearance.asset)?.id === 'dragon')
+        this.windows.get('character').webContents.send('dg:poke');
       this.showExpression('happy');
     }
     this.windows.get('character').webContents.send('dg:dragging', false);
@@ -747,12 +751,12 @@ export class Companion {
       },
       // 手动预览走统一表情事件并自动恢复；托盘操作先叫出角色，自定义图片和关闭动态表情时禁用。
       {
-        label: '表情',
+        label: '动作',
         enabled: !!characterId
           && this.appearance.settings?.expressionsEnabled !== false,
         submenu: (characterId === 'maro'
           ? [['完成', 'happy'], ['失败', 'sad'], ['捋头发', 'hair']]
-          : [['开心', 'happy'], ['伤心', 'sad'], ['祈祷', 'prayer']]).map(([label, name]) => ({
+          : [['发光', 'happy'], ['哭泣', 'sad'], ['祈祷', 'prayer'], ...DRAGON_FACE_EXPRESSIONS]).map(([label, name]) => ({
           label,
           enabled: name !== 'hair' || this.appearance.settings?.motion !== false,
           click: () => {
@@ -1026,15 +1030,17 @@ export class Companion {
   // 表情与声音独立；只接受已知表情，隐藏或拖动期间不积压表情消息。
   showExpression(name, { preview = false } = {}) {
     const window = this.windows.get('character');
+    const characterId = characterByAsset(this.appearance.asset)?.id;
+    // 新的五官贴图只适用于龙娘原画，仍由右键和托盘使用同一预览通道。
     const supported = ['happy', 'sad'].includes(name)
-      || (name === 'hair' && characterByAsset(this.appearance.asset)?.id === 'maro')
-      || (name === 'prayer' && characterByAsset(this.appearance.asset)?.id === 'dragon');
+      || (name === 'hair' && characterId === 'maro')
+      || (characterId === 'dragon' && (name === 'prayer' || isDragonFace(name)));
     if (!supported || this.stopping || this.gesture.active || this.appearance.settings?.expressionsEnabled === false
       || !this.ready.has('character') || !window || window.isDestroyed() || !window.isVisible()) return;
     // 先同步当前可见性，再发出表情；正常桌面点击不能因渲染层残留的隐藏状态而被丢弃。
     this.sendCharacterLayout();
-    // 手动捋发与后台待机动作分开标记；工作中也能响应用户主动点开的预览。
-    window.webContents.send('dg:expression', name === 'hair'
+    // 动作菜单的请求统一带预览来源，供渲染器选择手动播放姿态。
+    window.webContents.send('dg:expression', preview || name === 'hair'
       ? { name, source: preview ? 'preview' : 'idle' } : name);
   }
 
