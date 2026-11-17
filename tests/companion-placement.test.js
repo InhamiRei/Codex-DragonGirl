@@ -122,8 +122,8 @@ test('副屏断开时收起角色，恢复副屏或宿主真正移屏后继续�
   assert.equal(character.isVisible(), true);
 });
 
-// 菜单期间固定角色，关菜单时用最后收到的快照，宿主静止后也能立刻对齐。
-test('右键菜单关闭后立即跟到最新宿主位置', async (t) => {
+// 跟随菜单关闭时应用最后一帧，独立桌面继续使用屏幕锚点。
+test('右键菜单关闭后跟随最新宿主位置，独立桌面忽略跟随帧', async (t) => {
   const { pet, host, offset } = await fixture(t);
   const character = pet.windows.get('character');
   character.getContentBounds = character.getBounds;
@@ -138,4 +138,15 @@ test('右键菜单关闭后立即跟到最新宿主位置', async (t) => {
   assert.equal(pet.character.x, originalX);
   close();
   assert.equal(pet.character.x, originalX + 80);
+
+  pet.setFollowMode(false);
+  pet.followTarget = null;
+  pet.restore();
+  const desktopPosition = { ...pet.character };
+  pet.showMenu({ x: desktopPosition.x, y: desktopPosition.y });
+  pet.followFrame(host, offset);
+  close();
+  powerMonitor.emit('resume');
+  assert.equal(pet.followTarget, null);
+  assert.deepEqual(pet.character, desktopPosition);
 });

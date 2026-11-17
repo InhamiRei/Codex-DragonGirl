@@ -962,6 +962,8 @@ export class Companion {
 
   // 保留当前宿主和相对锚点，显示器事件到达时无需等待下一份原生快照。
   followFrame(frame, offset = { x: 1, y: 1 }, { order = null, topmost = [], normalWindows = null } = {}) {
+    // 独立桌面的菜单忽略宿主坐标，避免菜单关闭后的屏幕重排使用跟随位置。
+    if (this.contextMenu && frame && !this.followMode) return;
     this.followOrder = order;
     this.followTopmost = topmost;
     this.followNormalWindows = normalWindows;
