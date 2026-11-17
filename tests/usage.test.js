@@ -116,7 +116,8 @@ test('Pro 单周额度生成明确标注无限制的 5h 展示行', () => {
       const weekly = Object.freeze({ label: '周额度', minutes: 10080, remaining,
         low: remaining <= 20, resetsAt: 1900000000000 });
       const windows = Object.freeze([weekly]);
-      const result = quotaDisplayWindows(windows, plan);
+      assert.equal(quotaDisplayWindows(windows, plan), windows);
+      const result = quotaDisplayWindows(windows, plan, true);
       assert.equal(result.length, 2);
       assert.equal(result[0].label, '5 小时');
       assert.equal(result[0].minutes, 300);
@@ -136,10 +137,17 @@ test('5h 展示补位不覆盖真实限制，也不扩展未知额度', () => {
   const weekly = { label: '周额度', minutes: 10080, remaining: 62 };
   const windows = [weekly];
   for (const plan of ['plus', 'unknown', 'apiKey', 'business', 'codex_future', undefined])
-    assert.equal(quotaDisplayWindows(windows, plan), windows);
+    assert.equal(quotaDisplayWindows(windows, plan, true), windows);
   for (const rows of [[], [{ ...weekly, minutes: null }],
     [{ label: '5 小时', minutes: 300 }, weekly], [weekly, { ...weekly }]])
-    assert.equal(quotaDisplayWindows(rows, 'prolite'), rows);
+    assert.equal(quotaDisplayWindows(rows, 'prolite', true), rows);
+});
+
+// 新版与旧版设置都默认隐藏补位行，只接受明确的布尔值。
+test('Pro 的 5 小时展示偏好默认关闭', () => {
+  assert.equal(normalizeSettings({ version: 1 }).showProFiveHourQuota, false);
+  assert.equal(normalizeSettings({ showProFiveHourQuota: 'true' }).showProFiveHourQuota, false);
+  assert.equal(normalizeSettings({ showProFiveHourQuota: true }).showProFiveHourQuota, true);
 });
 
 // 数量单位仅改变排版，普通数值、万、亿、万亿及未知文案都不能丢失或被重新计量。

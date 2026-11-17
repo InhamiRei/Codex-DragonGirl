@@ -19,6 +19,7 @@ application.activate(ignoringOtherApps: true)
 // AppKit 首次显示可能将副屏初始坐标夹回主屏；显示后再定位，避免用户主屏窗口干扰隔离验收。
 window.setFrameOrigin(initialFrame.origin)
 var panel: NSOpenPanel?
+var floatingMenu: NSPanel?
 var previous = ""
 var orderTimer: Timer?
 
@@ -68,6 +69,36 @@ func recordActivation() {
     window.orderFrontRegardless()
 }
 
+// 短时间连续移动宿主再回到原位，模拟标题栏拖动中的位置变化。
+func glideHost() {
+    let origin = window.frame.origin
+    var step = 0
+    let timer = Timer(timeInterval: 0.025, repeats: true) { timer in
+        step += 1
+        let distance = CGFloat(min(step, 48 - step) * 3)
+        window.setFrameOrigin(NSPoint(x: origin.x - distance, y: origin.y))
+        if step == 48 {
+            timer.invalidate()
+            try? Data().write(to: directory.appendingPathComponent("glide-complete"), options: .atomic)
+        }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+}
+
+// 模拟以浮动面板实现的宿主菜单，与角色及气泡占用同一片屏幕区域。
+func openFloatingMenu() {
+    let frame = window.frame
+    let popup = NSPanel(contentRect: NSRect(x: frame.maxX - 230, y: frame.minY + 15, width: 210, height: 250),
+                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    popup.isFloatingPanel = true
+    popup.hidesOnDeactivate = false
+    popup.backgroundColor = .windowBackgroundColor
+    popup.level = .floating
+    popup.orderFrontRegardless()
+    floatingMenu = popup
+    try? String(popup.windowNumber).write(to: directory.appendingPathComponent("floating-menu"), atomically: true, encoding: .utf8)
+}
+
 // 只报告自建窗口的编号，测试不选择或修改任何用户文件。
 func report(_ stage: String) {
     let data = try! JSONSerialization.data(withJSONObject: ["stage": stage, "window": window.windowNumber])
@@ -92,6 +123,9 @@ func execute(_ command: String) {
     case "raise": window.orderFrontRegardless(); report("raised")
     case "activate": window.makeKeyAndOrderFront(nil); application.activate(ignoringOtherApps: true); report("activated")
     case "pulse": recordActivation()
+    case "glide": glideHost()
+    case "open-floating-menu": openFloatingMenu()
+    case "close-floating-menu": floatingMenu?.orderOut(nil); floatingMenu = nil
     case "partial": window.setContentSize(NSSize(width: 550, height: 760)); window.orderFrontRegardless(); report("partial")
     case "full": window.setContentSize(NSSize(width: 1100, height: 760)); window.orderFrontRegardless(); report("full")
     case "quit": application.terminate(nil)

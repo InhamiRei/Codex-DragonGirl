@@ -157,12 +157,20 @@ try {
         }
       }
     }
-    // 三档 Pro 与 Plus 使用相同双行布局；无限制行的电量始终跟随实际周额度。
+    // 三档 Pro 默认使用单行布局，开启后与 Plus 的双行布局一致。
     for (const [planType, plan] of [['prolite', 'Pro 100'], ['pro', 'Pro 200'], ['promax', 'Pro 500']]) {
       const weekly = { label: '周额度', minutes: 10080, remaining: 62,
         resetsAt: Date.parse('2026-11-09T13:33:00+08:00') };
-      const pro = { text: `${plan}-${scale}`, usage: { plan, timezone: 'Asia/Shanghai',
+      const pro = { text: `${plan}-${scale}-weekly`, usage: { plan, timezone: 'Asia/Shanghai',
         quotas: quotaDisplayWindows([weekly], planType), quotaNote: '', tokens: '123.4万' } };
+      await show(pro);
+      const single = await metrics();
+      assert.deepEqual(single.resets, ['11.09 13:33 重置']);
+      assert.equal(single.meters.length, 1);
+      assert.ok(single.footerVisible && !single.outside && single.scrollHeight <= single.clientHeight + 1);
+      if (scale === 1 && planType === 'prolite') await page.screenshot({ path: path.join(root, '.artifacts/bubble-pro-weekly.png'), omitBackground: true });
+      pro.text += '-five-hour';
+      pro.usage.quotas = quotaDisplayWindows([weekly], planType, true);
       await show(pro);
       const proResult = await metrics();
       assert.equal(proResult.meters.length, 2);
@@ -173,7 +181,7 @@ try {
         'Pro 和 Plus 的双行布局高度不同');
       if (scale === 1 && planType === 'prolite') await page.screenshot({ path: path.join(root, '.artifacts/bubble-pro-unified.png'), omitBackground: true });
       pro.text += '-zero';
-      pro.usage.quotas = quotaDisplayWindows([{ ...weekly, remaining: 0, low: true, resetsAt: null }], planType);
+      pro.usage.quotas = quotaDisplayWindows([{ ...weekly, remaining: 0, low: true, resetsAt: null }], planType, true);
       await show(pro);
       const zero = await metrics();
       assert.ok(zero.meters.every((meter) => meter.segments.every((fill) => fill === '0%')), '0% 电量仍点亮了格子');

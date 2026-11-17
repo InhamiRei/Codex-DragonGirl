@@ -135,9 +135,12 @@ export class Monitor extends EventEmitter {
       ...process, home: await fs.realpath(process.home).catch(() => process.home),
     })));
     if (this.stopped || bridge !== this.native || sequence !== this.nativeSequence) return;
-    // 纯层级变化只同步原生窗口，不重复向管理界面发布相同账户与用量数据。
+    // 几何与层级直接同步给桌宠。管理界面只需要实例在线和前台状态。
     const changed = this.nativeError || this.screenPermission !== state.screenPermission
-      || JSON.stringify(this.processes) !== JSON.stringify(processes);
+      || this.processes.length !== processes.length || processes.some(({ pid, home, frontmost }, index) => {
+        const previous = this.processes[index];
+        return pid !== previous.pid || home !== previous.home || frontmost !== previous.frontmost;
+      });
     this.processes = processes;
     this.windowOrder = state.windowOrder;
     this.topmostWindows = state.topmostWindows;

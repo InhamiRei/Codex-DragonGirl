@@ -38,8 +38,8 @@ test('Windows 层级管道校验编号并在恢复后重新接受请求', () => 
   assert.equal(writes.length, 2);
 });
 
-// 只有遮挡顺序变化时也必须触发跟随，同时避免管理界面与账户数据重复刷新。
-test('原生层级单独变化立即同步窗口，实例与权限变化仍正常发布', async () => {
+// 窗口移动和层级变化立即同步给桌宠，避免管理界面重复刷新账户数据。
+test('原生几何和层级立即同步，实例与权限变化仍正常发布', async () => {
   const monitor = new Monitor(os.tmpdir(), { testMode: true });
   const bridge = monitor.native = {};
   let publications = 0;
@@ -49,11 +49,13 @@ test('原生层级单独变化立即同步窗口，实例与权限变化仍正�
   const row = { pid: 123, home: os.tmpdir(), frontmost: false, windows: [{ id: 1, x: 100, y: 100, width: 800, height: 600 }] };
   await monitor.receiveNative({ processes: [row], screenPermission: true, windowOrder: [3, 2, 1] }, bridge);
   assert.equal(publications, 1);
-  await monitor.receiveNative({ processes: [row], screenPermission: true, windowOrder: [3, 1, 2] }, bridge);
+  const moved = { ...row, windows: [{ ...row.windows[0], x: 200 }] };
+  await monitor.receiveNative({ processes: [moved], screenPermission: true, windowOrder: [3, 1, 2] }, bridge);
   assert.deepEqual(orders, [[3, 2, 1], [3, 1, 2]]);
+  assert.equal(monitor.processes[0].windows[0].x, 200);
   assert.equal(publications, 1);
   // Windows 静止心跳也要触发层级校正，但不能重新发布用量或重绘管理界面。
-  await monitor.receiveNative({ processes: [row], screenPermission: true, windowOrder: [3, 1, 2] }, bridge);
+  await monitor.receiveNative({ processes: [moved], screenPermission: true, windowOrder: [3, 1, 2] }, bridge);
   assert.deepEqual(orders, [[3, 2, 1], [3, 1, 2], [3, 1, 2]]);
   assert.equal(publications, 1);
   await monitor.receiveNative({ processes: [{ ...row, frontmost: true }], screenPermission: true, windowOrder: [1, 3, 2] }, bridge);

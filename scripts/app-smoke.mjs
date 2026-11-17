@@ -738,7 +738,16 @@ try {
     return model.measuredRevision === model.revision && document.body.dataset.ready === 'true';
   }), '用量卡片没有完成测量');
   assert.equal(await bubble.locator('#plan').textContent(), 'Pro 100');
-  assert.equal(await bubble.locator('.quota').count(), 2, 'Pro 单周窗口未补充 5h 展示行');
+  assert.deepEqual(await bubble.locator('.quota-label').allTextContents(), ['周额度']);
+  // 通过外观表单保存开关，正在显示的气泡应更新，磁盘也应记录本次偏好。
+  await page.locator('button[data-tab="settings"]').click();
+  await page.locator('[data-settings-tab="appearance"]').click();
+  const proFiveHourSwitch = page.getByRole('switch', { name: '显示 Pro 的 5 小时额度' });
+  assert.equal(await proFiveHourSwitch.isChecked(), false);
+  await proFiveHourSwitch.check();
+  await page.locator('#save-settings').click();
+  await until(() => bubble.locator('.quota').count().then((count) => count === 2), '保存后气泡未显示 5 小时进度');
+  assert.equal(JSON.parse(await fs.readFile(path.join(data, 'settings.json'), 'utf8')).showProFiveHourQuota, true);
   assert.deepEqual(await bubble.locator('.quota-label').allTextContents(), ['5 小时', '周额度']);
   assert.equal(await bubble.locator('.quota-reset').first().textContent(), '无限制');
   assert.match(await bubble.locator('.quota').first().getAttribute('title'), /电量条和百分比参考周额度/);
@@ -758,6 +767,10 @@ try {
     animations: 'disabled', omitBackground: true,
     path: path.join(root, '.artifacts/bubble-plan-tokens.png'),
   });
+  await proFiveHourSwitch.uncheck();
+  await page.locator('#save-settings').click();
+  await until(() => bubble.locator('.quota').count().then((count) => count === 1), '关闭开关后气泡未恢复单行');
+  await page.locator('button[data-tab="overview"]').click();
   // 真实用量卡片切到语录后，后台额度更新不得覆盖短句；再次点击关闭，重开回到用量。
   const quoteIndex = await application.evaluate(() => globalThis.__dragonGirlApp.companion.dialogueCounts.get('dragon:chat') ?? 0);
   await bubble.locator('#message').click();

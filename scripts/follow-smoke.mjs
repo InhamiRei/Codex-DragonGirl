@@ -247,6 +247,37 @@ try {
     const calls = await application.evaluate(() => globalThis.__followClickCalls);
     assert.deepEqual(calls, {}, '前台点击仍在触发补偿置前或重新显隐');
     await fs.writeFile(path.join(root, '.artifacts/follow-click-report.json'), JSON.stringify({ clicks, calls }, null, 2));
+
+    // 连续移动期间统计角色真实窗口收到的不同位置，避免只验收松手时的最终坐标。
+    await application.evaluate(() => {
+      const window = globalThis.__dragonGirlApp.companion.windows.get('character');
+      const setBounds = window.setBounds.bind(window);
+      globalThis.__followMovePositions = new Set();
+      window.setBounds = (bounds, animate) => {
+        globalThis.__followMovePositions.add(bounds.x);
+        setBounds(bounds, animate);
+      };
+    });
+    await send(host, 'glide');
+    await until(async () => (await fs.stat(path.join(host.directory, 'glide-complete')).catch(() => null))?.isFile(), '连续移动未完成');
+    await until(async () => JSON.stringify((await companionState()).character) === JSON.stringify(original), '往返移动后角色未对齐');
+    const positions = await application.evaluate(() => globalThis.__followMovePositions.size);
+
+    // 宿主菜单展开后重新显示角色及气泡，排序必须仍留在菜单之后。
+    await send(host, 'open-floating-menu');
+    const menu = await fs.readFile(path.join(host.directory, 'floating-menu'), 'utf8');
+    await application.evaluate(() => {
+      const { companion } = globalThis.__dragonGirlApp;
+      companion.hide();
+      companion.show();
+      companion.showBubble('菜单层级验收', 'speech');
+    });
+    await expectStack(host, cover, false);
+    const menuOrder = systemState(host.child.pid).order.filter((id) => [menu, ...Object.values(ids)].includes(id));
+    await send(host, 'close-floating-menu');
+    console.log(`macOS 连续跟随更新 ${positions} 个位置，菜单与桌宠顺序 ${JSON.stringify(menuOrder)}`);
+    assert.deepEqual(menuOrder, [menu, ids.bubble, ids.character], '角色或气泡盖住宿主的浮动菜单');
+    assert.ok(positions >= 14, `连续移动只更新了 ${positions} 个位置，角色跟随滞后`);
   }
   const foreground = systemState(host.child.pid).host.frontmost;
   // 宿主没有移动或最小化，前台应用也不变，只置前另一个应用的窗口。
@@ -410,6 +441,7 @@ try {
     return !c.prayerWave && !c.bubbleVisible && !c.windows.get('character').isVisible();
   }), '宿主最小化后仍留下震荡波');
   const report = { passed: true, platform: process.platform, checks: ['真实跨应用层级', '仅层级变化触发快照', '完全遮挡', '部分遮挡仍显示', '后台气泡层级', '恢复原位且不抢焦点', '最小化与恢复', '保留主动隐藏', '独立桌面仍置顶', '切回跟随恢复层级', ...(isMac ? ['连续置前 12 次、全程 8ms 采样无闪烁'] : ['真实标题栏往返拖动 4 次、拖动及松手后连续采样无遮挡', '拖动全程不抢焦点', '系统置顶窗口仍正常遮挡角色'])] };
+  if (isMac) report.checks.push('连续移动及时跟随', '重新显示的角色和气泡留在宿主浮动菜单之后');
   report.checks.push('震荡波放出时收起气泡、渐变波纹扫过宿主远角、鼠标穿透、结束和最小化清理');
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
   await fs.writeFile(path.join(root, '.artifacts/follow-report.json'), JSON.stringify(report, null, 2));

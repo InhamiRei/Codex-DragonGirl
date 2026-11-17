@@ -26,9 +26,9 @@ export function quotaAvailableWindows(windows) {
     : window);
 }
 
-// 明确的 Pro 仅有周窗口时补一条 5h 展示行；进度参考周额度，不修改真实窗口或参与提醒。
-export function quotaDisplayWindows(windows, planType) {
-  if (!['pro', 'prolite', 'promax'].includes(String(planType || '').toLowerCase()) ||
+// Pro 仅有周窗口时可按偏好补一条 5 小时展示行，沿用周额度进度，保留真实窗口。
+export function quotaDisplayWindows(windows, planType, showProFiveHourQuota = false) {
+  if (!showProFiveHourQuota || !['pro', 'prolite', 'promax'].includes(String(planType || '').toLowerCase()) ||
       windows.length !== 1 || windows[0].minutes !== 10080) return windows;
   const weekly = windows[0];
   return [{ ...weekly, id: 'unlimited-five-hour', label: '5 小时', minutes: 300,

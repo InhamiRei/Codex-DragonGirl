@@ -121,3 +121,21 @@ test('副屏断开时收起角色，恢复副屏或宿主真正移屏后继续�
   assert.equal(pet.display.id, primary.id);
   assert.equal(character.isVisible(), true);
 });
+
+// 菜单期间固定角色，关菜单时用最后收到的快照，宿主静止后也能立刻对齐。
+test('右键菜单关闭后立即跟到最新宿主位置', async (t) => {
+  const { pet, host, offset } = await fixture(t);
+  const character = pet.windows.get('character');
+  character.getContentBounds = character.getBounds;
+  let close;
+  pet.buildMenu = () => ({
+    popup({ callback }) { close = callback; },
+  });
+  const originalX = pet.character.x;
+  pet.showMenu({ x: originalX, y: pet.character.y });
+  pet.followFrame({ ...host, x: host.x + 40 }, offset);
+  pet.followFrame({ ...host, x: host.x + 80 }, offset);
+  assert.equal(pet.character.x, originalX);
+  close();
+  assert.equal(pet.character.x, originalX + 80);
+});

@@ -15,7 +15,12 @@ let permittedEnvironment = ["CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROX
 var cachedProcesses: [pid_t: ProcessInfoRow] = [:]
 var lastDiscovery = Date.distantPast
 var lastOutput = ""
-var cachedModality: [pid_t: (geometry: String, modal: Bool?, checkedAt: Date)] = [:]
+var cachedModality: [pid_t: (windowIDs: [Int], modal: Bool?, checkedAt: TimeInterval)] = [:]
+// 拖动时加快窗口采样，静止时维持原先约 120 毫秒一次的查询频率。
+let trackingInterval: TimeInterval = 0.04
+var lastSnapshotAt: TimeInterval = -.infinity
+var lastHostMoveAt: TimeInterval = -.infinity
+var lastHostFrames: [Int: CGRect] = [:]
 
 // 只读取窗口级类型和模态标记，不读取标题、正文或控件值，也不主动请求辅助功能权限。
 func windowAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -61,13 +66,12 @@ func modalWindowState(_ pid: pid_t, _ visible: [[String: Any]]) -> Bool? {
     return complete && matched.count == visible.count ? false : nil
 }
 
-// 稳定窗口降低查询频率；定期重试可覆盖面板动画期间无障碍树尚未同步的短暂状态。
-func cachedModalWindowState(_ pid: pid_t, _ windows: [[String: Any]]) -> Bool? {
-    let data = (try? JSONSerialization.data(withJSONObject: windows, options: [.sortedKeys])) ?? Data()
-    let geometry = String(decoding: data, as: UTF8.self) + String(AXIsProcessTrusted())
-    if let cached = cachedModality[pid], cached.geometry == geometry, Date().timeIntervalSince(cached.checkedAt) < 0.5 { return cached.modal }
+// 移动同一个窗口时复用模态结果，新面板出现或缓存到期时重新查询。
+func cachedModalWindowState(_ pid: pid_t, _ windows: [[String: Any]], _ now: TimeInterval) -> Bool? {
+    let windowIDs = windows.compactMap { $0["id"] as? Int }
+    if let cached = cachedModality[pid], cached.windowIDs == windowIDs, now - cached.checkedAt < 0.5 { return cached.modal }
     let modal = windows.isEmpty ? false : modalWindowState(pid, windows)
-    cachedModality[pid] = (geometry: geometry, modal: modal, checkedAt: Date())
+    cachedModality[pid] = (windowIDs: windowIDs, modal: modal, checkedAt: now)
     return modal
 }
 
@@ -105,21 +109,30 @@ func discoverProcesses() {
 }
 // 只发送变化后的窗口编号、层级与必要几何，不读取其他应用的标题或内容。
 func emitSnapshot() {
+    let now = ProcessInfo.processInfo.systemUptime
+    lastSnapshotAt = now
     if Date().timeIntervalSince(lastDiscovery) > 3 { discoverProcesses(); lastDiscovery = Date() }
     let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
     let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    var hostFrames: [Int: CGRect] = [:]
     let processes: [[String: Any]] = cachedProcesses.values.sorted { $0.pid < $1.pid }.map { row in
         let visible = windows.compactMap { window -> [String: Any]? in
             guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == row.pid,
                   (window[kCGWindowLayer as String] as? Int) == 0,
+                  let id = window[kCGWindowNumber as String] as? Int,
                   let bounds = window[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: bounds), rect.width >= 400, rect.height >= 300,
                   (window[kCGWindowAlpha as String] as? Double ?? 1) > 0.1 else { return nil }
-            return ["id": window[kCGWindowNumber as String] ?? 0, "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
+            hostFrames[id] = rect
+            return ["id": id, "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
         }
         var process: [String: Any] = ["pid": row.pid, "appPath": row.appPath, "home": row.home, "networkEnv": row.environment, "frontmost": front == row.pid, "windows": visible, "platform": "darwin"]
-        if let modal = cachedModalWindowState(row.pid, visible) { process["modalOpen"] = modal }
+        if let modal = cachedModalWindowState(row.pid, visible, now) { process["modalOpen"] = modal }
         return process
+    }
+    if hostFrames != lastHostFrames {
+        lastHostFrames = hostFrames
+        lastHostMoveAt = now
     }
     let windowOrder = windows.compactMap { window -> Int? in
         guard (window[kCGWindowAlpha as String] as? Double ?? 1) > 0.1 else { return nil }
@@ -150,7 +163,12 @@ if CommandLine.arguments.contains("--permission") {
     emitSnapshot()
     // 应用切换立即同步；普通轮询继续覆盖不激活应用的置前、最小化与窗口移动。
     _ = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in emitSnapshot() }
-    let timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { _ in emitSnapshot() }
+    // 按住左键或检测到连续移动时，以 40 毫秒间隔更新窗口位置。
+    let timer = Timer(timeInterval: trackingInterval, repeats: true) { _ in
+        let now = ProcessInfo.processInfo.systemUptime
+        let tracking = !lastHostFrames.isEmpty && ((NSEvent.pressedMouseButtons & 1) != 0 || now - lastHostMoveAt < 0.2)
+        if tracking || now - lastSnapshotAt >= trackingInterval * 2.5 { emitSnapshot() }
+    }
     RunLoop.main.add(timer, forMode: .common)
     RunLoop.main.run()
 }

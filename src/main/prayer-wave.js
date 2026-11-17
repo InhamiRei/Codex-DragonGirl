@@ -103,7 +103,8 @@ export class PrayerWave {
       }
       const floating = process.platform === 'darwin' && followWindowFloating(normalWindows, frame, owned, [frame]);
       const levelChanged = window.isAlwaysOnTop() !== floating;
-      if (levelChanged) window.setAlwaysOnTop(floating, 'floating');
+      // 跟随特效与角色使用同一层，宿主的浮动菜单仍在最上方。
+      if (levelChanged) window.setAlwaysOnTop(floating, 'normal', 1);
       const index = order?.findIndex((entry) => String(entry) === id) ?? -1;
       const hostIndex = order?.findIndex((entry) => String(entry) === String(this.hostId)) ?? -1;
       const overlapsStack = index < 0 || index >= hostIndex

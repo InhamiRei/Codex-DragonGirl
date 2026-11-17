@@ -308,7 +308,7 @@ export class Companion {
 
   // 拖动中锁定原朝向，松手后按所属屏幕或宿主窗口更新，取消拖动会沿原位置恢复。
   updateFacing() {
-    if (this.gesture.active) return false;
+    if (this.gesture.active || (this.contextMenu && this.followMode)) return false;
     const next = shouldFaceLeft(this.character, this.followTarget || this.display?.workArea, this.facingLeft);
     const changed = next !== this.facingLeft;
     this.facingLeft = next;
@@ -690,13 +690,13 @@ export class Companion {
     if (this.stopping || this.contextMenu || !this.validPoint(point)
       || !window || window.isDestroyed() || !window.isVisible()) return;
     const menu = characterOnly ? Menu.buildFromTemplate(this.characterMenuItems()) : this.buildMenu();
-    // 菜单不改变人物窗口，关闭后只恢复输入与轮询，避免为恢复布局而触发额外重绘。
+    // 菜单期间保留最新宿主坐标，关闭时补上移动，不需要等待下一份快照。
     const closed = () => {
       if (this.contextMenu !== menu) return;
       this.contextMenu = null;
       this.menuCharacter = null;
+      if (this.followMode && this.followTarget && !this.suppressedByFollow) this.applyFollowPlacement();
       this.pollCursor(true);
-      this.syncWindowStacking();
     };
     this.menuCharacter = { ...this.character };
     this.contextMenu = menu;
@@ -931,10 +931,10 @@ export class Companion {
     const regions = [this.character, ...(this.bubbleVisible ? [this.windows.get('bubble').getBounds()] : [])];
     const floating = process.platform === 'darwin' && followWindowFloating(this.followNormalWindows, this.followTarget, owned, regions);
     let levelChanged = false;
-    // 前台宿主上方使用稳定浮动层；后台宿主恢复普通层级。隐藏的气泡也预先同步，显示时不会窜到其他应用前面。
+    // 前台只比普通窗口高一级，重新显示角色与气泡时也会留在浮动菜单后面。
     if (process.platform === 'darwin') for (const window of this.windows.values()) {
       if (!window.isDestroyed() && window.isAlwaysOnTop() !== floating) {
-        window.setAlwaysOnTop(floating, 'floating');
+        window.setAlwaysOnTop(floating, 'normal', 1);
         levelChanged = true;
       }
     }
@@ -965,8 +965,6 @@ export class Companion {
     this.followOrder = order;
     this.followTopmost = topmost;
     this.followNormalWindows = normalWindows;
-    // 菜单展开时固定窗口位置，让二级菜单持续接收悬停；宿主隐藏时仍正常收起。
-    if (this.contextMenu && frame) return;
     this.followTarget = frame;
     this.followOffset = offset;
     this.applyFollowPlacement();
@@ -1002,6 +1000,7 @@ export class Companion {
       this.hideForFollow();
       return;
     }
+    // 菜单展开时保留角色位置，宿主失效仍可在上面两条路径中关闭菜单并收起角色。
     if (this.contextMenu) return;
     const offset = this.followOffset;
     const size = characterSize(this.state.scale, display.workArea, this.imageRatio);

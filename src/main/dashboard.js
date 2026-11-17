@@ -181,7 +181,7 @@ export class Dashboard {
       usage: this.monitor.settings.bubbleTemplate === DEFAULT_SETTINGS.bubbleTemplate
         ? {
             plan: vars.plan,
-            quotas: quotaDisplayWindows(quotas, planType),
+            quotas: quotaDisplayWindows(quotas, planType, this.monitor.settings.showProFiveHourQuota),
             quotaNote: quotas.length ? '' : quota,
             tokens: vars.tokens,
             timezone: this.monitor.settings.timezone,
