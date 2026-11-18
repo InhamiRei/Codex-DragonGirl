@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { verifyAudioLibrary } from '../src/core/audio-library-store.js';
-import { copyReleasePayload } from './release-payload.mjs';
+import { copyReleasePayload, readReleaseVersion, verifyMacBundleVersion, verifyReleasePayload } from './release-payload.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = path.join(root, 'output');
-const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
+const version = await readReleaseVersion(root);
 const appName = 'Codex 龙娘.app',
   bundle = path.join(output, appName),
   contents = path.join(bundle, 'Contents');
@@ -89,6 +89,8 @@ await fs.rm(iconset, { recursive: true, force: true });
 // 本机分发采用 ad-hoc 签名，验证完整性；不宣称 Apple Developer ID 公证。
 run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', bundle]);
 run('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle]);
+verifyMacBundleVersion(bundle, version);
+await verifyReleasePayload(root, application, version);
 // 本机替换只需要完整签名的应用，不额外创建 ZIP 与磁盘映像。
 if (process.argv.includes('--app-only')) {
   console.log('本机应用构建完成：' + bundle);

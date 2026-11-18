@@ -1,4 +1,5 @@
-import { DEFAULT_CHARACTER_ASSET, EYE_ARTWORK, stepGaze } from '../shared/gaze.js';
+import { EYE_ARTWORK, stepGaze } from '../shared/gaze.js';
+import { isDragonAsset } from '../shared/characters.js';
 
 // 圈出耳尖、呆毛和发梢的局部动作范围，支点藏在发束接合处。
 const PATCHES = [
@@ -197,18 +198,20 @@ export class DragonMotion {
 
   // 记下当前绘制尺寸；静止时无需复制原画或计算局部采样权重。
   configure(image, model, blocked, pressed, nativeResolution = false) {
+    const imageWidth = image.naturalWidth ?? image.width;
+    const imageHeight = image.naturalHeight ?? image.height;
     if (blocked || document.hidden || model.visible === false || model.appearance?.settings?.motion === false
-      || model.asset !== DEFAULT_CHARACTER_ASSET || image.src !== model.asset
-      || image.naturalWidth !== EYE_ARTWORK.width || image.naturalHeight !== EYE_ARTWORK.height) {
+      || !isDragonAsset(model.asset) || (image.src && image.src !== model.asset)
+      || imageWidth !== EYE_ARTWORK.width || imageHeight !== EYE_ARTWORK.height) {
       this.reset();
       return;
     }
     this.enabled = true;
     this.pressed = pressed;
     // 表情按原生像素合成，待机按同一显示矩形取整，交接时底图对齐到相同的像素网格。
-    const scale = Math.min(window.devicePixelRatio, image.naturalWidth / model.rect.width, image.naturalHeight / model.rect.height);
-    const width = nativeResolution ? image.naturalWidth : Math.max(2, Math.round(model.rect.width * scale));
-    const height = nativeResolution ? image.naturalHeight : Math.max(2, Math.round(model.rect.height * scale));
+    const scale = Math.min(window.devicePixelRatio, imageWidth / model.rect.width, imageHeight / model.rect.height);
+    const width = nativeResolution ? imageWidth : Math.max(2, Math.round(model.rect.width * scale));
+    const height = nativeResolution ? imageHeight : Math.max(2, Math.round(model.rect.height * scale));
     if (image !== this.image || width !== this.width || height !== this.height) {
       this.image = image;
       this.width = width;

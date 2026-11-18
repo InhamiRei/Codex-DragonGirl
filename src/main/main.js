@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Monitor } from './monitor.js';
 import { Dashboard } from './dashboard.js';
-import { Companion } from './companion.js';
+import { Companion, companionAppearance } from './companion.js';
 import { resolveResourcePath } from './resources.js';
 import { createLaunchReporter } from './launcher-status.js';
 import { resolveAudioPath } from '../core/audio-library-store.js';
@@ -117,6 +117,9 @@ if (!hasLock) {
       companion = new Companion(app.getPath('userData'), {
         // 跟随模式等首份宿主快照后再显示，手动启动时也不会短暂浮在其他应用上方。
         testMode, initiallySuppressed: initialSettings.mode === 'follow' && (!testMode || process.env.DRAGONGIRL_MONITOR_TEST === '1'),
+        // 内置角色首帧使用已保存的角色和瞳色，导入图片继续走原有恢复流程。
+        appearance: initialSettings.characterAsset ? undefined
+          : companionAppearance(initialSettings, path.join(app.getPath('userData'), 'assets')),
       });
       if (testMode) globalThis.__dragonGirlTest = companion;
       await companion.start();

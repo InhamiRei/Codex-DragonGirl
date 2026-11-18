@@ -67,13 +67,22 @@ async function verifyNativeMenu(reference) {
   const area = reference.screen;
   let menus;
   try {
-    await until(() => {
-      menus = nativeMenus();
-      return menus.some((menu) => menu.alpha >= 0.9 && menu.height > reference.bounds.height + 24
-        && menu.x >= area.x - 8 && menu.y >= area.y - 8
-        && menu.x + menu.width <= area.x + area.width + 8
-        && menu.y + menu.height <= area.y + area.height + 8);
-    }, '原生菜单没有完整展开在屏幕内');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let dismissed;
+      await until(async () => {
+        dismissed = !(await snapshot()).menuOpen;
+        if (dismissed) return true;
+        menus = nativeMenus();
+        return menus.some((menu) => menu.alpha >= 0.9 && menu.height > reference.bounds.height + 24
+          && menu.x >= area.x - 8 && menu.y >= area.y - 8
+          && menu.x + menu.width <= area.x + area.width + 8
+          && menu.y + menu.height <= area.y + area.height + 8);
+      }, '原生菜单没有完整展开在屏幕内');
+      if (!dismissed) return;
+      // 焦点切换可能关闭系统菜单，只在确实关闭后重新打开一次采样。
+      if (attempt < 2) await openMenu();
+    }
+    throw new Error('采样完成前系统连续关闭了原生菜单');
   } catch (error) { throw new Error(`${error.message}\n${JSON.stringify({ reference, menus, current: await snapshot() })}`); }
 }
 
@@ -253,12 +262,14 @@ try {
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.DRAGONGIRL_MONITOR_TEST;
   application = await electron.launch({ ...(executablePath ? { executablePath } : {}), args: executablePath ? [] : [root], env });
-  await until(() => application.evaluate(() => globalThis.__dragonGirlTest?.ready.size === 2), '角色未完成启动');
+  await until(() => application.evaluate(() => globalThis.__dragonGirlTest?.started === true), '角色未完成启动');
   page = application.windows().find((page) => page.url().endsWith('/character.html'));
   page.on('pageerror', (error) => errors.push(error.message));
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await application.evaluate(() => {
+  await application.evaluate(({ screen }) => {
     const c = globalThis.__dragonGirlTest;
+    // 固定本用例的工作区，菜单定位断言不混入系统菜单栏或程序坞的尺寸变动。
+    screen.removeListener('display-metrics-changed', c.onDisplayChanged);
     // 保留真实一级菜单长度，使用空委托避免测试打开管理页或触发账户查询。
     c.delegate = { openDashboard: () => {}, refresh: () => {}, selectCharacter: async () => {} };
     c.setAppearance({ settings: { motion: false, eyeTracking: false, blinkEnabled: false, soundEnabled: false, expressionsEnabled: true } });
@@ -319,8 +330,10 @@ try {
       else await verifyDragonEyeRender(name);
     }
     if (name === 'prayer') {
-      assert.equal(await page.locator('#prayer-portrait').isVisible(), true, '祈祷素材没有显示');
-      assert.equal(await page.locator('#portrait').isVisible(), false, '祈祷与原画叠在一起');
+      // 等合掌到位，验收原画、原版眼睑和手部覆盖。
+      await page.locator('#prayer-portrait').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#prayer-hands').isVisible(), true);
+      assert.equal(await page.locator('#portrait').evaluate((image) => getComputedStyle(image).opacity), '1');
       assert.equal(await page.locator('.eye-layer:not([hidden])').count(), 0, '祈祷期间仍在绘制眼区');
       await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
       await page.screenshot({ path: path.join(root, '.artifacts/prayer-menu.png'), omitBackground: true });
@@ -366,8 +379,10 @@ try {
       return style.maskImage !== 'none' && Number(style.opacity) > 0.1 && Number(style.opacity) < 0.8;
     });
   }), '祷文相邻字没有连续渐显');
-  await until(async () => await character.getAttribute('data-expression') === 'prayer'
-    && await character.getAttribute('data-prayer-moving') === null, '龙娘没有抬手合掌');
+  // 直接检查手部图层到位和闭眼显示，动作无需为验收维护独立标记。
+  await until(() => character.evaluate((node) => node.dataset.expression === 'prayer'
+    && !node.querySelector('#prayer-portrait').hidden
+    && node.querySelector('#prayer-hands').style.getPropertyValue('--prayer-hands-offset') === '0%'), '龙娘没有抬手合掌');
 
   // 在实际渲染的光束上采样，核对动画向手心推进，而非仅检查图层出现。
   const energy = page.locator('.prayer-energy');

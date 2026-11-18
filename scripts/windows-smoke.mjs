@@ -37,9 +37,9 @@ try {
   page.on('pageerror', (error) => errors.push(error.message));
   await until(async () => (await application.evaluate(() => globalThis.__dragonGirlApp?.monitor.snapshot().instances.length)) === 1, '默认目录未发现');
   assert.match(await page.title(), /GPT龙娘/);
-  // 同时验证 Windows 源码启动和便携包的运行版本，不能将 Electron 版本误显示到页脚。
+  // 源码启动和便携包的侧栏都显示应用版本。
   const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
-  await until(async () => await page.locator('#app-version').textContent() === `v${version}`, '页脚版本号未显示或与安装包不符');
+  await until(async () => await page.locator('.brand #app-version').textContent() === `v${version}`, '侧栏版本号未显示或与安装包不符');
   // 首次安装的设置与显示素材都必须默认龙娘，不能被新增角色改变。
   assert.equal(await application.evaluate(() => globalThis.__dragonGirlApp.monitor.settings.characterId), 'dragon');
   assert.equal(await application.evaluate(() => globalThis.__dragonGirlApp.companion.characterModel().asset),

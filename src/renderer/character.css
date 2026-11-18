@@ -6,18 +6,12 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 .character { position: absolute; transform-origin: 50% 100%; will-change: transform; pointer-events: none; }
 .character img { display: block; width: 100%; height: 100%; object-fit: contain; -webkit-user-drag: none; }
 #portrait[src="dragon://app/assets/characters/codex-dragon-girl.png"],
-#prayer-portrait, #prayer-half, #prayer-hands img { object-fit: fill; }
-#dragon-motion, #dragon-expression { position: absolute; inset: 0; width: 100%; height: 100%; }
-#dragon-motion[hidden], #dragon-expression[hidden] { display: none; }
-.character:has(#dragon-motion:not([hidden])) #portrait { opacity: 0; }
-.character:has(#dragon-expression:not([hidden])) :is(#portrait, #dragon-motion) { opacity: 0; }
-#prayer-portrait, #prayer-half { position: absolute; inset: 0; }
-#prayer-portrait[hidden], #prayer-half[hidden] { display: none; }
-.character[data-expression="prayer"]:not([data-prayer-moving]) #portrait { visibility: hidden; }
-.character[data-prayer-moving] #prayer-portrait {
-  clip-path: inset(51% 22% 26% 24%);
-  opacity: var(--prayer-eyes-opacity);
-}
+#prayer-hands img { object-fit: fill; }
+:is(#dragon-motion, #dragon-expression, #dragon-tinted-portrait, #prayer-portrait, #prayer-half) { position: absolute; inset: 0; width: 100%; height: 100%; }
+:is(#dragon-motion, #dragon-expression, #prayer-portrait, #prayer-half)[hidden] { display: none; }
+.character:has(#dragon-tinted-portrait) #portrait { opacity: 0; }
+.character:has(#dragon-motion:not([hidden])) :is(#portrait, #dragon-tinted-portrait) { opacity: 0; }
+.character:has(#dragon-expression:not([hidden])) :is(#portrait, #dragon-tinted-portrait, #dragon-motion) { opacity: 0; }
 #prayer-hands { position: absolute; inset: 0; overflow: hidden; }
 #prayer-hands img { transform: translateY(var(--prayer-hands-offset)); }
 .prayer-energy {

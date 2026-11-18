@@ -1,9 +1,12 @@
-import { DEFAULT_CHARACTER_ASSET, EYE_ARTWORK, eyeTrackingEnabled, eyeWarpWeight, gazeTarget, stepGaze, bodyFollowPose } from '../shared/gaze.js';
+import { EYE_ARTWORK, eyeTrackingEnabled, eyeWarpWeight, gazeTarget, stepGaze, bodyFollowPose } from '../shared/gaze.js';
+import { isDragonAsset } from '../shared/characters.js';
 import { BLINK_DURATION, blinkAmount, nextBlinkDelay, blinkColumn, blinkSourceY, blinkSkinCoverage } from '../shared/blink.js';
 import { dragonFaceFrame, happyFrame, isDragonFace } from '../shared/expression.js';
 import { EyeSparkles } from './expression.js';
-import { sadFrame, sadEyeWeight, sadBodyPose } from '../shared/sad.js';
+import { SAD_TEAR_X, sadFrame, sadEyeWeight, sadBodyPose } from '../shared/sad.js';
 import { SadEyes, loadSadArtwork } from './sad.js';
+import { tintedDragonPortrait } from './dragon-portrait.js';
+import { dragonEyeTone } from '../shared/dragon-gear.js';
 
 // 表情画布交回待机后留一个短拍，再从同一姿态恢复跟随和呼吸。
 const PREVIEW_REST_MS = 180;
@@ -29,7 +32,7 @@ export class EyeTracker {
     this.character = character;
     this.onBodyPose = onBodyPose;
     this.artwork = options.artwork || EYE_ARTWORK;
-    this.asset = options.asset || DEFAULT_CHARACTER_ASSET;
+    this.asset = options.asset;
     this.className = options.className || 'eye-layer';
     this.nativeResolution = options.nativeResolution === true;
     this.supportsExpressions = options.expressions !== false;
@@ -57,15 +60,12 @@ export class EyeTracker {
     this.expressionPreview = false;
     this.previewRestUntil = 0;
     this.dragonFace = false;
-    this.sadImage = null;
   }
 
   // ready 前准备含泪素材，加载失败时仍可使用原画、跟随、眨眼与开心效果。
   async prepareSad() {
     try {
-      this.sadImage = await loadSadArtwork();
-      for (const patch of this.patches)
-        patch.sad = new SadEyes(patch.eye, patch.width, patch.height, patch.index, this.sadImage);
+      this.sadOriginal = await loadSadArtwork();
       return true;
     } catch {
       console.warn('伤心表情素材暂不可用');
@@ -83,9 +83,11 @@ export class EyeTracker {
     const expressionsEnabled = this.supportsExpressions && settings.expressionsEnabled !== false;
     const featuresEnabled = reducedMotion ? !!this.onFace && expressionsEnabled
       : settings.eyeTracking !== false || settings.blinkEnabled !== false || expressionsEnabled;
-    this.enabled = featuresEnabled && model.asset === this.asset
-      && model.visible !== false && !document.hidden && image.src === model.asset
-      && image.naturalWidth === this.artwork.width && image.naturalHeight === this.artwork.height;
+    const matchingAsset = this.asset ? model.asset === this.asset : isDragonAsset(model.asset);
+    this.enabled = featuresEnabled && matchingAsset
+      && model.visible !== false && !document.hidden && (!image.src || image.src === model.asset)
+      && (image.naturalWidth ?? image.width) === this.artwork.width
+      && (image.naturalHeight ?? image.height) === this.artwork.height;
     if (!this.enabled) {
       this.reset();
       return;
@@ -118,9 +120,17 @@ export class EyeTracker {
     // 只按实际显示密度创建眼区，放大区域后仍不在每帧处理原图全部像素。
     const resolution = this.nativeResolution ? 1
       : Math.min(1, Math.max(0.2, model.rect.width / this.artwork.width * window.devicePixelRatio));
-    if (!reducedMotion && (!this.patches.length || resolution !== this.resolution)) {
+    if (!reducedMotion && (!this.patches.length || resolution !== this.resolution || this.patchImage !== image)) {
       for (const { canvas } of this.patches) canvas.remove();
       this.resolution = resolution;
+      // 瞳色改变时重取当前眼区，含泪表情也沿用所选颜色。
+      this.patchImage = image;
+      const tone = dragonEyeTone(settings);
+      if (this.sadOriginal && this.sadTone !== tone) {
+        this.sadTone = tone;
+        this.sadArtwork = tintedDragonPortrait(this.sadOriginal, tone);
+      }
+      this.skin = null;
       this.patches = this.artwork.eyes.map((eye, index) => this.createPatch(image, eye, index));
       redraw = true;
     }
@@ -175,16 +185,16 @@ export class EyeTracker {
         if (gazeWeights) gazeWeights[pixelIndex] = gazeWeight;
         if (protection >= 1) continue;
         // 眉毛和泪珠仍在同一眼区内绘制，眼睛外的像素不跟随视线拉扯。
-        const tearRegion = this.supportsExpressions && index === 1 && ax >= 884 && ax <= 918 && ay >= 800 && ay <= 904;
+        const tearRegion = this.supportsExpressions && index === 1 && Math.abs(ax - SAD_TEAR_X) <= 17 && ay >= 800 && ay <= 904;
         if (weight > 0 || (this.supportsExpressions && sadEyeWeight(ax, ay, index) > 0) || tearRegion)
-          pixels.push({ x, y, index: offset, weight, gazeWeight, protection });
+          pixels.push({ x, y, index: offset, gazeWeight, protection });
       }
     }
     context.clearRect(0, 0, canvas.width, canvas.height);
     canvas.hidden = true;
     this.character.append(canvas);
     const sparkles = this.supportsExpressions ? new EyeSparkles(eye, canvas.width, canvas.height, index) : null;
-    const sad = this.sadImage ? new SadEyes(eye, canvas.width, canvas.height, index, this.sadImage) : null;
+    const sad = this.sadArtwork ? new SadEyes(eye, canvas.width, canvas.height, index, this.sadArtwork) : null;
     return { canvas, context, source, output, pixels, columns, eye, index, sparkles, sad, foreground, gazeWeights,
       width: canvas.width, height: canvas.height, scaleX, scaleY };
   }
@@ -234,7 +244,7 @@ export class EyeTracker {
     if (!this.enabled || !this.expressionAllowed
       || (this.reducedMotion && !dragonFace)
       || (dragonFace ? !this.onFace : !['happy', 'sad'].includes(name))
-      || (name === 'sad' && !this.sadImage)) return false;
+      || (name === 'sad' && !this.sadArtwork)) return false;
     if (this.expressionName && this.expressionName !== name) {
       this.cancelExpression();
       this.paint();
@@ -357,7 +367,8 @@ export class EyeTracker {
             + (source[bottom + channel] * (1 - dx) + source[bottom + 4 + channel] * dx) * dy;
           if (blocked) sampled = closure > 0 ? this.skin[channel] : patch.source[index + channel];
           const animated = sampled * (1 - cover) + this.skin[channel] * cover;
-          output.data[index + channel] = animated * (1 - protection) + patch.source[index + channel] * protection;
+          const original = patch.source[index + channel];
+          output.data[index + channel] = original + (animated - original) * (1 - protection);
         }
         output.data[index + 3] = 255;
       }

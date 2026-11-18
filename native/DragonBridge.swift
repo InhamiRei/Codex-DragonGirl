@@ -10,6 +10,15 @@ struct ProcessInfoRow {
     let home: String
     let environment: [String: String]
 }
+
+// 跟随候选只保留窗口几何与画中画标记，标题不进入快照。
+private struct CodexWindowCandidate {
+    let id: Int
+    let frame: CGRect
+    let hasTitle: Bool
+    let isPreview: Bool
+}
+
 let defaultHome = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
 let permittedEnvironment = ["CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"]
 var cachedProcesses: [pid_t: ProcessInfoRow] = [:]
@@ -107,6 +116,39 @@ func discoverProcesses() {
         cachedProcesses[app.processIdentifier] = ProcessInfoRow(pid: app.processIdentifier, appPath: app.bundleURL!.path, home: URL(fileURLWithPath: home).resolvingSymlinksInPath().path, environment: environment.filter { $0.key != "CODEX_HOME" })
     }
 }
+
+// Codex 把画中画的内容和控制放进两块同尺寸的普通层面板，排在聊天窗口上方。
+private func followableWindows(_ windows: [[String: Any]], pid: pid_t) -> [CodexWindowCandidate] {
+    let candidates = windows.compactMap { window -> CodexWindowCandidate? in
+        guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
+              (window[kCGWindowLayer as String] as? Int) == 0,
+              let id = window[kCGWindowNumber as String] as? Int,
+              let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+              let frame = CGRect(dictionaryRepresentation: bounds), frame.width >= 400, frame.height >= 300,
+              (window[kCGWindowAlpha as String] as? Double ?? 1) > 0.1 else { return nil }
+        // 系统提供标题时，只比对 Codex 原生预览使用的两个固定名称。
+        let title = window[kCGWindowName as String] as? String ?? ""
+        return CodexWindowCandidate(id: id, frame: frame, hasTitle: !title.isEmpty,
+                                    isPreview: title == "Computer Use" || title == "Computer Use Controls")
+    }
+    var excluded = Set(candidates.filter(\.isPreview).map(\.id))
+    // 系统省略标题时，用相邻同框面板和后方更大的宿主识别预览，保留普通窗口的原有顺序。
+    for index in candidates.indices.dropLast() {
+        let controls = candidates[index], content = candidates[index + 1]
+        guard controls.frame == content.frame,
+              !controls.hasTitle || controls.isPreview,
+              !content.hasTitle || content.isPreview else { continue }
+        let hasLargerHost = candidates.dropFirst(index + 2).contains { candidate in
+            !candidate.isPreview && candidate.frame.width > content.frame.width && candidate.frame.height > content.frame.height
+        }
+        if controls.isPreview || content.isPreview || hasLargerHost {
+            excluded.insert(controls.id)
+            excluded.insert(content.id)
+        }
+    }
+    return candidates.filter { !excluded.contains($0.id) }
+}
+
 // 只发送变化后的窗口编号、层级与必要几何，不读取其他应用的标题或内容。
 func emitSnapshot() {
     let now = ProcessInfo.processInfo.systemUptime
@@ -116,13 +158,9 @@ func emitSnapshot() {
     let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
     var hostFrames: [Int: CGRect] = [:]
     let processes: [[String: Any]] = cachedProcesses.values.sorted { $0.pid < $1.pid }.map { row in
-        let visible = windows.compactMap { window -> [String: Any]? in
-            guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == row.pid,
-                  (window[kCGWindowLayer as String] as? Int) == 0,
-                  let id = window[kCGWindowNumber as String] as? Int,
-                  let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-                  let rect = CGRect(dictionaryRepresentation: bounds), rect.width >= 400, rect.height >= 300,
-                  (window[kCGWindowAlpha as String] as? Double ?? 1) > 0.1 else { return nil }
+        // 屏幕层级保留预览，跟随与模态判断使用筛选后的宿主列表。
+        let visible: [[String: Any]] = followableWindows(windows, pid: row.pid).map { window in
+            let id = window.id, rect = window.frame
             hostFrames[id] = rect
             return ["id": id, "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
         }

@@ -1,6 +1,9 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { AUDIO_FILES } from '../src/shared/audio-library.js';
+import { CHARACTERS } from '../src/shared/characters.js';
+import { DRAGON_GEAR } from '../src/shared/dragon-gear.js';
 
 // 发布包只收录运行模块、内置角色、原声和出处。README 海报与开发验收文件留在仓库。
 const runtimeFolders = [
@@ -8,6 +11,26 @@ const runtimeFolders = [
   ['assets/characters', /\.(?:png|webp)$/],
 ];
 const audioFiles = [...AUDIO_FILES.map((file) => file.localFile), 'original-audio-sources.json'];
+
+// 版本以 package.json 为准；锁文件不同步时禁止构建新包。
+export async function readReleaseVersion(root) {
+  const [metadata, lock] = await Promise.all(['package.json', 'package-lock.json'].map(async (name) =>
+    JSON.parse(await fs.readFile(path.join(root, name), 'utf8'))));
+  const { version } = metadata;
+  if (!version || lock.version !== version || lock.packages?.['']?.version !== version)
+    throw new Error('应用版本与锁文件不一致，请用 npm version <版本号> --no-git-tag-version 同步。');
+  return version;
+}
+
+// macOS 的系统显示版本和应用构建共用同一版本，成品不符时直接报错。
+export function verifyMacBundleVersion(bundle, version) {
+  const plist = path.join(bundle, 'Contents/Info.plist');
+  for (const key of ['CFBundleShortVersionString', 'CFBundleVersion']) {
+    const result = spawnSync('/usr/libexec/PlistBuddy', ['-c', 'Print :' + key, plist], { encoding: 'utf8' });
+    if (result.status !== 0 || result.stdout.trim() !== version)
+      throw new Error('macOS 安装包版本不一致：' + key + ' 应为 ' + version);
+  }
+}
 
 // 同一遍历既能筛选源码，也能在验收时发现多打进包的隐藏文件或开发素材。
 async function listFiles(root, directory, pattern) {
@@ -24,6 +47,12 @@ async function listFiles(root, directory, pattern) {
 // 构建和验收共享一份收录规则，macOS 和 Windows 仅在原生组件后缀上有差别。
 async function releaseFiles(root, nativeExtension) {
   const folders = await Promise.all(runtimeFolders.map(([folder, pattern]) => listFiles(root, folder, pattern)));
+  // 安装包必须包含内置角色原画和配置页使用的四张缩略图。
+  const gearArtwork = new Set([
+    ...CHARACTERS.map(({ image }) => image),
+    ...DRAGON_GEAR.flatMap(({ choices }) => choices.map(({ icon }) => icon)),
+  ]);
+  await Promise.all([...gearArtwork].map((file) => fs.access(path.join(root, file))));
   return [
     ...folders.flat(),
     ...audioFiles.map((name) => path.join('assets/audio', name)),
@@ -51,6 +80,7 @@ export async function copyReleasePayload(root, application, nativeExtension = ''
 
 // 核对实际应用目录中的所有文件、源码内容和发布信息，旧产物不能通过验收。
 export async function verifyReleasePayload(root, application, version, nativeExtension = '') {
+  if (version !== await readReleaseVersion(root)) throw new Error('安装包版本与当前源码版本不符');
   const files = await releaseFiles(root, nativeExtension);
   const expected = new Set([...files, 'package.json', 'README.md']);
   const actual = new Set(await listFiles(application, ''));

@@ -5,6 +5,7 @@ import { SoundEngine } from './audio.js';
 import { dayKey, midnight, nextDay } from '../shared/time.js';
 import { activityCalendar, activityLevel } from '../shared/activity.js';
 import { AccountTestsView } from './account-tests.js';
+import { DragonConfigView } from './dragon-config.js';
 const bridge = window.dragonGirl,
   sound = new SoundEngine();
 let state,
@@ -25,7 +26,7 @@ let state,
   tooltipTarget;
 const THREAD_PAGE_SIZE = 20;
 const accountCards = new Map();
-let accountTests;
+let accountTests, dragonConfig;
 let indexedReport, threadChildren;
 const $ = (selector) => document.querySelector(selector);
 const names = {
@@ -131,6 +132,7 @@ function switchTab(tab) {
     usage: ['用量账本', '按日期、实例和模型查看本机记录。'],
     'account-tests': ['账号测智', '统一题目和参数，对比各个账号的回答。'],
     settings: ['偏好设置', '调整显示、声音与统计偏好。'],
+    'dragon-config': ['龙娘配置', '个性化你的龙娘'],
   };
   if (!titles[tab]) return;
   closeSelects();
@@ -148,8 +150,13 @@ function switchTab(tab) {
   $('#title').textContent = titles[tab][0];
   $('#subtitle').textContent = titles[tab][1];
   $('#toggle-filter').hidden = tab !== 'usage';
+  const configuringDragon = tab === 'dragon-config';
+  $('.header-actions').hidden = configuringDragon;
+  $('.page-footer').hidden = configuringDragon;
+  $('#index-state').hidden = configuringDragon || !$('#index-state').textContent;
   if (tab === 'usage') void loadReport();
   if (tab === 'account-tests') void accountTests.open().catch(() => {});
+  if (configuringDragon) dragonConfig.open(state.settings);
   if (tab === 'settings') {
     if (!draft) fillSettings(state.settings);
     switchSettingsTab(activeSettingsTab);
@@ -543,7 +550,7 @@ function renderOverview() {
       : progress.errors?.length
         ? `${progress.errors.length} 份日志无法读取，可导出诊断查看`
         : '');
-  $('#index-state').hidden = !$('#index-state').textContent;
+  $('#index-state').hidden = activeTab === 'dragon-config' || !$('#index-state').textContent;
 }
 // 选择列表更新时保留用户的筛选，不把前台实例变化当作筛选切换。
 function updateSelect(selector, values, first) {
@@ -563,6 +570,7 @@ function receive(next) {
   renderOverview();
   renderRefresh();
   accountTests?.updateAccounts();
+  if (activeTab === 'dragon-config') dragonConfig.update(state.settings);
   updateSelect(
     '#filter-home',
     state.instances.map((i) => [i.id, instanceLabel(i, state.settings)]),
@@ -947,9 +955,17 @@ function action(id, callback) {
 async function start() {
   enhanceSelects();
   state = await call('snapshot');
-  // 页脚显示实际运行版本，便于反馈问题时直接确认安装包版本。
+  // 共享侧栏读取实际运行版本，使五个页面上的显示一致。
   $('#app-version').textContent = `v${state.appVersion}`;
   accountTests = new AccountTestsView({ call, toast, getState: () => state });
+  dragonConfig = new DragonConfigView($('#dragon-config'), {
+    // 换装独立保存，偏好页里还没提交的表单草稿不随之重置。
+    save: async (selection) => {
+      state.settings = await call('dragon-equipment', selection);
+      return state.settings;
+    },
+    toast,
+  });
   bridge.onAccountTests((run) => accountTests.receive(run));
   appearance = state.appearance;
   receive(state);

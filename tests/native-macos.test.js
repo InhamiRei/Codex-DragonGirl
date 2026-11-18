@@ -9,8 +9,8 @@ import { followWindowFrame } from '../src/shared/follow-window.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-// 真实系统文件面板验证原生桥与跟随选择的连接，避免只用手写模态标记掩盖识别失败。
-test('macOS 文件夹面板隐藏跟随，关闭、移动及最小化后正确恢复', { skip: process.platform !== 'darwin', timeout: 60000 }, async (t) => {
+// 用真实的系统窗口验证原生桥输出与跟随选择，覆盖画中画和文件面板的窗口层级。
+test('macOS 跟随跳过画中画，文件面板、移动及最小化后正确恢复', { skip: process.platform !== 'darwin', timeout: 60000 }, async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-mac-window-'));
   let child;
   t.after(async () => {
@@ -36,7 +36,9 @@ test('macOS 文件夹面板隐藏跟随，关闭、移动及最小化后正确�
   function snapshot() {
     const result = spawnSync(path.join(root, 'native/bin/dragongirl-native'), ['--once'], { encoding: 'utf8', timeout: 10000 });
     assert.equal(result.status, 0, result.stderr);
-    return JSON.parse(result.stdout).processes.find((process) => process.pid === child.pid);
+    const { processes, normalWindows } = JSON.parse(result.stdout);
+    const process = processes.find((process) => process.pid === child.pid);
+    return process && { ...process, normalWindows };
   }
 
   // 等待系统实际窗口状态，避免动画时序或固定延时制造假通过。
@@ -60,6 +62,37 @@ test('macOS 文件夹面板隐藏跟随，关闭、移动及最小化后正确�
   assert.ok(JSON.parse(startupProbe.stdout).hosts.some((host) => host.startsWith(`${child.pid}:`)), '启动助手未识别真实桌面宿主');
   const main = followWindowFrame(initial);
   assert.ok(main);
+  const command = path.join(directory, 'command');
+  const previewFile = path.join(directory, 'preview-windows.json');
+  // 验证两块面板确实排在主窗前方且满足旧尺寸门槛，避免未创建成功时误判为通过。
+  for (const open of ['open-preview', 'open-untitled-preview']) {
+    await fs.writeFile(command, open);
+    const ids = await until(async () => JSON.parse(await fs.readFile(previewFile, 'utf8').catch(() => 'null')), '未创建画中画面板');
+    const opened = await until(() => {
+      const state = snapshot();
+      const mainIndex = state?.normalWindows.findIndex((window) => window.id === main.id);
+      return mainIndex >= 0 && ids.every((id) => state.normalWindows.slice(0, mainIndex)
+        .some((window) => window.id === id && window.width >= 400 && window.height >= 300)) && state;
+    }, '画中画面板未在主窗口上层以普通窗口显示');
+    assert.deepEqual(opened.windows, [main], '画中画被列为跟随宿主');
+    assert.deepEqual(followWindowFrame(opened), main);
+
+    // 拖动期间面板仍参与实际窗口层级，但跟随坐标应一直来自主窗。
+    await fs.writeFile(command, 'move-preview');
+    const moved = await until(() => {
+      const state = snapshot();
+      return state && ids.every((id) => state.normalWindows.some((window) => window.id === id
+        && window.x !== opened.normalWindows.find((previous) => previous.id === id).x)) && state;
+    }, '画中画面板没有移动');
+    assert.deepEqual(followWindowFrame(moved), main, '拖动画中画改变了龙娘的跟随坐标');
+    await fs.writeFile(command, 'close-preview');
+    await until(() => {
+      const state = snapshot();
+      return state && ids.every((id) => !state.normalWindows.some((window) => window.id === id))
+        && followWindowFrame(state)?.id === main.id;
+    }, '关闭画中画后未恢复原主窗口');
+    await fs.rm(previewFile);
+  }
   await fs.writeFile(path.join(directory, 'command'), 'open');
   const opened = await until(() => {
     const process = snapshot();

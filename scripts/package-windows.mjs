@@ -4,14 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { verifyAudioLibrary } from '../src/core/audio-library-store.js';
-import { copyReleasePayload } from './release-payload.mjs';
+import { copyReleasePayload, readReleaseVersion, verifyReleasePayload } from './release-payload.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 if (process.platform !== 'win32' || process.arch !== 'x64')
   throw new Error('Windows x64 安装包需在 Windows x64 电脑或 GitHub Actions 中构建。');
-const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'));
+const version = await readReleaseVersion(root);
 const output = path.join(root, 'output');
-const name = `Codex-DragonGirl-${pkg.version}-Windows-x64`;
+const name = `Codex-DragonGirl-${version}-Windows-x64`;
 const bundle = path.join(output, name);
 const application = path.join(bundle, 'resources/app');
 const native = path.join(root, 'native/bin/dragongirl-native.exe');
@@ -26,6 +26,7 @@ await fs.rm(bundle, { recursive: true, force: true });
 await fs.cp(path.join(root, 'node_modules/electron/dist'), bundle, { recursive: true });
 await fs.rename(path.join(bundle, 'electron.exe'), path.join(bundle, 'DragonGirl.exe'));
 await copyReleasePayload(root, application, '.exe');
+await verifyReleasePayload(root, application, version, '.exe');
 await fs.writeFile(path.join(bundle, '使用说明.txt'), '\ufeff' + [
   'GPT龙娘 · 作者 Hey、小怪兽',
   '请先完整解压 ZIP，再双击 DragonGirl.exe。不要只拖出单个 EXE。',
@@ -48,7 +49,7 @@ const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-C
 if (result.status !== 0) throw new Error(`Windows 压缩失败：${result.stderr || result.error?.message}`);
 const bytes = await fs.readFile(zip);
 const manifest = {
-  version: pkg.version, platform: 'Windows', architecture: 'x64', minimumOS: 'Windows 10',
+  version, platform: 'Windows', architecture: 'x64', minimumOS: 'Windows 10',
   signed: false, executable: `${name}/DragonGirl.exe`,
   files: [{ name: path.basename(zip), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }],
 };

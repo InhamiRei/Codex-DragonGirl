@@ -542,22 +542,24 @@ export class Monitor extends EventEmitter {
       this.emit('update', this.snapshot());
     }, 250);
   }
-  // 保存偏好后重置计时器，使刷新频率立即生效。
-  async saveSettings(value) {
+  // 采集设置变化后重新配置索引；独立保存瞳色时沿用当前采集状态。
+  async saveSettings(value, { refreshUsage = true } = {}) {
     this.settings = await this.settingsStore.save(value);
     if (this.stopped) return this.settings;
-    // 修改预算等偏好后重新评估提醒，即使日志本身没有新增也要生效。
-    this.summaryRevision = null;
-    clearInterval(this.scanTimer);
-    this.scanTimer = setInterval(() => {
-      if (!this.scanning) this.worker.postMessage({ type: 'scan' });
-    }, this.settings.scanSeconds * 1000);
-    this.worker.postMessage({
-      type: 'configure',
-      instances: this.instances.map(({ id, home }) => ({ id, home })),
-      settings: this.settings,
-    });
-    await this.discover();
+    if (refreshUsage) {
+      // 修改预算等偏好后重新评估提醒，即使日志本身没有新增也要生效。
+      this.summaryRevision = null;
+      clearInterval(this.scanTimer);
+      this.scanTimer = setInterval(() => {
+        if (!this.scanning) this.worker.postMessage({ type: 'scan' });
+      }, this.settings.scanSeconds * 1000);
+      this.worker.postMessage({
+        type: 'configure',
+        instances: this.instances.map(({ id, home }) => ({ id, home })),
+        settings: this.settings,
+      });
+      await this.discover();
+    }
     this.publish();
     return this.settings;
   }

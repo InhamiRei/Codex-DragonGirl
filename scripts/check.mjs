@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { readReleaseVersion } from './release-payload.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -19,4 +20,5 @@ async function checkDirectory(relative) {
 
 // 三个目录覆盖应用、验证脚本和单元测试，任意语法错误都使检查失败。
 for (const directory of ['src', 'scripts', 'tests']) await checkDirectory(directory);
-console.log('全部 JavaScript 模块语法检查通过。');
+const version = await readReleaseVersion(root);
+console.log('全部 JavaScript 模块语法检查通过，应用与锁文件版本一致：v' + version);

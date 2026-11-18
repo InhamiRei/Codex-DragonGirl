@@ -6,11 +6,12 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { DEFAULT_SETTINGS, normalizeSettings } from '../core/settings.js';
 import { planLabel, instanceLabel, quotaAvailableWindows, quotaDisplayWindows } from '../shared/presentation.js';
-import { Companion } from './companion.js';
+import { Companion, companionAppearance } from './companion.js';
 import { followWindowFrame } from '../shared/follow-window.js';
 import { AccountTests } from '../core/account-tests.js';
 import { extractTestHtml } from '../shared/account-tests.js';
-import { CHARACTERS, characterById } from '../shared/characters.js';
+import { CHARACTERS } from '../shared/characters.js';
+import { DRAGON_GEAR, parseDragonEyeColor } from '../shared/dragon-gear.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const DASHBOARD_URL = 'dragon://app/src/renderer/dashboard.html';
 
@@ -236,6 +237,7 @@ export class Dashboard {
           secondary: true,
           initiallySuppressed: true,
           delegate: this.delegate,
+          appearance: settings.characterAsset ? undefined : companionAppearance(settings, this.assetDirectory, i.taskState),
         });
         pet.instanceId = i.id;
         pet.instanceName = instanceLabel(i, settings);
@@ -247,18 +249,7 @@ export class Dashboard {
     if (this.stopping || this.monitor.stopped) return;
     for (const pet of [this.primary, ...this.pets.values()]) {
       const i = this.latest?.instances.find((i) => i.id === pet.instanceId);
-      const character = characterById(settings.characterId);
-      const asset = settings.characterAsset
-        ? `dragon://app/user-assets/${settings.characterAsset}`
-        : `dragon://app/${character.image}`;
-      const appearance = {
-        settings,
-        asset,
-        assetPath: settings.characterAsset
-          ? path.join(this.assetDirectory, settings.characterAsset)
-          : path.join(ROOT, character.image),
-        status: i?.taskState || 'idle',
-      };
+      const appearance = companionAppearance(settings, this.assetDirectory, i?.taskState || 'idle');
       const key = JSON.stringify(appearance);
       if (key !== pet.appearanceKey) {
         pet.appearanceKey = key;
@@ -275,6 +266,22 @@ export class Dashboard {
     await this.monitor.saveSettings((current) => ({ ...current, characterId: id, characterAsset: '' }));
     await this.updatePets();
     return true;
+  }
+
+  // 只允许装备清单中的选项；固定部件无需写入设置。
+  async selectDragonGear({ slotId, itemId, color } = {}) {
+    const slot = DRAGON_GEAR.find(({ id }) => id === slotId);
+    const item = slot?.choices.find(({ id }) => id === itemId);
+    if (!slot?.setting || !item) throw new Error('找不到可切换的龙娘装备');
+    const change = { [slot.setting]: item.id };
+    if (slotId === 'eyes' && itemId === 'custom') {
+      const picked = parseDragonEyeColor(color);
+      if (!picked) throw new Error('请输入六位十六进制瞳色');
+      change.dragonEyeColor = picked;
+    }
+    const settings = await this.monitor.saveSettings((current) => ({ ...current, ...change }), { refreshUsage: false });
+    await this.updatePets();
+    return settings;
   }
 
   // 跟随模式取所属宿主，桌面模式优先取前台 Codex，找不到有效窗口时不创建特效层。
@@ -434,6 +441,7 @@ export class Dashboard {
     if (command === 'default-settings') return normalizeSettings();
     if (command === 'startup-status') return this.startup?.snapshot() || { message: '' };
     if (command === 'normalize-settings') return normalizeSettings(value);
+    if (command === 'dragon-equipment') return this.selectDragonGear(value ?? undefined);
     // 界面版本来自当前运行的应用元数据，发行升级后无需再手动修改页面文案。
     if (command === 'snapshot') return { ...this.monitor.snapshot(), appearance: this.primary.state, appVersion: app.getVersion() };
     if (command === 'refresh') return this.monitor.refreshAll();
@@ -447,9 +455,14 @@ export class Dashboard {
       return true;
     }
     if (command === 'settings' || command === 'replace-settings') {
-      // 普通表单只能修改偏好；位置以排队写入时的最新值为准，导入或恢复默认才替换位置。
+      // 普通表单保留最新的拖动位置和瞳色，避免旧草稿覆盖另一页刚应用的外观。
       const persist = (settings) => this.monitor.saveSettings(command === 'replace-settings'
-        ? settings : (current) => ({ ...settings, followOffsets: current.followOffsets }));
+        ? settings : (current) => ({
+            ...settings,
+            followOffsets: current.followOffsets,
+            dragonEyeId: current.dragonEyeId,
+            dragonEyeColor: current.dragonEyeColor,
+          }));
       return this.startup
         ? this.startup.save(value, persist)
         : persist(value);

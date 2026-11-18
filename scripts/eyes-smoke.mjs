@@ -124,7 +124,8 @@ try {
       x: Math.round(area.x + (point.x < area.x + area.width / 2 ? area.width - companion.character.width - 50 : 50)),
       y: Math.round(area.y + 100),
     };
-    companion.applyCharacter();
+    // 记录验收摆位的锚点，工作区刷新不会把临时窗口恢复到默认角落。
+    companion.setScale(companion.state.scale);
     companion.windows.get('character').showInactive();
     const bounds = companion.windows.get('character').getBounds();
     companion.cursorPositions.clear();

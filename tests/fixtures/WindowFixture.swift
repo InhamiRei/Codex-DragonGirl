@@ -20,6 +20,7 @@ application.activate(ignoringOtherApps: true)
 window.setFrameOrigin(initialFrame.origin)
 var panel: NSOpenPanel?
 var floatingMenu: NSPanel?
+var previewPanels: [NSPanel] = []
 var previous = ""
 var orderTimer: Timer?
 
@@ -99,6 +100,42 @@ func openFloatingMenu() {
     try? String(popup.windowNumber).write(to: directory.appendingPathComponent("floating-menu"), atomically: true, encoding: .utf8)
 }
 
+// 模拟 Codex 画中画同尺寸、同层级的内容与控制面板，大小足以进入旧版宿主列表。
+func openPreviewPanels(titled: Bool) {
+    let host = window.frame
+    let frame = NSRect(x: host.maxX - 544, y: host.maxY - 424, width: 520, height: 400)
+    for title in ["Computer Use", "Computer Use Controls"] {
+        let preview = NSPanel(contentRect: frame, styleMask: [.nonactivatingPanel], backing: .buffered, defer: false)
+        preview.title = titled ? title : ""
+        preview.hidesOnDeactivate = false
+        preview.backgroundColor = .windowBackgroundColor
+        preview.level = window.level
+        window.addChildWindow(preview, ordered: .above)
+        preview.setFrame(frame, display: true)
+        preview.orderFrontRegardless()
+        previewPanels.append(preview)
+    }
+    let ids = previewPanels.map(\.windowNumber)
+    try? JSONEncoder().encode(ids).write(to: directory.appendingPathComponent("preview-windows.json"), options: .atomic)
+}
+
+// 两块面板一起移动，模拟拖动画中画时只改变预览容器的位置。
+func movePreviewPanels() {
+    for preview in previewPanels {
+        let origin = preview.frame.origin
+        preview.setFrameOrigin(NSPoint(x: origin.x - 160, y: origin.y - 100))
+    }
+}
+
+// 从宿主解除并隐藏测试面板，避免残留窗口影响接下来的模态验收。
+func closePreviewPanels() {
+    for preview in previewPanels {
+        window.removeChildWindow(preview)
+        preview.orderOut(nil)
+    }
+    previewPanels.removeAll()
+}
+
 // 只报告自建窗口的编号，测试不选择或修改任何用户文件。
 func report(_ stage: String) {
     let data = try! JSONSerialization.data(withJSONObject: ["stage": stage, "window": window.windowNumber])
@@ -126,6 +163,10 @@ func execute(_ command: String) {
     case "glide": glideHost()
     case "open-floating-menu": openFloatingMenu()
     case "close-floating-menu": floatingMenu?.orderOut(nil); floatingMenu = nil
+    case "open-preview": openPreviewPanels(titled: true)
+    case "open-untitled-preview": openPreviewPanels(titled: false)
+    case "move-preview": movePreviewPanels()
+    case "close-preview": closePreviewPanels()
     case "partial": window.setContentSize(NSSize(width: 550, height: 760)); window.orderFrontRegardless(); report("partial")
     case "full": window.setContentSize(NSSize(width: 1100, height: 760)); window.orderFrontRegardless(); report("full")
     case "quit": application.terminate(nil)

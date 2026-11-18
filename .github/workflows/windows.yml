@@ -78,6 +78,9 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
         timeout-minutes: 5
+      - name: 验证龙娘装备页、版本与重启恢复
+        run: npm run test:dragon-config
+        timeout-minutes: 3
       - name: 构建 Windows 便携包
         run: npm run package:win
       - name: 验证解压后的安装包

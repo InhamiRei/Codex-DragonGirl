@@ -1,10 +1,14 @@
 import { EYE_ARTWORK } from '../shared/gaze.js';
 import { OMURICE_BOTTLE_EXIT } from '../shared/expression.js';
 import { DragonOmurice } from './dragon-omurice.js';
+import { tintedDragonPortrait } from './dragon-portrait.js';
 
 const ASSET = new URL('../../assets/characters/codex-dragon-girl-expressions.png', import.meta.url).href;
 const [LEFT_EYE, RIGHT_EYE] = EYE_ARTWORK.eyes;
 const ROW_HEIGHT = RIGHT_EYE.height;
+// 两块眼部贴图与下方红晕的联合范围，留出抗锯齿边缘。
+const FACE_LAYER = { x: LEFT_EYE.x, y: LEFT_EYE.y,
+  width: RIGHT_EYE.x + RIGHT_EYE.width - LEFT_EYE.x, height: 946 - LEFT_EYE.y };
 // 第三行只擦掉旧眼线，旋转的部分另外绘制，发际线不参与旋转。
 const ATLAS_ROWS = { heart: 0, 'white-eyes': 1, 'spiral-eyes': 2 };
 const SPIRALS = [
@@ -96,7 +100,6 @@ export class DragonFaces {
       if (atlas.naturalWidth !== LEFT_EYE.width + RIGHT_EYE.width
         || atlas.naturalHeight !== ROW_HEIGHT * Object.keys(ATLAS_ROWS).length)
         throw new Error('表情贴图尺寸与龙娘眼区不一致');
-
       this.atlas = atlas;
     } catch (error) {
       console.warn('龙娘表情贴图暂不可用：', error.message);
@@ -119,8 +122,9 @@ export class DragonFaces {
     const moving = !motion.canvas.hidden;
     const revision = moving ? motion.revision : null;
     const resized = canvas.width !== width || canvas.height !== height;
-    if (!canvas.hidden && !resized && this.name === name && this.amount === amount && this.time === time
+    if (!canvas.hidden && !resized && this.image === image && this.name === name && this.amount === amount && this.time === time
       && this.motionRevision === revision && this.animate === animate) return;
+    this.image = image;
     this.name = name;
     this.amount = amount;
     this.time = time;
@@ -130,13 +134,20 @@ export class DragonFaces {
     const composite = this.composite ??= new OffscreenCanvas(EYE_ARTWORK.width, EYE_ARTWORK.height);
     const compositeContext = this.compositeContext ??= composite.getContext('2d');
     compositeContext.clearRect(0, 0, composite.width, composite.height);
-    compositeContext.drawImage(moving ? motion.canvas : image, 0, 0);
-    if (name === 'omurice') this.paintOmurice(time, amount, animate);
+    compositeContext.drawImage(moving ? motion.canvas : image, 0, 0, composite.width, composite.height);
+    // 保留原坐标系中的渐变和抗锯齿，只清理、复制眼神与红晕覆盖的区域。
+    const { x, y, width: faceWidth, height: faceHeight } = FACE_LAYER;
+    const eyeCanvas = this.eyeCanvas ??= new OffscreenCanvas(composite.width, composite.height);
+    const eyeContext = this.eyeContext ??= eyeCanvas.getContext('2d');
+    eyeContext.clearRect(x, y, faceWidth, faceHeight);
+    if (name === 'omurice') this.paintOmuriceEyes(amount);
     else {
-      this.paintEyeBase(ATLAS_ROWS[name], amount);
+      this.paintEyeBase(ATLAS_ROWS[name], amount, image.dataset?.tone ?? null);
       if (name === 'heart') this.paintHeart(time, amount);
       if (name === 'spiral-eyes') this.paintSpirals(time, amount);
     }
+    compositeContext.drawImage(eyeCanvas, x, y, faceWidth, faceHeight, x, y, faceWidth, faceHeight);
+    if (name === 'omurice') this.omurice.paint(compositeContext, time, amount, animate);
     // 用高质量滤镜一次缩放整张合成图，防止小尺寸画布插值导致发丝锯齿。
     if (resized) {
       canvas.width = width;
@@ -148,8 +159,8 @@ export class DragonFaces {
   }
 
   // 从盘面出现起就用挤眼和淡红晕表现笑意，保留龙娘原画的无口造型。
-  paintOmurice(time, amount, animate) {
-    const context = this.compositeContext;
+  paintOmuriceEyes(amount) {
+    const context = this.eyeContext;
     this.paintEyeBase(ATLAS_ROWS['spiral-eyes'], amount);
     blush(context, amount);
     context.save();
@@ -157,24 +168,39 @@ export class DragonFaces {
     context.fillStyle = '#1a142d';
     context.fill(OMURICE_SQUINT);
     context.restore();
-    this.omurice.paint(context, time, amount, animate);
   }
 
-  // 在原图坐标扣去旧眼纹，同时保留原先逐像素校对的前发和脸线。
-  paintEyeBase(row, amount) {
-    const context = this.compositeContext;
-    const top = row * ROW_HEIGHT;
+  // 使用在原画上校准过的眼部贴图切换表情，爱心眼保留当前虹膜颜色。
+  paintEyeBase(row, amount, tone = null) {
+    const context = this.eyeContext;
     context.globalAlpha = amount;
+    if (row === ATLAS_ROWS.heart) {
+      // 爱心眼第一次播放时才准备含虹膜的图层，其他动作无需分配这张画布。
+      if (!this.heartBase) {
+        this.heartBase = new OffscreenCanvas(EYE_ARTWORK.width, EYE_ARTWORK.height);
+        this.drawEyeRow(this.heartBase.getContext('2d'), row);
+      }
+      if (this.heartTone !== tone) {
+        this.heartTone = tone;
+        this.heartArtwork = tintedDragonPortrait(this.heartBase, tone);
+      }
+      context.drawImage(this.heartArtwork, 0, 0);
+    } else this.drawEyeRow(context, row);
+    context.globalAlpha = 1;
+  }
+
+  // 眼部贴图中的左右眼分别落回一直使用的原画坐标。
+  drawEyeRow(context, row) {
+    const top = row * ROW_HEIGHT;
     context.drawImage(this.atlas, 0, top, LEFT_EYE.width, LEFT_EYE.height,
       LEFT_EYE.x, LEFT_EYE.y, LEFT_EYE.width, LEFT_EYE.height);
     context.drawImage(this.atlas, LEFT_EYE.width, top, RIGHT_EYE.width, RIGHT_EYE.height,
       RIGHT_EYE.x, RIGHT_EYE.y, RIGHT_EYE.width, RIGHT_EYE.height);
-    context.globalAlpha = 1;
   }
 
   // 眼内的心形轻跳，红晕沿眼下和双颊泛开。
   paintHeart(time, amount) {
-    const context = this.compositeContext;
+    const context = this.eyeContext;
     blush(context, amount * (.91 + Math.sin(time / 580) * .09), true);
     context.save();
     context.globalAlpha = amount;
@@ -199,7 +225,7 @@ export class DragonFaces {
 
   // 两只眼睛同方向旋转，右眼相差一小段角度；底层始终与原画对齐。
   paintSpirals(time, amount) {
-    const context = this.compositeContext;
+    const context = this.eyeContext;
     const spirals = this.spirals ??= SPIRALS.map((eye) => spiralPath(eye.radius));
     context.save();
     context.globalAlpha = amount;

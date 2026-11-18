@@ -2,6 +2,15 @@ import { AUDIO_GROUPS, DEFAULT_EVENT_SOUNDS, audioFile } from '../shared/audio-l
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { characterById } from '../shared/characters.js';
+import { DEFAULT_DRAGON_EYE_COLOR, parseDragonEyeColor } from '../shared/dragon-gear.js';
+
+// 旧预设迁移为相近的自选色，让现有偏好在精简选项后仍可恢复。
+const LEGACY_DRAGON_EYE_COLORS = new Map([
+  ['blue', '#739db9'],
+  ['green', '#73b29c'],
+  ['amber', '#bd9868'],
+  ['rose', '#ba7b9e'],
+]);
 
 export const SOUND_EVENTS = ['press', 'release', 'complete', 'error', 'question', 'approval', 'quota'];
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -42,6 +51,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   expressionsEnabled: true,
   characterAsset: '',
   characterId: 'dragon',
+  dragonEyeId: 'purple',
+  dragonEyeColor: DEFAULT_DRAGON_EYE_COLOR,
   manualHomes: [],
   followOffsets: {},
   aliases: {},
@@ -128,6 +139,10 @@ export function normalizeSettings(value = {}) {
   ];
   if (d.characterAsset && !/^[a-f0-9]{32}\.(png|webp)$/.test(d.characterAsset)) d.characterAsset = '';
   d.characterId = characterById(v.characterId).id;
+  const legacyEyeColor = LEGACY_DRAGON_EYE_COLORS.get(v.dragonEyeId);
+  const eyeColor = legacyEyeColor ?? parseDragonEyeColor(v.dragonEyeColor);
+  d.dragonEyeColor = eyeColor ?? DEFAULT_DRAGON_EYE_COLOR;
+  d.dragonEyeId = eyeColor && (legacyEyeColor || v.dragonEyeId === 'custom') ? 'custom' : 'purple';
   d.followOffsets = Object.fromEntries(
     Object.entries(dictionary(v.followOffsets))
       .filter(([k, o]) => path.isAbsolute(k) && o && Number.isFinite(o.x) && Number.isFinite(o.y))

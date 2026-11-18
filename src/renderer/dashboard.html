@@ -6,12 +6,17 @@
     <title>GPT龙娘 · 用量管理</title>
     <link rel="stylesheet" href="dashboard.css" />
     <link rel="stylesheet" href="account-tests.css" />
+    <link rel="stylesheet" href="dragon-config.css" />
   </head>
   <body>
     <aside class="sidebar">
       <div class="brand">
         <img class="brand-logo" src="../../assets/characters/codex-dragon-girl.png" alt="GPT龙娘 Logo" />
-        <strong>GPT龙娘</strong>
+        <!-- 侧栏由所有页面共用，版本号始终紧跟应用标题。 -->
+        <div class="brand-copy">
+          <strong>GPT龙娘</strong>
+          <span id="app-version"></span>
+        </div>
       </div>
       <nav class="main-nav" aria-label="主导航">
         <button data-tab="overview" class="selected" aria-current="page">
@@ -36,6 +41,12 @@
             <circle cx="9" cy="7" r="3" />
             <circle cx="15" cy="17" r="3" /></svg
           ><span>偏好设置</span>
+        </button>
+        <button data-tab="dragon-config">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7.5 8.5C5.5 8 5 5.5 5 3c2.5 1 4.5 2.8 5 4.2M16.5 8.5C18.5 8 19 5.5 19 3c-2.5 1-4.5 2.8-5 4.2" />
+            <path d="M12 7c-4 0-7 3-7 6.5 0 4 3.4 6.5 7 6.5s7-2.5 7-6.5C19 10 16 7 12 7zM9 13v1m6-1v1" />
+          </svg><span>龙娘配置</span>
         </button>
       </nav>
     </aside>
@@ -906,7 +917,19 @@
               </section>
             </form>
           </section>
-          <footer class="page-footer"><span>GPT龙娘 <span id="app-version"></span></span><span id="updated"></span></footer>
+          <section id="dragon-config" class="view" aria-labelledby="title" hidden>
+            <!-- 两组卡片围绕原版立绘，瞳色选项在下方展开。 -->
+            <div class="dragon-wardrobe">
+              <div class="dragon-equipment" id="dragon-equipment-left" role="group" aria-label="左侧装备"></div>
+              <figure class="dragon-preview">
+                <canvas id="dragon-config-portrait" role="img" aria-label="龙娘外观预览" width="1330" height="1182"></canvas>
+              </figure>
+              <div class="dragon-equipment" id="dragon-equipment-right" role="group" aria-label="右侧装备"></div>
+            </div>
+            <p class="dragon-inactive" id="dragon-config-inactive" role="status" hidden>切回内置龙娘时应用这里选择的瞳色。</p>
+            <div class="dragon-gear-options" id="dragon-gear-options" role="group" hidden></div>
+          </section>
+          <footer class="page-footer"><span id="updated"></span></footer>
         </div>
       </div>
       <div class="save-bar" id="settings-save-bar" hidden>

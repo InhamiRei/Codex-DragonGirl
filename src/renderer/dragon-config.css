@@ -1,0 +1,169 @@
+.dragon-wardrobe {
+  --rail: #bda8d8;
+  --rail-active: #9870ce;
+  display: grid;
+  grid-template-columns: minmax(76px, 108px) minmax(0, 368px) minmax(76px, 108px);
+  align-items: stretch;
+  justify-content: center;
+  column-gap: clamp(20px, 7%, 54px);
+  max-width: 716px;
+  padding: 18px 8px 20px;
+  margin: 0 auto;
+  isolation: isolate;
+}
+.dragon-equipment {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 18px;
+  padding-block: 20px 8px;
+}
+.dragon-gear-item {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 7px 5px;
+  border: 1px solid #ded2ed;
+  border-radius: 13px;
+  background: #fcfaff;
+  color: #544761;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+.dragon-slot {
+  position: relative;
+  min-height: 92px;
+  border-color: #d7c8e9;
+  box-shadow: 0 5px 14px #7153a013;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+.dragon-slot-link {
+  position: absolute;
+  inset-inline-start: 100%;
+  top: 50%;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  color: var(--rail);
+  stroke-width: 1px;
+  pointer-events: none;
+}
+.dragon-equipment:last-child .dragon-slot-link {
+  inset-inline: auto 100%;
+}
+.dragon-slot-link circle {
+  fill: #fcf9ff;
+}
+.dragon-slot:hover,
+.dragon-slot[aria-expanded='true'] {
+  border-color: #af94d6;
+  color: #503378;
+  background: #eee5f9;
+  box-shadow: 0 5px 16px #7750ae29;
+}
+.dragon-slot:hover .dragon-slot-link,
+.dragon-slot[aria-expanded='true'] .dragon-slot-link {
+  color: var(--rail-active);
+}
+.dragon-slot[aria-expanded='true'] .dragon-slot-link circle {
+  fill: #b591e7;
+}
+.dragon-gear-visual {
+  position: relative;
+  display: block;
+  width: 48px;
+  height: 48px;
+}
+.dragon-gear-visual img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.dragon-preview {
+  width: 100%;
+  aspect-ratio: 1330 / 1182;
+  align-self: center;
+  margin: 24px 0 5px;
+}
+.dragon-preview canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 0 7px #9b8fdb70);
+}
+.dragon-inactive {
+  margin-top: 10px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.dragon-gear-options {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin: 24px auto 0;
+  padding: 3px;
+}
+.dragon-gear-option {
+  width: 112px;
+  min-height: 88px;
+}
+.dragon-gear-option[data-selected] {
+  border-color: #b39ad6;
+  background: #f1eafa;
+  color: #503378;
+  box-shadow: inset 0 0 0 1px #c5b0e4, 0 4px 12px #7952aa16;
+}
+.dragon-color-picker {
+  position: relative;
+  cursor: pointer;
+}
+.dragon-gear-option:is(button, .dragon-color-picker):hover {
+  border-color: #b39ad6;
+  background: #eee5f9;
+}
+.dragon-color-picker:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.dragon-color-picker input[type='color'] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.dragon-color-chip {
+  width: 30px;
+  height: 30px;
+  margin-block: 9px;
+  border: 2px solid #fff;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px #b7aac5;
+}
+.dragon-gear-swatch {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid white;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #b7aac5;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dragon-slot { transition: none; }
+}

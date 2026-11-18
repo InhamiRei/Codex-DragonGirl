@@ -9,6 +9,8 @@ const root = fileURLToPath(new URL('../', import.meta.url)),
   temp = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-app-')),
   user = path.join(temp, 'user'),
   data = path.join(temp, 'data');
+// 主导航顺序是界面契约，龙娘配置紧接在偏好设置之后。
+const dashboardTabs = ['overview', 'usage', 'account-tests', 'settings', 'dragon-config'];
 // 不预装用户音效，首次启动必须直接使用安装包中的九段原声。
 await fs.mkdir(data, { recursive: true });
 // 用旧版已保存的默认模板启动，验证覆盖安装后能直接迁移用量单位。
@@ -119,6 +121,7 @@ async function verifyLayout() {
     await page.locator('[data-settings-tab="appearance"]').click();
     const geometry = await page.evaluate(() => {
       const nav = [...document.querySelectorAll('.main-nav button')].map((b) => ({
+        tab: b.dataset.tab,
         height: b.getBoundingClientRect().height,
         textX: b.querySelector('span').getBoundingClientRect().x,
       }));
@@ -128,7 +131,7 @@ async function verifyLayout() {
       const scroll = document.getElementById('content-scroll');
       return { nav, rows, overflow: scroll.scrollWidth > scroll.clientWidth + 1 };
     });
-    assert.equal(geometry.nav.length, 4);
+    assert.deepEqual(geometry.nav.map(({ tab }) => tab), dashboardTabs);
     assert.ok(
       geometry.nav.every((r) => r.height === 44 && r.textX === geometry.nav[0].textX),
       '导航文字或高度没有对齐',
@@ -386,9 +389,9 @@ try {
   );
   page = application.windows().find((p) => p.url().endsWith('/dashboard.html'));
   page.on('pageerror', (e) => errors.push(e.message));
-  // 页脚必须显示运行包的版本，源码运行与解压后的发行包都走真实 IPC 验收。
+  // 侧栏必须显示运行包的版本，源码运行与解压后的发行包都走真实 IPC 验收。
   const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
-  await until(async () => await page.locator('#app-version').textContent() === `v${version}`, '页脚版本号未显示或与安装包不符');
+  await until(async () => await page.locator('.brand #app-version').textContent() === `v${version}`, '侧栏版本号未显示或与安装包不符');
   // 旧配置没有角色字段时，完整应用与实际窗口仍必须默认使用龙娘。
   assert.equal(await application.evaluate(() => globalThis.__dragonGirlApp.monitor.settings.characterId), 'dragon');
   assert.equal(await application.evaluate(() => globalThis.__dragonGirlApp.companion.characterModel().asset),
@@ -1054,14 +1057,14 @@ try {
     animations: 'disabled',
     path: path.join(root, '.artifacts/model-prices.png'),
   });
-  assert.equal(await page.locator('.main-nav button').count(), 4);
+  assert.equal(await page.locator('.main-nav button').count(), dashboardTabs.length);
   assert.doesNotMatch(
     await page.locator('body').innerText(),
     /YOUR CODEX|CODEX COMPANION|Standard|Ultrafast|PROLITE|tokens|USD|词元/,
   );
   assert.deepEqual(errors, []);
-  // 在交互验收结束后再截取页脚，避免截图的自动滚动干扰前面的悬停与刷新测试。
-  await page.locator('.page-footer').screenshot({ path: path.join(root, '.artifacts/app-version-footer.png') });
+  // 在交互验收结束后再截取侧栏版本，避免截图干扰前面的悬停与刷新测试。
+  await page.locator('.brand').screenshot({ path: path.join(root, '.artifacts/app-version-sidebar.png') });
   await fs.writeFile(
     path.join(
       root,
@@ -1077,7 +1080,7 @@ try {
         refreshedLedgerTotal: 42400,
         pagedThreads: 45,
         checks: [
-          '页脚显示实际应用版本号',
+          '侧栏显示实际应用版本号',
           'Plus、Pro 100、Pro 200、Pro 500 原名与未知套餐保留',
           '重置卡置顶、悬停明细、键盘访问与后台重绘保持',
           '真实 RPC 读取重置卡详情并排除已使用卡',

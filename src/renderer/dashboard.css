@@ -215,11 +215,21 @@ label,
   box-shadow: 0 3px 10px #7561ad12;
   object-fit: contain;
 }
+.brand-copy {
+  display: grid;
+  align-content: center;
+}
 .brand strong {
   font-size: 19px;
   line-height: 28px;
   font-weight: 650;
   white-space: nowrap;
+}
+#app-version {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 15px;
+  font-variant-numeric: tabular-nums;
 }
 .main-nav {
   display: grid;
@@ -337,9 +347,7 @@ label,
   line-height: 20px;
 }
 .page-footer {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
+  text-align: right;
   color: #a2a6b0;
   font-size: 11px;
   line-height: 20px;

@@ -62,7 +62,7 @@ try {
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.DRAGONGIRL_MONITOR_TEST;
   application = await electron.launch({ ...(executablePath ? { executablePath } : {}), args: executablePath ? [] : [root], env, timeout: 30000 });
-  await until(() => application.evaluate(() => globalThis.__dragonGirlTest?.ready.size === 2), '测试窗口未就绪');
+  await until(() => application.evaluate(() => globalThis.__dragonGirlTest?.started === true), '测试窗口未就绪');
   page = application.windows().find(window => window.url().endsWith('/bubble.html'));
   page.on('pageerror', error => errors.push(error.message));
   await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -75,8 +75,10 @@ try {
       return animate.apply(this, args);
     };
   });
-  await application.evaluate(() => {
+  await application.evaluate(({ screen }) => {
     const c = globalThis.__dragonGirlTest;
+    // 固定验收工作区，只检查额度推送对气泡位置的影响。
+    screen.removeListener('display-metrics-changed', c.onDisplayChanged);
     clearTimeout(c.cursorTimer);
     c.pollCursor = () => {};
     c.appearance.settings = { pinnedBubble: true, soundEnabled: false, autoFlip: false };
@@ -99,7 +101,10 @@ try {
   await until(() => page.locator('#bubble').evaluate(node => Number(getComputedStyle(node).opacity) >= .25), '气泡未进入可见淡入阶段');
   const before = await nativeCalls();
   const staleModel = await application.evaluate(() => structuredClone(globalThis.__dragonGirlTest.bubbleModel));
-  const text = await page.locator('#bubble').innerText();
+  // 比较真实显示的额度数字，字体加载引起的换行不影响这项验收。
+  const quotaText = page.locator('.quota-value');
+  const text = await quotaText.textContent();
+  assert.equal(text, '5%');
   await record();
   await application.evaluate(() => {
     const c = globalThis.__dragonGirlTest;
@@ -115,7 +120,7 @@ try {
   const frames = await page.evaluate(() => { window.__recordBubble = false; return window.__bubbleFrames; });
   const after = await nativeCalls();
   const animations = await page.evaluate(() => window.__bubbleAnimations);
-  const report = { frames, before, after, animations, textUnchanged: await page.locator('#bubble').innerText() === text };
+  const report = { frames, before, after, animations, textUnchanged: await quotaText.textContent() === text };
   await fs.writeFile(path.join(artifacts, 'bubble-refresh-report.json'), JSON.stringify(report, null, 2));
   assert.ok(frames.length >= 5, '未记录到足够的真实绘制帧');
   assert.ok(frames.every(frame => frame.ready === 'true' && frame.visibility === 'visible'), '后台更新把已经显示的气泡重新隐藏');

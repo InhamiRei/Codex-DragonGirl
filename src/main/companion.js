@@ -27,10 +27,10 @@ import {
 import { DragGesture } from '../shared/gesture.js';
 import { StateStore } from './state-store.js';
 import { dialogueLine, PRAYER_TEXT } from '../shared/dialogue.js';
-import { eyeTrackingEnabled } from '../shared/gaze.js';
+import { EYE_ARTWORK, eyeTrackingEnabled } from '../shared/gaze.js';
 import { shouldFaceLeft } from '../shared/facing.js';
 import { followWindowStack, followWindowFloating } from '../shared/follow-window.js';
-import { CHARACTERS, characterByAsset } from '../shared/characters.js';
+import { CHARACTERS, characterByAsset, characterById, isDragonAsset } from '../shared/characters.js';
 import { DRAGON_FACE_EXPRESSIONS, isDragonFace } from '../shared/expression.js';
 import { PRAYER_PALM } from '../shared/prayer-wave.js';
 import { PrayerWave } from './prayer-wave.js';
@@ -40,15 +40,27 @@ const ORIGIN = 'dragon://app';
 const SHORTCUT = 'CommandOrControl+Shift+Alt+D';
 const RECT_KEYS = ['x', 'y', 'width', 'height'];
 
+// 启动、切换角色和多实例共用素材规则，自定义图片始终优先。
+export function companionAppearance(settings, assetDirectory, status = 'idle') {
+  const { image } = characterById(settings.characterId);
+  const custom = settings.characterAsset;
+  return {
+    settings,
+    asset: custom ? ORIGIN + '/user-assets/' + custom : ORIGIN + '/' + image,
+    assetPath: custom ? path.join(assetDirectory, custom) : path.join(ROOT, image),
+    status,
+  };
+}
+
 // 桌面层只负责窗口、手势与持久化，角色绘制和气泡内容各自独立。
 export class Companion {
   static registry = new Set();
   static ipcRegistered = false;
   // 所有运行数据都留在本应用目录，测试时可以完全隔离。
-  constructor(dataDirectory, { testMode = false, secondary = false, delegate = null, initiallySuppressed = false } = {}) {
+  constructor(dataDirectory, { testMode = false, secondary = false, delegate = null, initiallySuppressed = false, appearance = {} } = {}) {
     this.secondary = secondary;
     this.delegate = delegate;
-    this.appearance = {};
+    this.appearance = appearance;
     this.facingLeft = false;
     Companion.registry.add(this);
     this.store = new StateStore(path.join(dataDirectory, 'preferences.json'));
@@ -85,7 +97,9 @@ export class Companion {
   // 首次显示要等素材解码和命中图准备完成，避免短暂出现白块或不可操作的角色。
   async start() {
     this.state = await this.store.load();
-    const image = nativeImage.createFromPath(path.join(ROOT, 'assets/characters/codex-dragon-girl.png'));
+    const defaultImage = path.join(ROOT, CHARACTERS[0].image);
+    // 内置龙娘的尺寸按原画标定，窗口布局可以直接使用。
+    const image = nativeImage.createFromPath(isDragonAsset(this.appearance.asset) ? defaultImage : this.appearance.assetPath || defaultImage);
     if (image.isEmpty())
       throw new Error('龙娘素材无法读取，请检查 assets/characters/codex-dragon-girl.png。');
     const dimensions = image.getSize();
@@ -878,10 +892,12 @@ export class Companion {
       this.hideBubble();
     if (this.prayerWave && (appearance.settings?.motion === false || appearance.settings?.expressionsEnabled === false))
       this.hideBubble();
-    const image = assetChanged && appearance.assetPath ? nativeImage.createFromPath(appearance.assetPath) : null;
-    if (image && !image.isEmpty()) {
-      const { width, height } = image.getSize();
-      this.imageRatio = height / width;
+    const dragon = assetChanged && isDragonAsset(appearance.asset);
+    const image = assetChanged && !dragon && appearance.assetPath ? nativeImage.createFromPath(appearance.assetPath) : null;
+    const dimensions = dragon ? EYE_ARTWORK : image && !image.isEmpty() ? image.getSize() : null;
+    const ratio = dimensions ? dimensions.height / dimensions.width : this.imageRatio;
+    if (ratio !== this.imageRatio) {
+      this.imageRatio = ratio;
       this.refreshPlacement();
     } else this.applyCharacter();
     this.refreshUsageBubble();

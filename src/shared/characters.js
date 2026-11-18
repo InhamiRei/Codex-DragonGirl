@@ -5,6 +5,7 @@ export const CHARACTERS = Object.freeze([
   Object.freeze({ id: 'dragon', name: '龙娘', image: 'assets/characters/codex-dragon-girl.png' }),
   Object.freeze({ id: 'maro', name: '麻吕', image: 'assets/characters/maro/idle.png' }),
 ]);
+export const DEFAULT_CHARACTER_ASSET = ORIGIN + CHARACTERS[0].image;
 export const MARO_ASSET = ORIGIN + CHARACTERS[1].image;
 export const HAIR_FRAMES = 30;
 export const MARO_FRAME_SIZE = 1254;
@@ -39,9 +40,15 @@ export function characterById(id) {
   return CHARACTERS.find((character) => character.id === id) || CHARACTERS[0];
 }
 
-// 只有内置原画地址才能启用对应表情，自定义图片不会误套眼睛或动作。
-export function characterByAsset(asset = ORIGIN + CHARACTERS[0].image) {
-  return CHARACTERS.find((character) => ORIGIN + character.image === asset) || null;
+// 只有内置原画使用龙娘标定的眼区、表情和发饰交互。
+export function isDragonAsset(asset) {
+  return asset === DEFAULT_CHARACTER_ASSET;
+}
+
+// 导入图片不会借用内置角色的动画。
+export function characterByAsset(asset = DEFAULT_CHARACTER_ASSET) {
+  if (isDragonAsset(asset)) return CHARACTERS[0];
+  return asset === MARO_ASSET ? CHARACTERS[1] : null;
 }
 
 // 以绝对经过时间选帧，卡顿或后台恢复不会积累过期动作。

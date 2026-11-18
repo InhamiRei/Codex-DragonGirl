@@ -223,8 +223,10 @@ try {
     const c = globalThis.__dragonGirlTest;
     const area = c.display.workArea;
     c.character = { ...c.character, x: Math.round(area.x + area.width * .4), y: Math.round(area.y + area.height * .4) };
-    c.applyCharacter();
+    // 记录测试位置的锚点，系统刷新工作区时仍沿用此位置。
+    c.setScale(c.state.scale);
   });
+  await prepareCharacterInput();
 
   // 验证渲染命中结果确实驱动了原生 setIgnoreMouseEvents 状态。
   await page.mouse.move(2, 2);
@@ -362,6 +364,7 @@ try {
   ], 'prolite') });
   const usageBubble = await bubbleLayout(usageText);
   assert.equal(usageBubble.textOutside, false, '用量文字超出了漫画气泡轮廓。');
+  assert.ok(usageBubble.scrollHeight <= usageBubble.clientHeight + 1, 'Pro 单额度不应裁切或需要滚动。');
   assert.deepEqual([usageBubble.card.width, usageBubble.card.height], [shortBubble.card.width, shortBubble.card.height], '用量和对话的轮廓尺寸不同。');
   const usageState = await snapshot();
   assert.ok(usageState.windows.bubble.x + usageState.windows.bubble.width / 2 <= usageState.character.x - usageState.character.width * .24, '大气泡主体没有明显左移。');
@@ -380,8 +383,10 @@ try {
       quotaNote: '', tokens: '2715万' },
   }, 'usage'), plusText);
   const plusBubble = await bubbleLayout(plusText);
-  assert.ok(Math.abs(usageBubble.content.y - plusBubble.content.y) < 1, 'Pro 和 Plus 的内容起点没有统一。');
-  assert.equal(usageBubble.clientHeight, plusBubble.clientHeight, 'Pro 和 Plus 的内容高度没有统一。');
+  // 单行 Pro 和双行 Plus 各自居中；同为双行时的等高由气泡专项检查覆盖。
+  for (const { content, card } of [usageBubble, plusBubble]) {
+    assert.ok(Math.abs(content.y + content.height / 2 - card.y - card.height / 2) <= 1, '用量内容没有在气泡中垂直居中。');
+  }
   assert.deepEqual([plusBubble.card.width, plusBubble.card.height], [usageBubble.card.width, usageBubble.card.height], '双额度改变了固定轮廓。');
   assert.equal(plusBubble.textOutside, false, '双额度文字超出椭圆轮廓。');
   assert.ok(plusBubble.scrollWidth <= plusBubble.clientWidth + 1, '双额度出现横向溢出。');

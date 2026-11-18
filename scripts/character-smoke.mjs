@@ -49,7 +49,7 @@ try {
   delete env.DRAGONGIRL_MONITOR_TEST;
   application = await electron.launch({ ...(executablePath ? { executablePath } : {}),
     args: executablePath ? [] : [root], env, timeout: 30000 });
-  await until(() => application.evaluate(() => globalThis.__dragonGirlTest?.ready.size === 2), '角色未就绪');
+  await until(() => application.evaluate(() => globalThis.__dragonGirlTest?.started === true), '角色未就绪');
   page = application.windows().find((window) => window.url().endsWith('/character.html'));
   page.on('pageerror', (error) => errors.push(error.message));
   await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -71,8 +71,10 @@ try {
       return original.call(this, url);
     };
   });
-  await application.evaluate(async ({ app }, definitions) => {
+  await application.evaluate(async ({ app, screen }, definitions) => {
     const c = globalThis.__dragonGirlTest;
+    // 固定工作区，使动画期间的像素和位置检查只受角色动作影响。
+    screen.removeListener('display-metrics-changed', c.onDisplayChanged);
     // 测试委托使用同一角色注册表与布局入口，保留正式 IPC、菜单和画布路径。
     c.delegate = {
       openDashboard() {}, refresh() {},
@@ -86,8 +88,8 @@ try {
     };
     clearTimeout(c.cursorTimer);
     c.pollCursor = () => {};
-    c.character = { ...c.character, x: c.display.workArea.x + 400, y: c.display.workArea.y + 220 };
     await c.delegate.selectCharacter('maro');
+    c.character = { ...c.character, x: c.display.workArea.x + 400, y: c.display.workArea.y + 220 };
     c.setScale(0.75);
     c.show();
   }, CHARACTERS);

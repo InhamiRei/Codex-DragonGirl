@@ -19,6 +19,7 @@
 
 - **桌面陪伴**：透明背景、鼠标穿透、拖动吸附、缩放、翻转、自定义角色图片与轻点互动。
 - **角色切换**：首次安装默认龙娘。点击龙娘发饰，或通过右键 / 托盘「切换角色」、偏好设置的「内置角色」选择龙娘或麻吕；升级保留已选角色。
+- **龙娘配置**：龙角、瞳孔、发饰和服饰围绕原版立绘。瞳孔展开后可选择 GPT紫瞳或自选瞳色，颜色自动保存并同步到桌宠。其余卡片各展示一个部件。
 - **麻吕互动**：待机睁眼、无口，双颊带红晕，会自然眨眼并小幅看向鼠标；轻点和任务完成时闭眼，失败时显示创可贴表情。待机偶尔播放约五秒的慢速捋发，低头、单眼偷瞄后缓缓恢复；30 帧使用 1254×1254 透明原图，配色、尺寸和身体位置统一。工作时可通过「动作 → 捋头发」手动播放。
 - **自动朝向**：拖到左半边松手后默认用约 0.3 秒平滑镜像，右半边松手后恢复。跟随模式按宿主窗口左右判断，独立桌面按所在屏幕判断；可在「偏好设置 → 外观 → 自动朝向」关闭，并保留手动翻转。关闭动画反馈或系统减少动态效果时直接切换。
 - **视线与眨眼**：龙娘和麻吕的眼睛跟随全屏鼠标；静止时也会不定时轻眨双眼，快速闭合、稍慢睁开。龙娘会轻轻呼吸，轻戳时耳尖和发梢会回弹。「偏好设置 → 外观」中的「眼睛跟随」与「自然眨眼」可分别开关，「动画反馈」可关闭身体配合、呼吸和回弹。隐藏、拖动时暂停眨眼；自定义图片保持原样，系统减少动态效果时暂停联动。
@@ -42,9 +43,9 @@
 
 | 电脑 | 下载文件 | 打开方法 |
 | --- | --- | --- |
-| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-1.5.5-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
-| macOS 15+，Apple Silicon | `Codex-DragonGirl-1.5.5-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
-| 同上，偏好 ZIP | `Codex-DragonGirl-1.5.5-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
+| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-<版本>-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
+| macOS 15+，Apple Silicon | `Codex-DragonGirl-<版本>-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
+| 同上，偏好 ZIP | `Codex-DragonGirl-<版本>-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
 
 Windows 请保留解压后的整个文件夹，程序需要旁边的运行时文件。当前暂未提供 Windows ARM 原生版和 Intel Mac 版。
 
@@ -150,12 +151,15 @@ npm run test:menu
 npm run test:performance
 npm run test:sad
 npm run test:characters
+npm run test:dragon-config
 npm run test:accounts
 npm run package:mac
 npm run verify:package
 ```
 
 声音测试使用隔离目录中的原声音效；首次运行测试前需准备上述音效缓存。构建输出位于 `output/`，测试报告位于 `.artifacts/`，两者均不进入源码仓库。Windows Actions 验证原生窗口、统计和解压后的独立应用，并保留构建产物。
+
+发版用 `npm version <版本号> --no-git-tag-version` 同步应用与锁文件。侧栏读取实际运行的版本，打包核对包内元数据与 macOS 系统版本，成品验收再启动应用核对侧栏。
 
 `verify:project` 串行检查语法、单元测试和当前系统的桌面功能，覆盖窗口跟随、启动、位置恢复、声音、气泡、视线、眨眼、开心、伤心、菜单和账号测智。性能回归检查重复推送不重建未变化的卡片、图表和托盘菜单，以及常驻气泡和账号运行状态的及时更新。汇总报告与各项日志位于 `.artifacts/project-audit/`，任意检查失败会返回非零退出码。
 

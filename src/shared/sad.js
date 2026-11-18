@@ -1,6 +1,7 @@
 // 伤心沿用确认过的含泪预览，实际动作结束即停帧，不保留预览末尾的静止等待。
 export const SAD_DURATION = 5600;
 export const SAD_CHARACTER_ASSET = 'dragon://app/assets/characters/codex-dragon-girl-sad.png';
+export const SAD_TEAR_X = 901;
 export const SAD_EYES = Object.freeze([
   { cx: 479, cy: 710, rx: 170, ry: 174, irisX: 486, waterY: 783, waterSlope: -0.04 },
   { cx: 845, cy: 731, rx: 173, ry: 178, irisX: 835, waterY: 810, waterSlope: 0.22 },
@@ -39,7 +40,7 @@ export function sadTear(elapsed, amount) {
   const time = Math.max(0, elapsed);
   const progress = Math.max(0, Math.min(1, (time - 2200) / 1700));
   return {
-    x: 901 + Math.sin(progress * Math.PI) * 2.5,
+    x: SAD_TEAR_X + Math.sin(progress * Math.PI) * 2.5,
     y: 821 + smooth(progress) * 58,
     radius: 9.8 + Math.sin(progress * Math.PI) * 1.3,
     alpha: smooth((time - 2050) / 380) * (1 - smooth((time - 3650) / 600)) * amount,

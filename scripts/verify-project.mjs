@@ -16,7 +16,7 @@ const suite = [
   ...['startup', 'position', 'follow', 'bubble', 'bubble-refresh', 'facing', 'eyes', 'blink', 'expression', 'menu', 'sad', 'account-tests', 'performance']
     .map((name) => [name, [`scripts/${name}-smoke.mjs`]]),
   // 新角色从默认选择、逐帧几何与配色到眼部像素都进入正式发布验收。
-  ...['character-smoke', 'maro-frame-audit', 'maro-interaction-smoke', 'maro-gaze-audit']
+  ...['character-smoke', 'dragon-config-smoke', 'maro-frame-audit', 'maro-interaction-smoke', 'maro-gaze-audit']
     .map((name) => [name, [`scripts/${name}.mjs`]]),
 ];
 
