@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DEFAULT_CHARACTER_ASSET, EYE_ARTWORK, eyeTrackingEnabled, eyeWarpWeight, gazeTarget, stepGaze, bodyFollowPose } from '../src/shared/gaze.js';
 import { imagePoint } from '../src/shared/hit-test.js';
 import { normalizeSettings } from '../src/core/settings.js';
-import { MARO_ASSET } from '../src/shared/characters.js';
+import { KOKKORO_ASSET, MARO_ASSET } from '../src/shared/characters.js';
 import { MARO_EYE_ARTWORK, maroEyeForeground, maroEyeMask, maroGazeWeight } from '../src/shared/maro-eyes.js';
 
 // 构造绘制后的屏幕落点，验证坐标还原而不是重复目标计算公式。
@@ -26,6 +26,8 @@ test('眼睛跟随偏好兼容旧设置并限制内置角色', () => {
   assert.equal(eyeTrackingEnabled(DEFAULT_CHARACTER_ASSET, { eyeTracking: false }), false);
   assert.equal(eyeTrackingEnabled(MARO_ASSET), true);
   assert.equal(eyeTrackingEnabled(MARO_ASSET, { eyeTracking: false }), false);
+  assert.equal(eyeTrackingEnabled(KOKKORO_ASSET), true);
+  assert.equal(eyeTrackingEnabled(KOKKORO_ASSET, { eyeTracking: false }), false);
   assert.equal(eyeTrackingEnabled('dragon://app/user-assets/example.png'), false);
 });
 

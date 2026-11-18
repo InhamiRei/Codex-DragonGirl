@@ -45,7 +45,8 @@
     "test:characters": "node scripts/character-smoke.mjs",
     "test:character-frames": "node scripts/maro-frame-audit.mjs",
     "test:maro-interaction": "node scripts/maro-interaction-smoke.mjs",
-    "test:maro-gaze-pixels": "node scripts/maro-gaze-audit.mjs"
+    "test:maro-gaze-pixels": "node scripts/maro-gaze-audit.mjs",
+    "test:kokkoro": "node scripts/kokkoro-interaction-smoke.mjs"
   },
   "devDependencies": {
     "@electron-internal/extract-zip": "1.0.6",

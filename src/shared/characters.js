@@ -4,10 +4,11 @@ const ORIGIN = 'dragon://app/';
 export const CHARACTERS = Object.freeze([
   Object.freeze({ id: 'dragon', name: '龙娘', image: 'assets/characters/codex-dragon-girl.png' }),
   Object.freeze({ id: 'maro', name: '麻吕', image: 'assets/characters/maro/idle.png' }),
-  // 可可萝的待机立绘直接使用选定的透明半身图。
+  // 可可萝的眼区与表情沿用这张透明半身图的坐标。
   Object.freeze({ id: 'kokkoro', name: '可可萝', image: 'assets/characters/kokkoro/idle.png' }),
 ]);
 export const MARO_ASSET = ORIGIN + CHARACTERS[1].image;
+export const KOKKORO_ASSET = ORIGIN + CHARACTERS[2].image;
 export const HAIR_FRAMES = 30;
 export const MARO_FRAME_SIZE = 1254;
 // 动作帧使用原生 1254 像素的无损 WebP，首尾复用待机图，播放仍为三十帧。

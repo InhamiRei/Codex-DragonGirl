@@ -44,6 +44,7 @@ const RECT_KEYS = ['x', 'y', 'width', 'height'];
 const CHARACTER_ACTIONS = {
   dragon: [['发光', 'happy'], ['哭泣', 'sad'], ['祈祷', 'prayer'], ...DRAGON_FACE_EXPRESSIONS],
   maro: [['完成', 'happy'], ['失败', 'sad'], ['捋头发', 'hair']],
+  kokkoro: [['完成', 'happy'], ['失败', 'sad']],
 };
 
 // 桌面层只负责窗口、手势与持久化，角色绘制和气泡内容各自独立。

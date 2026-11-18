@@ -212,16 +212,16 @@ try {
     const image = document.getElementById('portrait');
     return image.complete && image.naturalWidth === 1299 && image.alt === '可可萝桌面角色';
   }), '可可萝原画未解码');
-  // 可可萝使用静态立绘，通过正式角色菜单继续切换。
+  // 可可萝只提供完成与失败，仍可以通过同一个正式菜单切回麻吕。
   const kokkoroMenu = await application.evaluate(() => {
     const menu = globalThis.__dragonGirlTest.buildMenu();
     const roles = menu.items.find((item) => item.label === '切换角色').submenu.items;
     return {
       selected: roles.find((item) => item.checked)?.label,
-      actionsEnabled: menu.items.find((item) => item.label === '动作').enabled,
+      actions: menu.items.find((item) => item.label === '动作').submenu.items.map((item) => item.label),
     };
   });
-  assert.deepEqual(kokkoroMenu, { selected: '可可萝', actionsEnabled: false });
+  assert.deepEqual(kokkoroMenu, { selected: '可可萝', actions: ['完成', '失败'] });
   await application.evaluate(() => {
     const menu = globalThis.__dragonGirlTest.buildMenu();
     menu.items.find((item) => item.label === '切换角色').submenu.items.find((item) => item.label === '麻吕').click();

@@ -8,6 +8,8 @@ import { CHARACTERS, MARO_ASSET, MARO_HAIR_ASSETS, MARO_FRAME_SIZE, characterByI
   isCharacterMenuPoint } from '../src/shared/characters.js';
 import { SettingsStore, normalizeSettings } from '../src/core/settings.js';
 import { imagePoint } from '../src/shared/hit-test.js';
+import { dialogueLine } from '../src/shared/dialogue.js';
+import { KOKKORO_DIALOGUE } from '../src/shared/kokkoro-dialogue.js';
 
 // 防止打包时误换成旧的低清网格或缺帧；首尾必须与用户确认的待机原图完全一致。
 test('三十帧均为 1254 像素且循环首尾复用待机原图', async () => {
@@ -61,6 +63,18 @@ test('角色选择持久化而不覆盖其他用户偏好', async () => {
     }
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+// 可可萝的四类台词独立轮换，避免显示其他角色的气泡。
+test('可可萝使用独立的日常、完成、失败和取消台词', () => {
+  assert.equal(KOKKORO_DIALOGUE.chat.length, 24);
+  assert.equal(KOKKORO_DIALOGUE.complete.length + KOKKORO_DIALOGUE.error.length + KOKKORO_DIALOGUE.cancelled.length, 10);
+  for (const [kind, lines] of Object.entries(KOKKORO_DIALOGUE)) {
+    assert.equal(dialogueLine(kind, lines.length, 'kokkoro'), lines[0]);
+    assert.notEqual(lines[0], dialogueLine(kind, 0, 'dragon'));
+    assert.notEqual(lines[0], dialogueLine(kind, 0, 'maro'));
+    assert.equal(new Set(lines).size, lines.length);
   }
 });
 

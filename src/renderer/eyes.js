@@ -34,6 +34,7 @@ export class EyeTracker {
     this.nativeResolution = options.nativeResolution === true;
     this.supportsExpressions = options.expressions !== false;
     this.onFace = options.onFace;
+    this.onBlink = options.onBlink;
     this.supportsBodyFollow = options.bodyFollow !== false;
     this.foregroundMask = options.foregroundMask || null;
     this.gazeMask = options.gazeMask || null;
@@ -157,7 +158,8 @@ export class EyeTracker {
     const output = context.createImageData(canvas.width, canvas.height);
     const gazeWeights = this.gazeMask?.(source, canvas.width, canvas.height, eye);
     const scaleX = canvas.width / eye.width, scaleY = canvas.height / eye.height;
-    const columns = Array.from({ length: canvas.width }, (_, x) => blinkColumn(eye.x + (x + 0.5) / scaleX, eye));
+    const columns = this.onBlink ? null
+      : Array.from({ length: canvas.width }, (_, x) => blinkColumn(eye.x + (x + 0.5) / scaleX, eye));
     const pixels = [];
     for (let y = 0; y < canvas.height; y += 1) {
       const ay = eye.y + (y + 0.5) / scaleY;
@@ -225,6 +227,7 @@ export class EyeTracker {
     clearTimeout(this.blinkTimer);
     this.blinkTimer = 0;
     this.blinkStarted = null;
+    if (this.blink > 0) this.onBlink?.(0);
     this.blink = 0;
   }
 
@@ -303,14 +306,17 @@ export class EyeTracker {
 
   // 按角色的视线范围取样，双线性采样保持轮廓平滑，眨眼单独控制眼睑。
   paint() {
-    const closure = this.blink;
+    // 独立眼睑可以接管眨眼画面，时序和睁眼时的视线仍由同一个控制器管理。
+    const independentLids = this.onBlink && this.blink > 0;
+    const closure = independentLids ? 0 : this.blink;
     const amount = this.expression.amount;
     const preview = this.dragonFace && amount > 0;
     this.onFace?.(preview ? this.expressionName : null, amount, this.expressionTime, this.expression);
     for (const patch of this.patches) {
       const { canvas, context, output, pixels, columns, eye, width, height, scaleX, scaleY } = patch;
       // 新眼神已在原画上完成合成，视线画布在预览结束后才恢复覆盖眼部。
-      canvas.hidden = preview || (Math.hypot(this.current.x, this.current.y) < 0.002 && closure === 0 && amount === 0);
+      canvas.hidden = independentLids || preview
+        || (Math.hypot(this.current.x, this.current.y) < 0.002 && closure === 0 && amount === 0);
       if (canvas.hidden) continue;
       const renderer = this.expressionName === 'sad' ? patch.sad : patch.sparkles;
       const source = amount > 0 && renderer ? renderer.illuminate(patch.source, amount, this.expressionTime) : patch.source;
@@ -363,6 +369,7 @@ export class EyeTracker {
       }
       context.putImageData(output, 0, 0);
     }
+    this.onBlink?.(this.blink);
     const name = amount > 0 ? this.expressionName : undefined;
     if (!this.supportsExpressions || this.character.dataset.expression === name) return;
     if (name) this.character.dataset.expression = name;
