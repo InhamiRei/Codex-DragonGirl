@@ -199,13 +199,32 @@ try {
     const c = globalThis.__dragonGirlTest;
     return c.contextMenu && { labels: c.contextMenu.items.map((item) => item.label), bubble: c.bubbleVisible };
   }), '点击发饰没有打开角色下拉框');
-  assert.deepEqual(menu.labels, ['龙娘', '麻吕']);
+  assert.deepEqual(menu.labels, ['龙娘', '麻吕', '可可萝']);
   assert.equal(menu.bubble, false);
+  // 从发饰菜单切到可可萝，等待半身原画实际解码。
   await application.evaluate(() => {
     const c = globalThis.__dragonGirlTest;
     const menu = c.contextMenu;
     menu.closePopup(c.windows.get('character'));
-    menu.items[1].click();
+    menu.items.find((item) => item.label === '可可萝').click();
+  });
+  await until(() => page.evaluate(() => {
+    const image = document.getElementById('portrait');
+    return image.complete && image.naturalWidth === 1299 && image.alt === '可可萝桌面角色';
+  }), '可可萝原画未解码');
+  // 可可萝使用静态立绘，通过正式角色菜单继续切换。
+  const kokkoroMenu = await application.evaluate(() => {
+    const menu = globalThis.__dragonGirlTest.buildMenu();
+    const roles = menu.items.find((item) => item.label === '切换角色').submenu.items;
+    return {
+      selected: roles.find((item) => item.checked)?.label,
+      actionsEnabled: menu.items.find((item) => item.label === '动作').enabled,
+    };
+  });
+  assert.deepEqual(kokkoroMenu, { selected: '可可萝', actionsEnabled: false });
+  await application.evaluate(() => {
+    const menu = globalThis.__dragonGirlTest.buildMenu();
+    menu.items.find((item) => item.label === '切换角色').submenu.items.find((item) => item.label === '麻吕').click();
   });
   await until(async () => await state() === 'idle', '菜单切回麻吕失败');
   assert.deepEqual(errors, []);

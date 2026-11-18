@@ -4,6 +4,8 @@ const ORIGIN = 'dragon://app/';
 export const CHARACTERS = Object.freeze([
   Object.freeze({ id: 'dragon', name: '龙娘', image: 'assets/characters/codex-dragon-girl.png' }),
   Object.freeze({ id: 'maro', name: '麻吕', image: 'assets/characters/maro/idle.png' }),
+  // 可可萝的待机立绘直接使用选定的透明半身图。
+  Object.freeze({ id: 'kokkoro', name: '可可萝', image: 'assets/characters/kokkoro/idle.png' }),
 ]);
 export const MARO_ASSET = ORIGIN + CHARACTERS[1].image;
 export const HAIR_FRAMES = 30;

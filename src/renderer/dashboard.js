@@ -4,6 +4,7 @@ import { planLabel, instanceLabel, originLabel, quotaAvailableWindows } from '..
 import { SoundEngine } from './audio.js';
 import { dayKey, midnight, nextDay } from '../shared/time.js';
 import { activityCalendar, activityLevel } from '../shared/activity.js';
+import { CHARACTERS } from '../shared/characters.js';
 import { AccountTestsView } from './account-tests.js';
 const bridge = window.dragonGirl,
   sound = new SoundEngine();
@@ -945,6 +946,8 @@ function action(id, callback) {
 }
 // 初始化事件只注册一次，后续实时推送不重建导航监听。
 async function start() {
+  // 偏好设置和角色切换菜单共用同一份内置角色列表。
+  $('#character-id').replaceChildren(...CHARACTERS.map(({ id, name }) => new Option(name, id)));
   enhanceSelects();
   state = await call('snapshot');
   // 页脚显示实际运行版本，便于反馈问题时直接确认安装包版本。
