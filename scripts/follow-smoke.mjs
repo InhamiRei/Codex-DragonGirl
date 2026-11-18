@@ -249,6 +249,15 @@ try {
     await fs.writeFile(path.join(root, '.artifacts/follow-click-report.json'), JSON.stringify({ clicks, calls }, null, 2));
   }
 
+  // Windows 的运行器屏幕可能比宿主窄，验收移动速度时把角色放在可见的左边。
+  const originalOffsets = !isMac && await application.evaluate(() => {
+    const { monitor, dashboard, companion } = globalThis.__dragonGirlApp;
+    const offsets = monitor.settings.followOffsets;
+    monitor.settings.followOffsets = { ...offsets, [companion.home]: { x: 0, y: 0.5 } };
+    dashboard.follow();
+    return offsets;
+  });
+  const glideOrigin = (await companionState()).character;
   // 两端都统计连续移动期间角色窗口收到的不同坐标，避免只验收最终位置。
   await application.evaluate(() => {
     const window = globalThis.__dragonGirlApp.companion.windows.get('character');
@@ -261,9 +270,14 @@ try {
   });
   await send(host, 'glide');
   await until(async () => (await fs.stat(path.join(host.directory, 'glide-complete')).catch(() => null))?.isFile(), '连续移动未完成');
-  await until(async () => JSON.stringify((await companionState()).character) === JSON.stringify(original), '往返移动后角色未对齐');
+  await until(async () => JSON.stringify((await companionState()).character) === JSON.stringify(glideOrigin), '往返移动后角色未对齐');
   const positions = await application.evaluate(() => globalThis.__followMovePositions.size);
   assert.ok(positions >= 14, `连续移动只更新了 ${positions} 个位置，角色跟随滞后`);
+  if (originalOffsets) await application.evaluate((_, offsets) => {
+    const { monitor, dashboard } = globalThis.__dragonGirlApp;
+    monitor.settings.followOffsets = offsets;
+    dashboard.follow();
+  }, originalOffsets);
 
   // 宿主菜单展开后重新显示角色和气泡，快照仍应跟随主窗口，原生层级要留在菜单后方。
   await send(host, 'open-floating-menu');
