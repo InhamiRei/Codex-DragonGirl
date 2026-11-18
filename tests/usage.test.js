@@ -344,6 +344,28 @@ test('费用包含长上下文和实际速度，未知模型保持未定价', ()
   assert.ok(Math.abs(estimateCost(long) - 1.215) < 1e-12);
 });
 
+// 6.2 参考费用按历史发生时间计价，分别覆盖缓存、长上下文和极速优惠切换。
+test('6.2 Astra 和 Sol 使用官方标准价格与对应的速度倍率', () => {
+  const usage = {
+    time: Date.parse('2026-11-18T12:00:00+08:00'),
+    tier: 'default',
+    input_tokens: 100000,
+    cached_input_tokens: 20000,
+    cache_write_input_tokens: 10000,
+    output_tokens: 10000,
+  };
+  for (const [model, standard, long] of [['gpt-6.2-astra', 1.068, 5.136], ['gpt-6.2-sol', 0.267, 1.284]]) {
+    const row = { ...usage, model };
+    assert.equal(estimateCost(row), standard);
+    assert.equal(estimateCost({ ...row, input_tokens: 300000 }), long);
+    assert.equal(estimateCost({ ...row, tier: 'fast' }), standard * 2);
+    assert.equal(estimateCost({ ...row, tier: 'flex' }), standard / 2);
+    assert.equal(estimateCost({ ...row, time: Date.parse('2026-11-16T23:59:59-08:00') }), null);
+    assert.equal(estimateCost({ ...row, tier: 'ultrafast', time: Date.parse('2027-02-28T23:59:59-08:00') }), standard * 3);
+    assert.equal(estimateCost({ ...row, tier: 'ultrafast', time: Date.parse('2027-03-01T00:00:00-08:00') }), standard * 6);
+  }
+});
+
 // 亚洲时区与夏令时切换日使用自然日跨度，避免漏记凌晨请求。
 test('日期筛选与跨午夜免打扰', () => {
   assert.equal(dayKey(Date.parse('2026-10-27T16:00:00Z')), '2026-10-28');

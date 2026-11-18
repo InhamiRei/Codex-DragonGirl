@@ -106,6 +106,33 @@ internal static class WindowFixture
         dragThread.Start();
     }
 
+    // 按实际经过时间往返移动窗口，计时器繁忙时也在同一时长结束采样。
+    private static void GlideHost(Form form, string directory)
+    {
+        const int duration = 1200;
+        int left = form.Left;
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        Timer timer = new Timer { Interval = 25 };
+        timer.Tick += delegate {
+            int milliseconds = (int)Math.Min(elapsed.ElapsedMilliseconds, duration);
+            form.Left = left - Math.Min(milliseconds, duration - milliseconds) / 8;
+            if (milliseconds < duration) return;
+            timer.Dispose();
+            File.WriteAllText(Path.Combine(directory, "glide-complete"), "");
+        };
+        timer.Start();
+    }
+
+    // 使用真实的 WinForms 右键菜单窗口，只控制验证用的自建宿主。
+    private static ContextMenuStrip OpenContextMenu(Form form, string directory)
+    {
+        ContextMenuStrip menu = new ContextMenuStrip { AutoClose = false };
+        for (int index = 1; index <= 10; index++) menu.Items.Add("窗口菜单项目 " + index);
+        menu.Show(form, new Point(form.ClientSize.Width - 4, form.ClientSize.Height - 4), ToolStripDropDownDirection.AboveLeft);
+        File.WriteAllText(Path.Combine(directory, "floating-menu"), menu.Handle.ToInt64().ToString());
+        return menu;
+    }
+
     // 可选最小化状态用于验证隐藏和聚焦恢复行为。
     [STAThread]
     private static void Main(string[] args)
@@ -114,6 +141,7 @@ internal static class WindowFixture
         string directory = args.Length == 2 && args[0] == "--controlled" ? args[1] : null;
         string previous = "";
         Point? restoreCursor = null;
+        ContextMenuStrip menu = null;
         Timer timer = new Timer { Interval = 50 };
         // 控制文件只影响自建测试窗口，所有命令都在窗口线程执行。
         timer.Tick += delegate {
@@ -138,6 +166,9 @@ internal static class WindowFixture
                     break;
                 case "drag-right": RecordDrag(form, directory, 120); break;
                 case "drag-left": RecordDrag(form, directory, -120); break;
+                case "glide": GlideHost(form, directory); break;
+                case "open-floating-menu": menu = OpenContextMenu(form, directory); break;
+                case "close-floating-menu": if (menu != null) menu.Dispose(); menu = null; break;
                 case "partial": form.Width = 550; SetWindowPos(form.Handle, IntPtr.Zero, 0, 0, 0, 0, 0x13); break;
                 case "full": form.Width = 1100; SetWindowPos(form.Handle, IntPtr.Zero, 0, 0, 0, 0, 0x13); break;
                 case "topmost": form.TopMost = true; break;
@@ -159,6 +190,7 @@ internal static class WindowFixture
         // 异常关闭也恢复本测试临时移动的系统鼠标，不留下测试状态。
         form.FormClosed += delegate {
             stopping = true;
+            if (menu != null) menu.Dispose();
             if (dragThread != null) dragThread.Join(1500);
             if (restoreCursor.HasValue) Cursor.Position = restoreCursor.Value;
         };

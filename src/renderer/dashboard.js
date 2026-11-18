@@ -604,7 +604,10 @@ function updateFilterButton() {
 }
 // 刷新结果区分失败、退避与成功；数值未变化时仍显示本次读取时间。
 function refreshText(result) {
-  if (result.running) return `正在刷新 ${result.success + result.failed} / ${result.total} 个账户与本机账本…`;
+  if (result.running) {
+    const accounts = result.accountsPending ? `正在刷新 ${result.success + result.failed} / ${result.total} 个账户` : '账户查询已结束';
+    return `${accounts} · ${result.indexPending ? '正在更新本机账本…' : '本机账本读取已结束'}`;
+  }
   if (!result.finishedAt) return '';
   return `${new Date(result.finishedAt).toLocaleTimeString('zh-CN', { hour12: false })} · ${result.success} 个账户已更新${result.failed ? `，${result.failed} 个失败` : ''}${result.skipped ? `，${result.skipped} 个限流待重试` : ''} · ${result.indexError || (result.scanErrors ? `账本已更新，${result.scanErrors} 份日志读取失败` : '本机账本已更新')}`;
 }

@@ -148,9 +148,12 @@ export function estimateCost(row, prices = {}) {
   const price = Object.hasOwn(prices, row.model) ? { ...builtin, ...prices[row.model] } : builtin;
   if (!price) return null;
   if (price.effective && row.time < Date.parse(price.effective)) return null;
+  // 按用量发生的时间计算极速优惠，过期后查看历史仍使用当时的倍率。
+  const promotion = price.ultrafastPromotion;
+  const ultrafast = promotion && row.time < promotion.endsAt ? promotion.multiplier : price.ultrafast;
   const multiplier =
     row.tier === 'ultrafast'
-      ? price.ultrafast
+      ? ultrafast
       : ['priority', 'fast'].includes(row.tier)
         ? price.fast
         : row.tier === 'flex'

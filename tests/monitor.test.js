@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Monitor } from '../src/main/monitor.js';
+import { CLI_UNAVAILABLE, CLI_UNAVAILABLE_MESSAGE } from '../src/core/rpc.js';
 import { normalizeSettings } from '../src/core/settings.js';
 
 // 可控的完成信号让并发测试无需依赖网络速度或固定等待时间。
@@ -64,8 +65,8 @@ test('原生几何和层级立即同步，实例与权限变化仍正常发布',
   assert.equal(publications, 3);
 });
 
-// 后台刷新未完成时的点击必须排队，重复入口复用任务，并等到账本汇总结束。
-test('手动刷新串接正在进行的批次，合并重复操作并等待账本', async (t) => {
+// 手动点击复用进行中的详细查询，只补读未覆盖的账号，并让账本独立推进。
+test('手动刷新复用正在进行的账户查询，账本独立扫描并保留限流', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-refresh-'));
   const monitor = new Monitor(directory, { testMode: true });
   t.after(async () => {
@@ -74,27 +75,33 @@ test('手动刷新串接正在进行的批次，合并重复操作并等待账�
     await fs.rm(directory, { recursive: true, force: true });
   });
   monitor.settings = normalizeSettings();
-  monitor.instances = [{ id: 'a' }, { id: 'b' }];
-  const automatic = gate(), manual = gate(), started = gate(), scanned = gate(), summarized = gate();
-  let calls = 0, finished = false;
+  monitor.instances = [{ id: 'a' }, { id: 'b' }, { id: 'limited' }];
+  monitor.readings.set('b', { attemptedAt: Date.now(), retryMs: 60000 });
+  monitor.readings.set('limited', { error: '查询被限流，稍后自动重试', attemptedAt: Date.now(), retryMs: 60000 });
+  const automatic = gate(), manual = gate(), started = gate(), scanning = gate(), scanned = gate(), summarized = gate();
+  const calls = [];
+  let finished = false;
   // 替换边界服务，验证调度顺序；实际 RPC 和 Worker 扫描由桌面集成测试覆盖。
-  monitor.refreshOne = async (_instance, details) => {
+  monitor.refreshOne = async (instance, details) => {
     assert.equal(details, true, '自动与手动刷新都应读取重置卡详情');
-    calls++;
-    const batch = calls <= 2 ? automatic : manual;
-    if (calls === 4) started.resolve();
+    calls.push(instance.id);
+    const batch = instance.id === 'a' ? automatic : manual;
+    if (instance.id === 'b') started.resolve();
     await batch.promise;
     return true;
   };
   monitor.discover = async () => {};
-  monitor.request = () => scanned.promise;
+  monitor.request = () => { scanning.resolve(); return scanned.promise; };
   monitor.summaryPromise = summarized.promise;
   const background = monitor.refresh();
   const foreground = monitor.refreshAll();
   foreground.then(() => { finished = true; });
   assert.equal(monitor.refreshAll(), foreground);
   assert.equal(monitor.refresh(), foreground);
-  assert.equal(calls, 2);
+  assert.deepEqual(calls, ['a']);
+  await scanning.promise;
+  assert.equal(monitor.refreshState.accountsPending, true);
+  assert.equal(monitor.refreshState.indexPending, true);
   automatic.resolve();
   await background;
   await started.promise;
@@ -104,12 +111,41 @@ test('手动刷新串接正在进行的批次，合并重复操作并等待账�
   assert.equal(finished, false, '汇总未完成时不应报告刷新完成');
   summarized.resolve();
   const result = await foreground;
-  assert.equal(calls, 4);
+  assert.deepEqual(calls, ['a', 'b']);
   assert.equal(result.success, 2);
   assert.equal(result.failed, 0);
+  assert.equal(result.skipped, 1);
   assert.equal(result.running, false);
+  assert.equal(result.accountsPending, false);
+  assert.equal(result.indexPending, false);
   assert.equal(result.indexError, null);
   assert.ok(result.finishedAt >= result.startedAt);
+});
+
+// 本机 CLI 缺失只短等，宿主路径回来后无需等定时窗口，远端限流仍保持原退避。
+test('宿主恢复后立即重查找不到 CLI 的账号', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-cli-retry-'));
+  const home = await fs.realpath(directory);
+  const paths = [];
+  const monitor = new Monitor(directory, { testMode: true, accountReader: async (_home, { appPath }) => {
+    paths.push(appPath);
+    if (!appPath) throw Object.assign(new Error('test'), { code: CLI_UNAVAILABLE });
+    return { account: { type: 'chatgpt' }, quota: { rateLimits: { primary: { usedPercent: 25, windowDurationMins: 300 } } }, errors: {} };
+  } });
+  t.after(async () => { clearTimeout(monitor.publishTimer); await fs.rm(directory, { recursive: true, force: true }); });
+  monitor.settings = normalizeSettings();
+  monitor.instances = [{ id: 'test', home, processes: [] }, { id: 'limited', home: path.join(home, 'limited'), processes: [] }];
+  monitor.readings.set('limited', { error: '查询被限流，稍后自动重试', attemptedAt: Date.now(), retryMs: 240000 });
+  assert.equal((await monitor.refresh()).failed, 1);
+  assert.equal(monitor.readings.get('test').error, CLI_UNAVAILABLE_MESSAGE);
+  assert.equal(monitor.readings.get('test').retryMs, 5000);
+  assert.equal((await monitor.refresh()).skipped, 2);
+  const bridge = monitor.native = {};
+  await monitor.receiveNative({ processes: [{ home, appPath: '/fixture/Codex.exe', pid: 10 }] }, bridge);
+  assert.equal((await monitor.refresh()).success, 1);
+  assert.deepEqual(paths, [undefined, '/fixture/Codex.exe']);
+  assert.equal(monitor.readings.get('test').quota.source, '实时账户');
+  assert.equal(monitor.readings.get('limited').retryMs, 240000);
 });
 
 // 意外退出必须结束已发出的查询，并拒绝后续查询，刷新按钮不能永久挂起。

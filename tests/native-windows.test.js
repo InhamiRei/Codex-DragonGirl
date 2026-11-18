@@ -8,6 +8,19 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
+// 用真实 Windows 内存边界复现跨页失败，同时验收完整终止符和白名单。
+test('Windows 原生桥按可读区域读取 UTF-16 环境块', { skip: process.platform !== 'win32', timeout: 15000 }, async (t) => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-environment-boundary-'));
+  t.after(() => fs.rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const executable = path.join(temp, 'boundary.exe');
+  const csc = path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
+  const build = spawnSync(csc, ['/nologo', '/target:exe', '/platform:x64', `/out:${executable}`,
+    path.join(root, 'tests/fixtures/EnvironmentBoundaryFixture.cs')], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+  assert.equal(build.status, 0, build.stderr || build.stdout || build.error?.message);
+  const result = spawnSync(executable, [path.join(root, 'native/bin/dragongirl-native.exe')], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout || result.error?.message);
+});
+
 // 用真实 Win32 窗口检查目录隔离、敏感字段过滤、最小化与聚焦恢复。
 test('Windows 原生桥读取窗口并仅公开环境白名单', { skip: process.platform !== 'win32', timeout: 40000 }, async (t) => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), '龙娘 窗口测试-'));

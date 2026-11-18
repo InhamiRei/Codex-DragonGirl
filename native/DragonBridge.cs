@@ -16,6 +16,12 @@ internal static class DragonBridge
     private static List<ProcessRow> processes = new List<ProcessRow>();
     private static DateTime discoveredAt = DateTime.MinValue;
     private static volatile bool inputClosed;
+    // 仅在按住鼠标键或宿主连续移动时提高采样频率，静止时维持原有查询间隔。
+    private const int TrackingIntervalMs = 40;
+    private const int IdleIntervalMs = 120;
+    private const int RecentMovementMs = 200;
+    private static readonly Stopwatch hostMovement = new Stopwatch();
+    private static Dictionary<long, Rect> lastHostFrames = new Dictionary<long, Rect>();
 
     // 每个记录只保留识别和聚焦所需的信息，完整环境读取后立即释放。
     private sealed class ProcessRow
@@ -30,6 +36,18 @@ internal static class DragonBridge
     [StructLayout(LayoutKind.Sequential)]
     private struct Rect { internal int Left, Top, Right, Bottom; }
 
+    // Windows x64 的 MEMORY_BASIC_INFORMATION 按指针宽度对齐，区域长度使用 SIZE_T。
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MemoryRegion
+    {
+        internal IntPtr BaseAddress, AllocationBase;
+        internal uint AllocationProtect;
+        internal ushort PartitionId;
+        internal UIntPtr RegionSize;
+        internal uint State, Protect, Type;
+    }
+    private static readonly UIntPtr MemoryRegionSize = new UIntPtr((uint)Marshal.SizeOf(typeof(MemoryRegion)));
+
     // 枚举顶层窗口，不截屏、不读取窗口文字。
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(WindowCallback callback, IntPtr parameter);
@@ -39,6 +57,12 @@ internal static class DragonBridge
     // 获取系统窗口几何。
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr window, out Rect rectangle);
+    // 通过系统类名识别原生右键菜单，不读取标题或菜单文字。
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr window, StringBuilder name, int capacity);
+    // 只检查鼠标键当前是否按下，兼容交换了左右键的用户。
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int key);
     // 忽略隐藏窗口。
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr window);
@@ -74,7 +98,10 @@ internal static class DragonBridge
     private static extern int NtQueryInformationProcess(IntPtr process, int type, byte[] information, int size, out int returned);
     // 读取有长度上限的环境块，仅在内存中解析白名单。
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool ReadProcessMemory(IntPtr process, IntPtr address, byte[] buffer, int size, out IntPtr read);
+    private static extern bool ReadProcessMemory(IntPtr process, IntPtr address, byte[] buffer, UIntPtr size, out UIntPtr read);
+    // 读取前查询可读区域的实际边界，避免 ReadProcessMemory 跨到下一段不可读的内存。
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern UIntPtr VirtualQueryEx(IntPtr process, IntPtr address, out MemoryRegion region, UIntPtr size);
     // 及时关闭每次查询打开的系统句柄。
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr handle);
@@ -100,44 +127,81 @@ internal static class DragonBridge
             int returned;
             if (NtQueryInformationProcess(handle, 0, basic, basic.Length, out returned) != 0) return null;
             IntPtr peb = new IntPtr(BitConverter.ToInt64(basic, 8));
+            if (peb == IntPtr.Zero) return null;
             IntPtr parameters = ReadPointer(handle, new IntPtr(peb.ToInt64() + 0x20));
+            if (parameters == IntPtr.Zero) return null;
             IntPtr environment = ReadPointer(handle, new IntPtr(parameters.ToInt64() + 0x80));
-            if (peb == IntPtr.Zero || parameters == IntPtr.Zero || environment == IntPtr.Zero) return null;
-            StringBuilder block = new StringBuilder();
-            // 限制最多读取 128 KiB，遇到双零终止符立即停止。
-            for (int offset = 0; offset < 131072; offset += 4096)
-            {
-                byte[] buffer = new byte[4096];
-                IntPtr count;
-                ReadProcessMemory(handle, new IntPtr(environment.ToInt64() + offset), buffer, buffer.Length, out count);
-                int length = (int)count.ToInt64() & ~1;
-                if (length <= 0) return null;
-                block.Append(Encoding.Unicode.GetString(buffer, 0, length));
-                string text = block.ToString();
-                int end = text.IndexOf("\0\0", StringComparison.Ordinal);
-                if (end < 0) continue;
-                Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.Ordinal);
-                foreach (string entry in text.Substring(0, end).Split('\0'))
-                {
-                    int separator = entry.IndexOf('=');
-                    if (separator < 1) continue;
-                    string key = entry.Substring(0, separator);
-                    if (key == "CODEX_HOME" || Array.IndexOf(NetworkKeys, key) >= 0)
-                        result[key] = entry.Substring(separator + 1);
-                }
-                return result;
-            }
-            return null;
+            return environment == IntPtr.Zero ? null : ReadEnvironmentBlock(handle, environment);
         }
         finally { CloseHandle(handle); }
+    }
+
+    // 只读取已提交且允许读取的当前区域；保护页和空闲页不会因探测而被触碰。
+    private static int ReadableBytes(IntPtr handle, IntPtr address, int limit)
+    {
+        MemoryRegion region;
+        if (VirtualQueryEx(handle, address, out region, MemoryRegionSize) != MemoryRegionSize
+            || region.State != 0x1000 || (region.Protect & 0x100) != 0) return 0; // MEM_COMMIT、PAGE_GUARD。
+        switch (region.Protect & 0xff)
+        {
+            // PAGE_READONLY、PAGE_READWRITE、PAGE_WRITECOPY 及对应的可执行可读页。
+            case 0x02: case 0x04: case 0x08: case 0x20: case 0x40: case 0x80:
+                long offset = address.ToInt64() - region.BaseAddress.ToInt64();
+                ulong size = region.RegionSize.ToUInt64();
+                return offset >= 0 && (ulong)offset < size ? (int)Math.Min((ulong)limit, size - (ulong)offset) : 0;
+            default: return 0;
+        }
+    }
+
+    // 分段读取 UTF-16 环境块，保留跨段的 Unicode 字符与双零结束符，上限仍为 128 KiB。
+    private static Dictionary<string, string> ReadEnvironmentBlock(IntPtr handle, IntPtr environment)
+    {
+        const int maxBytes = 128 * 1024;
+        byte[] buffer = new byte[4096];
+        StringBuilder block = new StringBuilder();
+        bool previousZero = false;
+        int offset = 0;
+        while (offset < maxBytes)
+        {
+            IntPtr address = IntPtr.Add(environment, offset);
+            int length = ReadableBytes(handle, address, Math.Min(buffer.Length, maxBytes - offset)) & ~1;
+            UIntPtr count;
+            // 区域可能在查询后被释放，只接受完整读取，避免把部分环境误当成默认实例。
+            if (length == 0 || !ReadProcessMemory(handle, address, buffer, new UIntPtr((uint)length), out count) || count.ToUInt64() != (uint)length)
+                return null;
+            for (int i = 0; i < length; i += 2)
+            {
+                char character = (char)(buffer[i] | (buffer[i + 1] << 8));
+                if (character == '\0' && previousZero) return ParseEnvironment(block.ToString());
+                block.Append(character);
+                previousZero = character == '\0';
+            }
+            offset += length;
+        }
+        return null;
+    }
+
+    // 完整读取后只保留实例目录和网络白名单，其他环境变量不进入快照。
+    private static Dictionary<string, string> ParseEnvironment(string block)
+    {
+        Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string entry in block.Split('\0'))
+        {
+            int separator = entry.IndexOf('=');
+            if (separator < 1) continue;
+            string key = entry.Substring(0, separator);
+            if (key == "CODEX_HOME" || Array.IndexOf(NetworkKeys, key) >= 0)
+                result[key] = entry.Substring(separator + 1);
+        }
+        return result;
     }
 
     // 只接受完整的 64 位指针读取，防止部分结果变成错误地址。
     private static IntPtr ReadPointer(IntPtr handle, IntPtr address)
     {
         byte[] buffer = new byte[8];
-        IntPtr count;
-        if (!ReadProcessMemory(handle, address, buffer, 8, out count) || count.ToInt64() != 8) return IntPtr.Zero;
+        UIntPtr count;
+        if (!ReadProcessMemory(handle, address, buffer, new UIntPtr(8), out count) || count.ToUInt64() != 8) return IntPtr.Zero;
         return new IntPtr(BitConverter.ToInt64(buffer, 0));
     }
 
@@ -169,10 +233,11 @@ internal static class DragonBridge
         discoveredAt = DateTime.UtcNow;
     }
 
-    // 保留可见主窗口；最小化和其他虚拟桌面的窗口返回空列表。
-    private static List<Dictionary<string, object>> Windows(int pid, bool includeMinimized)
+    // 保留可见宿主窗口；原生菜单继续参与层级排序，但不能成为跟随或聚焦目标。
+    private static List<Dictionary<string, object>> Windows(int pid, bool includeMinimized, Dictionary<long, Rect> frames = null)
     {
         List<Dictionary<string, object>> windows = new List<Dictionary<string, object>>();
+        StringBuilder className = new StringBuilder(64);
         EnumWindows(delegate(IntPtr window, IntPtr parameter)
         {
             uint owner;
@@ -183,13 +248,28 @@ internal static class DragonBridge
             Rect rect;
             if (!GetWindowRect(window, out rect)) return true;
             if (!includeMinimized && (rect.Right - rect.Left < 400 || rect.Bottom - rect.Top < 300)) return true;
+            if (GetClassName(window, className, className.Capacity) > 0 && className.ToString() == "#32768") return true;
+            long id = window.ToInt64();
+            if (frames != null) frames[id] = rect;
             windows.Add(new Dictionary<string, object> {
-                { "id", window.ToInt64() }, { "x", rect.Left }, { "y", rect.Top },
+                { "id", id }, { "x", rect.Left }, { "y", rect.Top },
                 { "width", rect.Right - rect.Left }, { "height", rect.Bottom - rect.Top }
             });
             return true;
         }, IntPtr.Zero);
         return windows;
+    }
+
+    // 只比较宿主几何，角色自移动与其他窗口变动不会延长高频采样。
+    private static bool HostFramesChanged(Dictionary<long, Rect> frames)
+    {
+        if (frames.Count != lastHostFrames.Count) return true;
+        foreach (KeyValuePair<long, Rect> frame in frames)
+        {
+            Rect previous;
+            if (!lastHostFrames.TryGetValue(frame.Key, out previous) || !frame.Value.Equals(previous)) return true;
+        }
+        return false;
     }
 
     // 仅发布屏幕上窗口的前后编号；层级变化也触发快照，不读取其他应用的标题或内容。
@@ -226,12 +306,18 @@ internal static class DragonBridge
         uint front;
         GetWindowThreadProcessId(GetForegroundWindow(), out front);
         List<Dictionary<string, object>> rows = new List<Dictionary<string, object>>();
+        Dictionary<long, Rect> frames = new Dictionary<long, Rect>();
         foreach (ProcessRow row in processes)
             rows.Add(new Dictionary<string, object> {
                 { "pid", row.Pid }, { "appPath", row.AppPath }, { "home", row.Home },
                 { "networkEnv", row.Network }, { "frontmost", front == (uint)row.Pid },
-                { "coordinateSpace", "physical" }, { "windows", Windows(row.Pid, false) }
+                { "coordinateSpace", "physical" }, { "windows", Windows(row.Pid, false, frames) }
             });
+        if (HostFramesChanged(frames))
+        {
+            lastHostFrames = frames;
+            hostMovement.Restart();
+        }
         List<long> topmost;
         List<Dictionary<string, object>> normalWindows;
         List<long> order = WindowOrder(out topmost, out normalWindows);
@@ -298,19 +384,16 @@ internal static class DragonBridge
         List<Dictionary<string, object>> normal;
         List<long> visible = WindowOrder(out topmost, out normal);
         if (!visible.Contains(host.ToInt64())) return;
-        bool floating = IsTopmost(host);
+        bool hostTopmost = IsTopmost(host);
+        bool floating = hostTopmost;
         if (!floating) foreach (long id in visible)
         {
             if (topmost.Contains(id) || owned.Contains(new IntPtr(id))) continue;
             floating = id == host.ToInt64();
             break;
         }
-        foreach (IntPtr window in overlays)
-            if (IsTopmost(window) != floating)
-                SetWindowPos(window, new IntPtr(floating ? -1 : -2), 0, 0, 0, 0, flags);
-
         IntPtr anchor;
-        if (floating && !IsTopmost(host))
+        if (floating && !hostTopmost)
         {
             // 插在最后一个可见置顶窗口之后；隐藏的辅助窗口可能带有所有者约束，不能作为锚点。
             anchor = new IntPtr(-1);
@@ -332,8 +415,14 @@ internal static class DragonBridge
             bool placed = anchor == new IntPtr(-1) ? previous == IntPtr.Zero
                 : anchor == IntPtr.Zero ? previous == IntPtr.Zero || IsTopmost(previous)
                 : previous == anchor;
-            if (!placed || IsTopmost(window) != floating)
-                SetWindowPos(window, anchor, 0, 0, 0, 0, flags);
+            bool topmostWindow = IsTopmost(window);
+            // 直接插入目标层级，避免先提到置顶组最前面而瞬间盖住已打开的菜单。
+            if (!placed || topmostWindow != floating)
+            {
+                IntPtr after = !floating && topmostWindow && anchor == IntPtr.Zero ? new IntPtr(-2) : anchor;
+                // 锚点可能在快照后关闭；等待下一次心跳重试，避免用未就位的窗口继续排列。
+                if (!SetWindowPos(window, after, 0, 0, 0, 0, flags)) return;
+            }
             anchor = window;
         }
     }
@@ -377,17 +466,24 @@ internal static class DragonBridge
             string previous = null;
             // 排序可能被系统暂时拒绝且不报错；稳定状态每秒补发一次，松手后无需再移动其他窗口也能重试。
             Stopwatch heartbeat = Stopwatch.StartNew();
+            Stopwatch snapshotAge = Stopwatch.StartNew();
             while (!inputClosed)
             {
-                string current = Snapshot();
-                if (current != previous || heartbeat.ElapsedMilliseconds >= 1000)
+                bool tracking = lastHostFrames.Count > 0 && (hostMovement.ElapsedMilliseconds < RecentMovementMs
+                    || GetAsyncKeyState(0x01) < 0 || GetAsyncKeyState(0x02) < 0);
+                if (tracking || previous == null || snapshotAge.ElapsedMilliseconds >= IdleIntervalMs)
                 {
-                    Console.WriteLine(current);
-                    Console.Out.Flush();
-                    previous = current;
-                    heartbeat.Restart();
+                    snapshotAge.Restart();
+                    string current = Snapshot();
+                    if (current != previous || heartbeat.ElapsedMilliseconds >= 1000)
+                    {
+                        Console.WriteLine(current);
+                        Console.Out.Flush();
+                        previous = current;
+                        heartbeat.Restart();
+                    }
                 }
-                Thread.Sleep(120);
+                Thread.Sleep(TrackingIntervalMs);
             }
             return 0;
         }

@@ -7,21 +7,24 @@ import { fileURLToPath } from 'node:url';
 import { SettingsStore, isQuiet } from '../core/settings.js';
 import { discoverHomes, publicInstance } from '../core/instances.js';
 import { readRecentQuota } from '../core/log-snapshot.js';
-import { readAccount, rpcError } from '../core/rpc.js';
+import { CLI_UNAVAILABLE, CLI_UNAVAILABLE_MESSAGE, GENERIC_RPC_ERROR, readAccount, rpcError } from '../core/rpc.js';
 import { normalizeQuota, AlertTracker } from '../core/quota.js';
 import { dayKey, midnight, nextDay } from '../shared/time.js';
 import { digest } from '../core/usage-parser.js';
 import { nativeBridgePath } from '../core/platform.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const QUOTA_FRESH_MS = 120000;
+// 缺少本地程序时只重查安装状态，避免套用远端请求的分钟级退避。
+const CLI_RETRY_MS = 5000;
 
 // 多实例采集调度器：原生窗口、官方额度、历史索引彼此独立，任一路失败不阻塞其他数据。
 export class Monitor extends EventEmitter {
   // 初始化独立数据仓库、请求队列和通知状态。
-  constructor(directory, { testMode = false } = {}) {
+  constructor(directory, { testMode = false, accountReader = readAccount } = {}) {
     super();
     this.directory = directory;
     this.testMode = testMode;
+    this.accountReader = accountReader;
     this.settingsStore = new SettingsStore(directory);
     this.instances = [];
     this.processes = [];
@@ -44,15 +47,23 @@ export class Monitor extends EventEmitter {
       const data = await fs.readFile(path.join(this.directory, 'snapshots.json'), 'utf8');
       const saved = JSON.parse(data);
       // 缓存仅恢复仍在使用的账户字段，旧版废弃统计不会继续发布或保存。
-      for (const [id, value] of Object.entries(saved.readings || {}))
-        this.readings.set(id, {
+      for (const [id, value] of Object.entries(saved.readings || {})) {
+        const reading = {
           ...Object.fromEntries(
             ['quota', 'identity', 'account', 'error', 'attemptedAt', 'failures', 'retryMs']
               .filter((key) => value?.[key] !== undefined)
               .map((key) => [key, value[key]]),
           ),
           loading: false,
-        });
+        };
+        // 旧 Windows 缓存会把找不到 CLI 写成通用错误。升级后立即重查这类尚无官方读数的账号。
+        if (reading.error === CLI_UNAVAILABLE_MESSAGE
+          || (process.platform === 'win32' && reading.error === GENERIC_RPC_ERROR && !reading.quota)) {
+          reading.attemptedAt = 0;
+          reading.failures = 0;
+        }
+        this.readings.set(id, reading);
+      }
       this.alerts = new AlertTracker(saved.alerts || []);
       this.savedCacheData = data;
     } catch {}
@@ -135,12 +146,19 @@ export class Monitor extends EventEmitter {
       ...process, home: await fs.realpath(process.home).catch(() => process.home),
     })));
     if (this.stopped || bridge !== this.native || sequence !== this.nativeSequence) return;
-    // 几何与层级直接同步给桌宠。管理界面只需要实例在线和前台状态。
+    // 几何与层级直接同步给桌宠，账户状态按实例和运行时路径变化更新。
     const changed = this.nativeError || this.screenPermission !== state.screenPermission
-      || this.processes.length !== processes.length || processes.some(({ pid, home, frontmost }, index) => {
+      || this.processes.length !== processes.length || processes.some(({ pid, home, frontmost, appPath }, index) => {
         const previous = this.processes[index];
-        return pid !== previous.pid || home !== previous.home || frontmost !== previous.frontmost;
+        return pid !== previous.pid || home !== previous.home || frontmost !== previous.frontmost || appPath !== previous.appPath;
       });
+    // 宿主重新可用时跳过下一次 CLI 等待，服务端限流和其他账户错误仍按原计划重试。
+    if (changed) for (const { home, appPath } of processes) {
+      if (!appPath || this.processes.some((previous) => previous.home === home && previous.appPath === appPath)) continue;
+      const instance = this.instances.find((candidate) => candidate.home === home);
+      const reading = this.readings.get(instance?.id);
+      if (reading?.error === CLI_UNAVAILABLE_MESSAGE) this.readings.set(instance.id, { ...reading, attemptedAt: 0 });
+    }
     this.processes = processes;
     this.windowOrder = state.windowOrder;
     this.topmostWindows = state.topmostWindows;
@@ -201,25 +219,34 @@ export class Monitor extends EventEmitter {
       this.readingLogs = false;
     }
   }
-  // 每个目录单独排队与退避，同时读取重置卡明细，悬停无需额外发起账户请求。
-  refresh(force = false, details = true) {
+  // 每个目录单独排队与退避，记录当前批次结果供手动刷新复用。
+  refresh(force = false, details = true, reused = null) {
     if (!force && this.manualRefresh) return this.manualRefresh;
-    if (this.refreshPromise) return this.refreshPromise;
+    if (this.activeAccountBatch) return this.activeAccountBatch.promise;
     if (this.stopped) return Promise.reject(new Error('应用正在退出'));
-    this.refreshPromise = this.refreshBatch(force, details).finally(() => {
-      this.refreshPromise = null;
+    const batch = this.activeAccountBatch = { details, results: new Map() };
+    batch.promise = this.refreshBatch(force, details, batch.results, reused).finally(() => {
+      this.activeAccountBatch = null;
     });
-    return this.refreshPromise;
+    return batch.promise;
   }
   // 批次返回真实成功、失败和退避数量，界面可以区分无变化与未刷新。
-  async refreshBatch(force, details) {
-    const targets = this.instances.filter(
-      (i) =>
-        (force && !this.readings.get(i.id)?.error?.includes('限流')) ||
-        Date.now() - (this.readings.get(i.id)?.attemptedAt || 0) >
-          (this.readings.get(i.id)?.retryMs || this.settings.refreshSeconds * 1000),
-    );
-    const result = { total: this.instances.length, success: 0, failed: 0, skipped: this.instances.length - targets.length };
+  async refreshBatch(force, details, results, reused) {
+    const targets = [];
+    const result = { total: this.instances.length, success: 0, failed: 0, skipped: 0 };
+    const now = Date.now();
+    for (const instance of this.instances) {
+      const reading = this.readings.get(instance.id);
+      // 如果刚恢复宿主，前一轮的 CLI 定位失败不能覆盖立即重试的标记。
+      if (reused?.has(instance.id) && !(reading?.error === CLI_UNAVAILABLE_MESSAGE && !reading.attemptedAt)) {
+        result[reused.get(instance.id) ? 'success' : 'failed']++;
+      } else if ((force && !reading?.error?.includes('限流'))
+        || now - (reading?.attemptedAt || 0) > (reading?.retryMs || this.settings.refreshSeconds * 1000)) {
+        targets.push(instance);
+      } else {
+        result.skipped++;
+      }
+    }
     if (this.refreshState?.running) this.refreshState = { ...this.refreshState, ...result };
     try {
       let cursor = 0;
@@ -228,6 +255,7 @@ export class Monitor extends EventEmitter {
         while (cursor < targets.length && !this.stopped) {
           const instance = targets[cursor++];
           const success = await this.refreshOne(instance, details);
+          results.set(instance.id, success);
           result[success ? 'success' : 'failed']++;
           if (this.refreshState?.running) {
             this.refreshState = { ...this.refreshState, ...result };
@@ -249,20 +277,29 @@ export class Monitor extends EventEmitter {
     this.manualRefresh = this.refreshAllData().finally(() => { this.manualRefresh = null; });
     return this.manualRefresh;
   }
-  // 先等待正在运行的账户批次，再强制读取；索引失败也保留账户刷新结果。
+  // 账户和账本独立推进，复用进行中的详细查询，只补读本轮未覆盖的账户。
   async refreshAllData() {
     if (this.stopped) throw new Error('应用正在退出');
-    this.refreshState = { running: true, startedAt: Date.now(), success: 0, failed: 0, total: this.instances.length };
+    const pendingBatch = this.activeAccountBatch;
+    this.refreshState = { running: true, accountsPending: true, indexPending: true, startedAt: Date.now(), success: 0, failed: 0, total: this.instances.length };
     this.publish();
     try {
-      await this.refreshPromise;
       await this.discover();
-      const [accounts, scan] = await Promise.allSettled([
-        this.refresh(true, true),
-        this.request('scan'),
-      ]);
-      // indexed 消息早于 scan 响应，等待同一轮汇总，避免按钮结束时仍显示旧数字。
-      await this.summaryPromise;
+      const accountsTask = Promise.resolve(pendingBatch?.promise).catch(() => {}).then(() =>
+        this.refresh(true, true, pendingBatch?.details ? pendingBatch.results : null),
+      ).finally(() => {
+        this.refreshState = { ...this.refreshState, accountsPending: false };
+        this.publish();
+      });
+      // indexed 消息早于 scan 响应；进度等待同一轮汇总，避免已完成却仍显示旧数字。
+      const scanTask = this.request('scan').then(async (output) => {
+        await this.summaryPromise;
+        return output;
+      }).finally(() => {
+        this.refreshState = { ...this.refreshState, indexPending: false };
+        this.publish();
+      });
+      const [accounts, scan] = await Promise.allSettled([accountsTask, scanTask]);
       const result = {
         ...this.refreshState,
         ...(accounts.status === 'fulfilled' ? accounts.value : { failed: this.instances.length }),
@@ -275,7 +312,7 @@ export class Monitor extends EventEmitter {
       this.refreshState = result;
       return result;
     } finally {
-      this.refreshState = { ...this.refreshState, running: false };
+      this.refreshState = { ...this.refreshState, running: false, accountsPending: false, indexPending: false };
       this.publish();
     }
   }
@@ -288,7 +325,7 @@ export class Monitor extends EventEmitter {
     this.readings.set(instance.id, { ...prior, loading: true, attemptedAt: Date.now() });
     this.publish();
     try {
-      const response = await readAccount(instance.home, {
+      const response = await this.accountReader(instance.home, {
         appPath: runtime?.appPath,
         networkEnv: runtime?.networkEnv || {},
         signal: controller.signal,
@@ -330,15 +367,19 @@ export class Monitor extends EventEmitter {
       }
       return !failed;
     } catch (error) {
-      if (!this.stopped)
+      if (!this.stopped && this.instances.some((candidate) => candidate.id === instance.id)) {
+        const cliUnavailable = error?.code === CLI_UNAVAILABLE;
+        const currentAppPath = cliUnavailable && this.processes.find((process) => process.home === instance.home)?.appPath;
+        const hostRecovered = currentAppPath && currentAppPath !== runtime?.appPath;
         this.readings.set(instance.id, {
           ...prior,
           loading: false,
           error: rpcError(error),
-          attemptedAt: Date.now(),
-          failures: (prior.failures || 0) + 1,
-          retryMs: Math.min(300000, 30000 * 2 ** Math.min(prior.failures || 0, 3)),
+          attemptedAt: hostRecovered ? 0 : Date.now(),
+          failures: cliUnavailable ? 0 : (prior.failures || 0) + 1,
+          retryMs: cliUnavailable ? CLI_RETRY_MS : Math.min(300000, 30000 * 2 ** Math.min(prior.failures || 0, 3)),
         });
+      }
       return false;
     } finally {
       this.controllers.delete(controller);

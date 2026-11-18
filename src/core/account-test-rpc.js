@@ -160,7 +160,8 @@ class TestRpc extends EventEmitter {
 // 空目录隔离项目指令；保留账号自己的认证与代理，由 CLI 正常管理登录续期。
 async function connect(home, options, callback) {
   if (options.signal?.aborted) throw new AccountTestError('测试已取消', 'cancelled');
-  const cli = options.executable || await locateCodex(options.appPath).catch(() => {
+  const cli = options.executable || await locateCodex(options.appPath, { signal: options.signal }).catch(() => {
+    if (options.signal?.aborted) throw new AccountTestError('测试已取消', 'cancelled');
     throw new AccountTestError('找不到 Codex CLI，请安装对应客户端或官方 CLI 后重试');
   });
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'dragongirl-test-'));

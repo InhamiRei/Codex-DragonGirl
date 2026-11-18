@@ -3,6 +3,10 @@ import { instanceLabel, planLabel } from '../shared/presentation.js';
 import { syncSelects } from './select.js';
 import { TestPreview } from './test-preview.js';
 
+// Astra 默认型号按优先顺序排列，兼容尚未提供 6.2 的账号。
+const DEFAULT_MODEL = 'gpt-6.2-astra';
+const ASTRA_MODELS = new Map([[DEFAULT_MODEL, 'GPT-6.2 Astra'], ['gpt-6-astra', 'GPT-6 Astra']]);
+
 // 账号和回答一律按纯文本创建，生成页面只进入独立来源的沙箱。
 function element(tag, className, text) {
   const item = document.createElement(tag);
@@ -44,7 +48,7 @@ function previewState(container, status, error = '') {
 export class AccountTestsView {
   // 固定初始参数并绑定一次事件，后台推送不覆盖草稿。
   constructor({ call, toast, getState }) {
-    Object.assign(this, { call, toast, getState, pane: 'new', historyPage: 1, catalogRequest: 0, modelChoice: 'gpt-6-astra', effortChoice: 'medium' });
+    Object.assign(this, { call, toast, getState, pane: 'new', historyPage: 1, catalogRequest: 0, modelChoice: null, effortChoice: 'medium' });
     this.root = document.getElementById('account-tests');
     this.selected = new Set();
     this.catalog = [];
@@ -166,7 +170,7 @@ export class AccountTestsView {
     this.$('#test-select-all').textContent = state.instances.length && this.selected.size === state.instances.length ? '取消全选' : '全选';
   }
 
-  // 勾选变化立即废弃旧目录，初始型号仍为 GPT-6 Astra。
+  // 勾选变化立即废弃旧目录，按新账号的共同模型重新判断默认型号。
   selectionChanged() {
     this.catalogRequest++;
     this.catalog = [];
@@ -201,7 +205,7 @@ export class AccountTestsView {
       this.setModels();
       if (this.catalogErrors.size) this.modelStatus('部分账号读取失败，请处理账号行中的提示后重试。');
       else if (!this.catalog.length) this.modelStatus('所选账号没有共同可用的模型，请调整账号选择。');
-      else if (!this.catalog.some((m) => m.id === this.modelChoice)) this.modelStatus('所选账号暂不支持当前模型，请选择其他可用型号。');
+      else if (!this.catalog.some((m) => m.id === this.$('#test-model').value)) this.modelStatus('所选账号暂不支持当前模型，请选择其他可用型号。');
       this.accounts();
     } catch (error) {
       if (request === this.catalogRequest) this.modelStatus('模型读取失败，请重试。');
@@ -209,17 +213,19 @@ export class AccountTestsView {
     } finally { if (request === this.catalogRequest) { this.loadingModels = false; this.controls(); } }
   }
 
-  // 指定型号不可用时不静默替换，用户可以主动选择其他可用型号。
+  // 自动选择共同可用的 Astra；手动指定的型号失效时保留选择并停用测试。
   setModels() {
     const select = this.$('#test-model');
+    const preferred = [...ASTRA_MODELS.keys()].find((id) => this.catalog.some((model) => model.id === id));
+    const choice = this.modelChoice ?? preferred ?? DEFAULT_MODEL;
     select.replaceChildren();
-    if (!this.catalog.some((model) => model.id === this.modelChoice)) {
-      const option = new Option(this.modelChoice === 'gpt-6-astra' ? 'GPT-6 Astra' : this.modelChoice, this.modelChoice, false, true);
+    if (!this.catalog.some((model) => model.id === choice)) {
+      const option = new Option(this.modelName(choice), choice, false, true);
       option.disabled = true;
       select.add(option);
     }
     for (const model of this.catalog) select.add(new Option(model.name, model.id));
-    select.value = this.modelChoice;
+    select.value = choice;
     this.efforts();
   }
 
@@ -378,7 +384,7 @@ export class AccountTestsView {
 
   // 界面优先显示可读的模型名称，历史中的未知型号保持原样。
   modelName(model) {
-    return this.catalog.find((entry) => entry.id === model)?.name || (model === 'gpt-6-astra' ? 'GPT-6 Astra' : model);
+    return this.catalog.find((entry) => entry.id === model)?.name || ASTRA_MODELS.get(model) || model;
   }
 
   // 列表快照与实时事件按版本合并，加载列表期间完成的账号不会停留在加载动画。

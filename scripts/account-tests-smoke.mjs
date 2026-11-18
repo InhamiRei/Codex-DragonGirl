@@ -110,13 +110,29 @@ async function completed() {
 try {
   await launch();
   await pane('new');
-  assert.equal(await page.locator('#test-model').inputValue(), 'gpt-6-astra');
+  const model = page.locator('#test-model');
+  const refreshModels = page.locator('#test-load-models');
+  assert.equal(await model.inputValue(), 'gpt-6.2-astra');
   assert.equal(await page.locator('#test-effort').inputValue(), 'medium');
   assert.equal(await page.locator('#test-concurrency').inputValue(), '1');
   assert.equal(await page.locator('#test-format').count(), 0);
   await page.locator('#test-select-all').click();
   await until(() => page.locator('#test-start').isEnabled(), '共同模型没有读取成功');
-  assert.equal(await page.locator('#test-model').inputValue(), 'gpt-6-astra', '没有优先使用指定的 Astra 默认值');
+  assert.equal(await model.inputValue(), 'gpt-6.2-astra', '没有优先使用共同可用的 6.2 Astra');
+  // 部分账号尚未开放 6.2 时回退旧 Astra，目录恢复后自动选回 6.2。
+  const legacyCatalog = path.join(homes[1], 'legacy-models');
+  await fs.writeFile(legacyCatalog, '1');
+  await refreshModels.click();
+  await until(async () => await model.isEnabled() && await model.inputValue() === 'gpt-6-astra', '旧账号没有回退到共同可用的 GPT-6 Astra');
+  await fs.rm(legacyCatalog);
+  await refreshModels.click();
+  await until(async () => await model.isEnabled() && await model.inputValue() === 'gpt-6.2-astra', '账号重新支持 6.2 时未恢复默认值');
+  // 用户主动选择旧模型后，刷新目录仍保留其选择。
+  await choose('test-model', 'gpt-6-astra');
+  await refreshModels.click();
+  await until(() => model.isEnabled(), '手动选择后未读完模型');
+  assert.equal(await model.inputValue(), 'gpt-6-astra');
+  await choose('test-model', 'gpt-6.2-astra');
   assert.equal(await page.locator('#test-model-status').isVisible(), false);
   const fields = await page.evaluate(() => {
     const fields = ['test-kind', 'test-account-search', 'test-model', 'test-prompt'].map((id) => document.getElementById(id));
@@ -279,7 +295,7 @@ try {
   await page.locator('[data-test-tab="history"]').click();
   await until(() => page.locator('.test-history-card').count().then((count) => count === 10), '重启后记录未恢复');
   assert.deepEqual(errors, []);
-  const result = { passed: true, livePreview, checks: ['Astra/中/并发1默认值', '账号在模型前与标签统一', '新建/记录/详情互斥', '生成/排队/完成/源码固定等高', '完整HTML缩放与沙箱', '加载动画实时切换且不显示源码', '失败取消显示在画框内', '套餐靠右与耗时Tokens同排', '详情提示词直接显示', '自定义文本与HTML自动展示', '十条分页与历史缩略图', '查看删除样式一致', '记录导出删除与重启恢复', '三种窗口宽度'] };
+  const result = { passed: true, livePreview, checks: ['6.2 Astra/中/并发1默认值', '共同模型回退与手动选择保持', '账号在模型前与标签统一', '新建/记录/详情互斥', '生成/排队/完成/源码固定等高', '完整HTML缩放与沙箱', '加载动画实时切换且不显示源码', '失败取消显示在画框内', '套餐靠右与耗时Tokens同排', '详情提示词直接显示', '自定义文本与HTML自动展示', '十条分页与历史缩略图', '查看删除样式一致', '记录导出删除与重启恢复', '三种窗口宽度'] };
   await fs.writeFile(path.join(output, 'ui-report.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));
 } finally {

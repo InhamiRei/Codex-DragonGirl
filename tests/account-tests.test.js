@@ -30,14 +30,15 @@ function gate() {
 test('模型分页与真实流式协议保留中文、用量和独立会话配置', async (t) => {
   const { directory, options } = await environment(t);
   const models = await listAccountTestModels(directory, options);
-  assert.deepEqual(models.map((m) => m.id), ['fixture-model', 'gpt-6-astra', 'second-model']);
+  assert.deepEqual(models.map((m) => m.id), ['fixture-model', 'gpt-6-astra', 'second-model', 'gpt-6.2-astra']);
   let partial = '';
-  const answer = await runAccountTest(directory, { ...options, model: 'fixture-model', effort: 'medium', prompt: '请回答测试', onProgress: (value) => { partial = value.text; } });
+  const answer = await runAccountTest(directory, { ...options, model: 'gpt-6.2-astra', effort: 'medium', prompt: '请回答测试', onProgress: (value) => { partial = value.text; } });
   assert.equal(answer.text, '中文回答：请回答测试');
   assert.equal(partial, answer.text);
   assert.equal(answer.usage.totalTokens, 120);
   const calls = JSON.parse(await fs.readFile(path.join(directory, 'calls.json')));
   const start = calls.find((c) => c.method === 'thread/start').params;
+  assert.equal(start.model, 'gpt-6.2-astra');
   assert.equal(start.ephemeral, true);
   assert.equal(start.sandbox, 'read-only');
   assert.equal(start.approvalPolicy, 'never');

@@ -23,7 +23,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (message.method === 'config/read') { reply({ config: { mcp_servers: { fixture: { command: 'must-not-run' } } } }); return; }
   if (message.method === 'model/list') {
     const item = { model: 'fixture-model', displayName: '测试模型', isDefault: true, defaultReasoningEffort: 'medium', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }, { reasoningEffort: 'high' }] };
-    reply(message.params.cursor ? { data: [{ ...item, model: 'second-model', isDefault: false }], nextCursor: null } : { data: [item, { ...item, model: 'gpt-6-astra', displayName: 'GPT-6 Astra', isDefault: false }], nextCursor: 'next' });
+    const next = [{ ...item, model: 'second-model', isDefault: false }];
+    // 旧账号可以只返回 GPT-6 Astra，新型号放在下一页验证共同目录读取完整。
+    if (!fs.existsSync(path.join(home, 'legacy-models'))) next.push({ ...item, model: 'gpt-6.2-astra', displayName: 'GPT-6.2 Astra', isDefault: false });
+    reply(message.params.cursor ? { data: next, nextCursor: null } : { data: [item, { ...item, model: 'gpt-6-astra', displayName: 'GPT-6 Astra', isDefault: false }], nextCursor: 'next' });
     return;
   }
   if (message.method === 'thread/start') { reply({ thread: { id: 'thread-test', ephemeral: true }, model: message.params.model, instructionSources: mode === 'global' ? ['/fake/AGENTS.md'] : [] }); return; }

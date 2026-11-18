@@ -28,11 +28,12 @@ export function accountEnvironment(home, networkEnv = {}, environment = process.
 export function cliCandidates(appPath, platform = process.platform, environment = process.env) {
   const p = platform === 'win32' ? path.win32 : path;
   if (platform === 'win32') {
+    const localInstall = environment.LOCALAPPDATA && p.join(environment.LOCALAPPDATA, 'Programs', 'Codex');
     const directories = [
       appPath && p.dirname(appPath),
-      ...(environment.PATH || environment.Path || '').split(';'),
-      environment.LOCALAPPDATA && p.join(environment.LOCALAPPDATA, 'Programs', 'Codex'),
-    ].filter(Boolean);
+      ...(environment.PATH || environment.Path || '').split(';').map((entry) => entry.trim().replace(/^"(.*)"$/, '$1')),
+      localInstall,
+    ].filter((directory) => directory && p.isAbsolute(directory));
     const native = directories.flatMap((directory) => [
       p.join(directory, 'resources', 'codex.exe'),
       p.join(directory, 'resources', 'codex-cli', 'bin', 'codex.exe'),
@@ -47,7 +48,7 @@ export function cliCandidates(appPath, platform = process.platform, environment 
       for (const base of [root, p.join(p.dirname(root), 'codex-win32-x64'), p.join(root, 'node_modules', '@openai', 'codex-win32-x64')])
         for (const folder of ['bin', 'codex'])
           native.push(p.join(base, 'vendor', 'x86_64-pc-windows-msvc', folder, 'codex.exe'));
-    // Windows 文件名不区分大小写，GUI 的 Codex.exe 不能被误当成 CLI。
+    // Windows 文件名不区分大小写，已知宿主入口不能被误当成 CLI。
     return [...new Set(native)].filter((file) => !appPath || p.normalize(file).toLowerCase() !== p.normalize(appPath).toLowerCase());
   }
   const apps = [appPath, '/Applications/ChatGPT.app', '/Applications/Codex.app',

@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { nativeBridgePath, accountEnvironment, cliCandidates } from '../src/core/platform.js';
+import { CLI_UNAVAILABLE, CLI_UNAVAILABLE_MESSAGE, locateCodex, rpcError } from '../src/core/rpc.js';
 
 // Windows 查询保留系统运行环境，同时拒绝 API 密钥及未授权的覆盖字段。
 test('账户环境仅传递运行时与网络白名单', () => {
@@ -27,4 +31,41 @@ test('Windows 桥与 CLI 使用原生可执行文件', () => {
   assert.ok(files.every((file) => file.endsWith('.exe')));
   assert.ok(!files.includes('C:\\Program Files\\Codex\\codex.exe'));
   assert.throws(() => nativeBridgePath('/project', 'linux'), /支持/);
+});
+
+// 无宿主、PATH 或 npm 安装时仍可发现桌面缓存，并沿最近更新顺序跳过不能启动的候选。
+test('Windows 桌面版 CLI 回退验证版本并及时发现安装变化', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-codex-cli-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true, maxRetries: 3 }));
+  const fixture = path.join(directory, 'fixture.exe');
+  if (process.platform === 'win32') {
+    const source = path.join(directory, 'CliFixture.cs');
+    // 真实 Windows 用原生入口返回标准版本格式，其余平台用可执行脚本走同一查找逻辑。
+    await fs.writeFile(source, '// 返回离线测试所需的 CLI 版本。\nclass CliFixture { static void Main() { System.Console.WriteLine("codex-cli 0.162.1"); } }');
+    const csc = path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
+    const build = spawnSync(csc, ['/nologo', '/target:exe', `/out:${fixture}`, source], { encoding: 'utf8', windowsHide: true });
+    assert.equal(build.status, 0, build.stdout + build.stderr);
+  } else {
+    await fs.writeFile(fixture, '#!/bin/sh\nprintf "%s\\n" "codex-cli 0.162.1"\n', { mode: 0o700 });
+  }
+  const root = path.join(directory, 'OpenAI', 'Codex', 'bin');
+  const entries = [['zz-damaged', 3, false], ['aa-current', 2, true], ['zz-older', 1, true]];
+  const files = [];
+  for (const [name, days, valid] of entries) {
+    const file = path.join(root, name, 'codex.exe');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    if (valid) await fs.copyFile(fixture, file);
+    else await fs.writeFile(file, 'invalid executable');
+    const timestamp = new Date(2026, 10, days);
+    await fs.utimes(file, timestamp, timestamp);
+    files.push(file);
+  }
+  const options = { platform: 'win32', environment: { ...process.env, PATH: '', Path: '', APPDATA: '', LOCALAPPDATA: directory } };
+  assert.equal(await locateCodex(undefined, options), files[1]);
+  await fs.rm(files[1]);
+  assert.equal(await locateCodex(undefined, options), files[2]);
+  await fs.rm(files[2]);
+  await assert.rejects(locateCodex(undefined, options), (error) => error.code === CLI_UNAVAILABLE && rpcError(error) === CLI_UNAVAILABLE_MESSAGE);
+  await fs.copyFile(fixture, files[1]);
+  assert.equal(await locateCodex(undefined, options), files[1]);
 });
