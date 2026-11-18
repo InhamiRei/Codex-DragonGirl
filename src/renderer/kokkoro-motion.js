@@ -5,7 +5,7 @@ const CENTER = { x: 0, y: 0 };
 const REST = { translateX: 0, translateY: 0, angle: 0, scaleY: 1 };
 
 // 左右位移和侧倾使用较小的幅度，呼吸和上下跟随各自沿用竖直幅度。
-const HORIZONTAL_AMPLITUDE = 0.56;
+const HORIZONTAL_AMPLITUDE = 0.448;
 const VERTICAL_AMPLITUDE = 0.8;
 
 // 完成时以底边为锚点轻轻点头，失败沿用原来的短促缩身。
