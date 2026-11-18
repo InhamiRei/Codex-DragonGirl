@@ -4,8 +4,9 @@ import { KOKKORO_EYE_ARTWORK } from './kokkoro-eyes.js';
 const CENTER = { x: 0, y: 0 };
 const REST = { translateX: 0, translateY: 0, angle: 0, scaleY: 1 };
 
-// 待机轻摆和鼠标带动的头身动作统一使用较柔和的幅度。
-const SWAY_AMPLITUDE = 0.8;
+// 左右位移和侧倾使用较小的幅度，呼吸和上下跟随各自沿用竖直幅度。
+const HORIZONTAL_AMPLITUDE = 0.56;
+const VERTICAL_AMPLITUDE = 0.8;
 
 // 完成时以底边为锚点轻轻点头，失败沿用原来的短促缩身。
 const GESTURES = {
@@ -71,10 +72,10 @@ export class KokkoroMotion {
       const progress = action ? Math.min(1, Math.max(0, (time - this.actionStarted) / action.duration)) : 1;
       const nod = action ? action.depth * Math.sin(Math.PI * progress) ** 2 : 0;
       this.pose = {
-        translateX: SWAY_AMPLITUDE * this.rect.width * (0.012 * x + 0.004 * sway),
-        translateY: SWAY_AMPLITUDE * this.rect.height * 0.0035 * y,
-        angle: SWAY_AMPLITUDE * (2.6 * x + (0.86 * sway + 0.14 * drift) * (1 - Math.abs(x) * 0.24)),
-        scaleY: 1 + SWAY_AMPLITUDE * (0.012 * breath - 0.010 * y) - nod,
+        translateX: HORIZONTAL_AMPLITUDE * this.rect.width * (0.012 * x + 0.004 * sway),
+        translateY: VERTICAL_AMPLITUDE * this.rect.height * 0.0035 * y,
+        angle: HORIZONTAL_AMPLITUDE * (2.6 * x + (0.86 * sway + 0.14 * drift) * (1 - Math.abs(x) * 0.24)),
+        scaleY: 1 + VERTICAL_AMPLITUDE * (0.012 * breath - 0.010 * y) - nod,
       };
       this.onPose();
     }

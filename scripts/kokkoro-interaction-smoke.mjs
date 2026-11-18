@@ -200,37 +200,38 @@ try {
   const left = await look({ x: -8500, y: 180 }, () => true);
   await until(async () => {
     const body = await bodyPose();
-    return body.angle < -1.5 && body.horizontal < -0.006;
+    return body.angle < -1 && body.horizontal < -0.0035;
   }, '可可萝的头身没有跟着光标向左倾');
   const right = await look({ x: 8500, y: 180 }, (next) => next.every((eye, i) => eye.x - left[i].x > 1.6));
   await until(async () => {
     const body = await bodyPose();
-    return body.angle > 1.5 && body.horizontal > 0.006;
+    return body.angle > 1 && body.horizontal > 0.0035;
   }, '可可萝的头身没有跟着光标向右倾');
   const up = await look({ x: 148, y: -8500 }, (next) => next.every((eye, i) => eye.y < right[i].y - 0.4));
   await look({ x: 148, y: 8500 }, (next) => next.every((eye, i) => eye.y > up[i].y + 0.7));
   await settings({ flip: true });
   await look({ x: 8500, y: 180 }, (next) => next.every((eye, i) => eye.x < right[i].x - 1.6));
-  await until(async () => (await bodyPose()).angle > 1.5, '镜像后身体倾向与屏幕鼠标方向相反');
+  await until(async () => (await bodyPose()).angle > 1, '镜像后身体倾向与屏幕鼠标方向相反');
 
-  // 光标跟随关闭后仍有独立的待机摆动，关闭动画反馈才会让身体静止。
-  await settings({ flip: false, eyeTracking: false });
+  // 先从中性姿态恢复动画，独立量测静止光标下的左右摆幅。
+  await settings({ flip: false, eyeTracking: false, motion: false });
+  await until(async () => {
+    const body = await bodyPose();
+    return Math.abs(body.angle) < 0.001 && Math.abs(body.horizontal) < 0.001 && Math.abs(body.scaleY - 1) < 0.001;
+  }, '关闭动画反馈后仍有身体摆动');
+  await settings({ motion: true });
   const angles = await page.locator('#character').evaluate(async (character) => {
     const angles = [];
-    for (let index = 0; index < 12; index += 1) {
+    for (let index = 0; index < 14; index += 1) {
       const matrix = new DOMMatrixReadOnly(getComputedStyle(character).transform);
       angles.push(Math.atan2(-matrix.c, matrix.d) * 180 / Math.PI);
       await new Promise((resolve) => setTimeout(resolve, 220));
     }
     return angles;
   });
-  assert.ok(Math.max(...angles) - Math.min(...angles) > 0.45, '静止鼠标下可可萝的待机摆动没有显示');
-  await settings({ motion: false });
-  await until(async () => {
-    const body = await bodyPose();
-    return Math.abs(body.angle) < 0.001 && Math.abs(body.horizontal) < 0.001 && Math.abs(body.scaleY - 1) < 0.001;
-  }, '关闭动画反馈后仍有身体摆动');
-  await settings({ motion: true, blinkEnabled: true });
+  assert.ok(Math.max(...angles) - Math.min(...angles) > 0.25, '静止鼠标下可可萝的待机摆动没有显示');
+  assert.ok(angles.every((angle) => Math.abs(angle) < 0.6), '待机时左右侧倾超过预期');
+  await settings({ blinkEnabled: true });
 
   // 自然定时器实际驱动半闭、闭眼、半闭、睁眼四次变化。
   await page.evaluate(() => {
