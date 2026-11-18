@@ -193,15 +193,29 @@ async function verifyAccountHeader() {
   await hoverHint(first, '重置卡悬停未显示详情');
   assert.match(await tooltip.textContent(), /可用重置卡 2 张\n第 1 张 · .+ 到期\n第 2 张 · 无到期限制/);
   await first.evaluate((element) => { element.dataset.beforeRefresh = 'true'; });
-  await application.evaluate(() => {
-    const m = globalThis.__dragonGirlApp.monitor;
-    m.readings.get(m.instances[0].id).quota.resetCredits.count++;
-    m.publish();
-  });
-  await until(() => first.textContent().then((value) => value === '重置卡 3 张'), '后台状态未推送到卡片');
-  assert.equal(await first.getAttribute('data-before-refresh'), 'true', '额度更新替换了正在悬停的节点');
-  assert.equal(await first.getAttribute('aria-describedby'), 'chart-tooltip', '后台重绘打断了重置卡提示');
-  assert.equal(await tooltip.isVisible(), true);
+  let keptHover = false;
+  for (let count = 3; count <= 5 && !keptHover; count++) {
+    await hoverHint(first, '重置卡悬停未显示详情');
+    const before = await first.boundingBox();
+    await application.evaluate((_, count) => {
+      const monitor = globalThis.__dragonGirlApp.monitor;
+      monitor.readings.get(monitor.instances[0].id).quota.resetCredits.count = count;
+      monitor.emit('update', monitor.snapshot());
+    }, count);
+    await until(() => first.textContent().then((value) => value === `重置卡 ${count} 张`), '后台状态未推送到卡片');
+    assert.equal(await first.getAttribute('data-before-refresh'), 'true', '额度更新替换了正在悬停的节点');
+    // 刷新不能移动到原悬停点之外。只有系统确实移走指针时才重新采样。
+    const after = await first.boundingBox();
+    const x = before.x + before.width / 2, y = before.y + before.height / 2;
+    assert.ok(after && after.x <= x && x <= after.x + after.width
+      && after.y <= y && y <= after.y + after.height, '后台刷新移动了正在悬停的重置卡');
+    keptHover = await first.evaluate((element) => element.matches(':hover'));
+    if (keptHover) {
+      assert.equal(await first.getAttribute('aria-describedby'), 'chart-tooltip', '后台重绘打断了重置卡提示');
+      assert.equal(await tooltip.isVisible(), true);
+    }
+  }
+  assert.ok(keptHover, '刷新时未能保持受控指针悬停');
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
   await page.screenshot({ animations: 'disabled', path: path.join(root, '.artifacts/accounts-reset-hover.png') });
   await page.mouse.move(1100, 40);
