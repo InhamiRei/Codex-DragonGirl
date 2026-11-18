@@ -306,12 +306,15 @@ function applyLayout(model) {
 function paintCharacter() {
   if (!layout) return;
   dragonFaces.updateMotion(decodedPortrait, dragonMotion, layout.rect);
+  // 可可萝的头身轻摆、眼区与透明点击区域共用同一变换。
+  const sway = kokkoro.pose;
   renderedPose = {
     ...pose, ...bodyPose,
-    translateY: bodyPose.translateY - layout.rect.height * dragonMotion.breath,
-    angle: pose.angle + bodyPose.angle,
+    translateX: bodyPose.translateX + sway.translateX,
+    translateY: bodyPose.translateY + sway.translateY - layout.rect.height * dragonMotion.breath,
+    angle: pose.angle + bodyPose.angle + sway.angle,
     scaleX: pose.scaleX * flip.value,
-    scaleY: pose.scaleY * kokkoro.scaleY,
+    scaleY: pose.scaleY * sway.scaleY,
   };
   const flipping = String(!flip.settled);
   if (character.dataset.flipping !== flipping) character.dataset.flipping = flipping;

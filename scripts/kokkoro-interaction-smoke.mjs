@@ -83,6 +83,18 @@ async function gazePixels() {
   });
 }
 
+// 读取实际容器变换，翻转时也按屏幕方向计算倾角。
+async function bodyPose() {
+  return page.locator('#character').evaluate((character) => {
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(character).transform);
+    return {
+      horizontal: matrix.e / character.offsetWidth,
+      angle: Math.atan2(-matrix.c, matrix.d) * 180 / Math.PI,
+      scaleY: Math.hypot(matrix.c, matrix.d),
+    };
+  });
+}
+
 // 发送窗口外的全局光标坐标，等待两眼从上一方向转过来并收敛。
 async function look(point, moved) {
   await application.evaluate((_, point) =>
@@ -158,7 +170,7 @@ try {
   await fs.mkdir(path.join(home, '.codex/sessions'), { recursive: true });
   await fs.writeFile(path.join(data, 'settings.json'), JSON.stringify({
     mode: 'desktop', characterId: 'kokkoro', notifications: false, soundEnabled: false,
-    autoFlip: false, eyeTracking: true, blinkEnabled: false, expressionsEnabled: true,
+    autoFlip: false, motion: true, eyeTracking: true, blinkEnabled: false, expressionsEnabled: true,
   }));
   const env = {
     ...process.env, DRAGONGIRL_TEST: '1', DRAGONGIRL_MONITOR_TEST: '1',
@@ -186,12 +198,39 @@ try {
 
   // 确认两侧和上下方向都跟随，翻转后在原画里的水平方向反过来。
   const left = await look({ x: -8500, y: 180 }, () => true);
+  await until(async () => {
+    const body = await bodyPose();
+    return body.angle < -1.5 && body.horizontal < -0.006;
+  }, '可可萝的头身没有跟着光标向左倾');
   const right = await look({ x: 8500, y: 180 }, (next) => next.every((eye, i) => eye.x - left[i].x > 1.6));
+  await until(async () => {
+    const body = await bodyPose();
+    return body.angle > 1.5 && body.horizontal > 0.006;
+  }, '可可萝的头身没有跟着光标向右倾');
   const up = await look({ x: 148, y: -8500 }, (next) => next.every((eye, i) => eye.y < right[i].y - 0.4));
   await look({ x: 148, y: 8500 }, (next) => next.every((eye, i) => eye.y > up[i].y + 0.7));
   await settings({ flip: true });
   await look({ x: 8500, y: 180 }, (next) => next.every((eye, i) => eye.x < right[i].x - 1.6));
-  await settings({ flip: false, eyeTracking: false, blinkEnabled: true });
+  await until(async () => (await bodyPose()).angle > 1.5, '镜像后身体倾向与屏幕鼠标方向相反');
+
+  // 光标跟随关闭后仍有独立的待机摆动，关闭动画反馈才会让身体静止。
+  await settings({ flip: false, eyeTracking: false });
+  const angles = await page.locator('#character').evaluate(async (character) => {
+    const angles = [];
+    for (let index = 0; index < 12; index += 1) {
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(character).transform);
+      angles.push(Math.atan2(-matrix.c, matrix.d) * 180 / Math.PI);
+      await new Promise((resolve) => setTimeout(resolve, 220));
+    }
+    return angles;
+  });
+  assert.ok(Math.max(...angles) - Math.min(...angles) > 0.45, '静止鼠标下可可萝的待机摆动没有显示');
+  await settings({ motion: false });
+  await until(async () => {
+    const body = await bodyPose();
+    return Math.abs(body.angle) < 0.001 && Math.abs(body.horizontal) < 0.001 && Math.abs(body.scaleY - 1) < 0.001;
+  }, '关闭动画反馈后仍有身体摆动');
+  await settings({ motion: true, blinkEnabled: true });
 
   // 自然定时器实际驱动半闭、闭眼、半闭、睁眼四次变化。
   await page.evaluate(() => {
@@ -214,6 +253,7 @@ try {
   // 菜单预览依次展示两种新表情，最末一次重复触发不会旧帧串播。
   await clickMenu('完成', '动作');
   await until(() => page.locator('#character').getAttribute('data-kokkoro-frame').then((frame) => frame === 'happy'), '完成预览没有绘制');
+  await until(async () => (await bodyPose()).scaleY < 0.984, '完成表情没有配合小幅点头', 1400);
   await clickMenu('失败', '动作');
   await until(() => page.locator('#character').getAttribute('data-kokkoro-frame').then((frame) => frame === 'sad'), '失败预览没有接管画面');
   await until(() => page.locator('.kokkoro-face').isHidden(), '失败预览没有回到待机');
@@ -235,11 +275,12 @@ try {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await clickMenu('完成', '动作');
   await until(() => page.locator('#character').getAttribute('data-kokkoro-frame').then((frame) => frame === 'happy'), '减少动态效果时没有定格表情');
+  assert.ok(Math.abs((await bodyPose()).scaleY - 1) < 0.001, '减少动态效果时仍在点头或呼吸');
   assert.equal(await page.locator('.kokkoro-eye-layer:not([hidden])').count(), 0);
   await until(() => page.locator('.kokkoro-face').isHidden(), '定格没有自动恢复');
   await saveComparison();
   assert.deepEqual(errors, []);
-  console.log('可可萝的独立视线、自然眨眼、完成与失败、任务和气泡台词、设置开关全部通过。');
+  console.log('可可萝的视线、鼠标带动头身、待机轻摆、眨眼、完成点头、失败与任务台词全部通过。');
 } finally {
   await application?.close().catch(() => {});
   await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });

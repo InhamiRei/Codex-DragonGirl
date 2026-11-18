@@ -1,30 +1,29 @@
 import { KOKKORO_ASSET } from '../shared/characters.js';
 import { createKokkoroEyes, KOKKORO_EYE_ARTWORK } from './kokkoro-eyes.js';
 import { KOKKORO_FACE_BOUNDS, loadKokkoroFrames } from './kokkoro-expressions.js';
+import { KokkoroMotion } from './kokkoro-motion.js';
 
-// 轻弹或惊一下只发生在动作开头，定格等待恢复时不持续绘制。
-const ACTIONS = {
-  happy: { duration: 2200, moveFor: 540, scale: 0.024 },
-  sad: { duration: 3200, moveFor: 420, scale: -0.019 },
-};
+// 表情定格与身体节奏各自计时，动作结束后恢复视线和眨眼。
+const ACTIONS = { happy: 2200, sad: 3200 };
 
 export class KokkoroFace {
   // 只有切到可可萝才创建画布、解码表情帧和建立视线标定。
   constructor(character, onPose) {
     this.character = character;
-    this.onPose = onPose;
-    this.scaleY = 1;
-    this.motionFrame = 0;
+    this.motion = new KokkoroMotion(onPose);
     this.timer = 0;
+  }
+
+  // 原画、眼部和命中图一起使用这个姿态。
+  get pose() {
+    return this.motion.pose;
   }
 
   // 换角色、隐藏、拖动和关闭动态表情时取消动作和排队中的请求。
   configure(image, model, pose, reducedMotion, pressed) {
     if (model.asset !== KOKKORO_ASSET && this.view?.model.asset !== KOKKORO_ASSET) return;
-    const hadMotion = this.motion;
     const settings = model.appearance?.settings || {};
     this.view = { image, model, pose, reducedMotion, pressed };
-    this.motion = !reducedMotion && settings.motion !== false;
     const visible = model.asset === KOKKORO_ASSET && model.visible !== false && !document.hidden && !pressed;
     this.allowed = visible && settings.expressionsEnabled !== false;
     this.ready = visible && image.src === KOKKORO_ASSET
@@ -33,13 +32,13 @@ export class KokkoroFace {
       this.pending = null;
       this.stop();
     }
+    this.motion.configure(model, pose, this.ready && !reducedMotion && settings.motion !== false);
     if (!this.ready) {
       if (this.eyes?.enabled) this.eyes.reset();
       return;
     }
     if (!this.loading) this.prepareFrames();
     if (!this.action) this.syncEyes();
-    else if (hadMotion !== this.motion) this.move(performance.now());
   }
 
   // 表情加载完成时只接续当前角色的最后一次触发，切走或隐藏时直接丢弃。
@@ -59,6 +58,7 @@ export class KokkoroFace {
   follow(point) {
     this.point = point;
     this.eyes?.follow(point);
+    this.motion.follow(point);
   }
 
   // 眨眼和视线各用已有的偏好开关，在表情帧加载完成前先提供正常的视线。
@@ -123,53 +123,31 @@ export class KokkoroFace {
     this.eyes?.reset();
     clearTimeout(this.timer);
     this.action = name;
-    this.started = performance.now();
+    this.motion.setAction(name);
     this.character.dataset.kokkoroExpression = name;
     this.showFrame(name);
-    this.move(this.started);
     this.timer = setTimeout(() => {
       this.stop();
       this.syncEyes();
-    }, ACTIONS[name].duration);
-  }
-
-  // 以平切底边为锚点轻弹或缩身，命中与画面共用缩放比例。
-  move(time) {
-    cancelAnimationFrame(this.motionFrame);
-    this.motionFrame = 0;
-    const { moveFor, scale } = ACTIONS[this.action];
-    const progress = Math.max(0, (time - this.started) / moveFor);
-    if (!this.motion || progress >= 1) {
-      this.setScale(1);
-      return;
-    }
-    this.setScale(1 + scale * Math.sin(Math.PI * progress) ** 2);
-    this.motionFrame = requestAnimationFrame((next) => this.move(next));
-  }
-
-  // 姿势真正变化时才刷新原画容器与透明命中。
-  setScale(scale) {
-    if (this.scaleY === scale) return;
-    this.scaleY = scale;
-    this.onPose();
+    }, ACTIONS[name]);
   }
 
   // 完成、隐藏或换角色时清掉定格和动作时钟，露出原画。
   stop() {
     if (!this.action) return;
     clearTimeout(this.timer);
-    cancelAnimationFrame(this.motionFrame);
-    this.timer = this.motionFrame = 0;
+    this.timer = 0;
     this.action = null;
+    this.motion.setAction(null);
     this.showFrame(null);
     delete this.character.dataset.kokkoroExpression;
-    this.setScale(1);
   }
 
   // 页面关闭时清理动作、眨眼、视线和缓存。
   destroy() {
     this.destroyed = true;
     this.stop();
+    this.motion.reset();
     this.pending = null;
     this.eyes?.reset();
     for (const patch of this.eyes?.patches || []) patch.canvas.remove();
