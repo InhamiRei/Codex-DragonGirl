@@ -70,12 +70,19 @@ async function assertNeutralBody() {
 }
 
 // 通过真实主进程的固定光标通道输入，覆盖预加载订阅与渲染器的连接。
-async function look(x, y) {
+async function look(x, y, tracking = true) {
+  const received = await page.evaluate(() => window.__cursorMessages.length);
   await application.evaluate((_, point) => {
     globalThis.__dragonGirlTest.windows.get('character').webContents.send('dg:cursor', point);
   }, { x, y });
-  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  await until(() => page.evaluate(() => performance.now() - window.__lastEyeFrame > 180), '视线动画没有收敛停止');
+  // 先确认本次 IPC 到达，再等双眼、身体和翻转完成，空闲帧间隔不能证明目标已经应用。
+  await until(() => page.evaluate(({ x, y, received, tracking }) => {
+    const tracker = window.__testEyeTracker;
+    return window.__cursorMessages.slice(received).some((point) => point.x === x && point.y === y)
+      && tracker?.point?.x === x && tracker.point.y === y && tracker.frame === 0
+      && Boolean(tracker.enabled && tracker.trackingEnabled) === tracking
+      && tracker.character.dataset.flipping === 'false';
+  }, { x, y, received, tracking }), '视线动画没有按本次光标位置收敛停止');
   return eyeFeatures();
 }
 
@@ -100,14 +107,14 @@ try {
   page = application.windows().find((window) => window.url().endsWith('/character.html'));
   page.on('pageerror', (error) => errors.push(error.message));
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await page.evaluate(() => {
-    // 仅验收中记录动画帧时间，生产页面无需暴露任何测试接口。
-    const request = window.requestAnimationFrame.bind(window);
-    window.__lastEyeFrame = performance.now();
-    window.requestAnimationFrame = (callback) => request((time) => {
-      window.__lastEyeFrame = performance.now();
-      callback(time);
-    });
+  await page.evaluate(async () => {
+    // 通过原有视线实例观察收敛状态，保留真实 IPC、像素与窗口绘制。
+    const { EyeTracker } = await import('dragon://app/src/renderer/eyes.js');
+    const follow = EyeTracker.prototype.follow;
+    EyeTracker.prototype.follow = function (point) {
+      if (this.className === 'eye-layer') window.__testEyeTracker = this;
+      return follow.call(this, point);
+    };
     window.__cursorMessages = [];
     window.dragonGirl.onCursor((point) => window.__cursorMessages.push(point));
   });
@@ -138,6 +145,16 @@ try {
   });
   assert.ok(actualCursor.x < 0 || actualCursor.x > actualCursor.width || actualCursor.y < 0 || actualCursor.y > actualCursor.height);
   await until(() => page.evaluate((expected) => window.__cursorMessages.some((point) => point.x === expected.x && point.y === expected.y), actualCursor), '窗口外系统鼠标没有传到角色');
+  await page.evaluate(async () => {
+    // 全局光标入口验收完成后，只用受控光标测试方向，独立排除实际鼠标和待机呼吸的干扰。
+    window.addEventListener('pointermove', (event) => event.stopImmediatePropagation(), true);
+    const { DragonMotion } = await import('dragon://app/src/renderer/dragon-motion.js');
+    DragonMotion.prototype.scheduleBreath = function () {
+      clearTimeout(this.breathTimer);
+      this.breathTimer = 0;
+      this.breathStarted = null;
+    };
+  });
   await appearance({});
   await until(() => page.locator('.eye-layer').count().then((count) => count === 2), '两只眼睛没有创建');
   const originalPosition = await application.evaluate(() => ({ ...globalThis.__dragonGirlTest.character }));
@@ -160,7 +177,8 @@ try {
     assert.ok(right[index][feature].x - left[index][feature].x > 8, `左右视线没有移动 ${feature}：${JSON.stringify({ left, right })}`);
     assert.ok(down[index][feature].y - up[index][feature].y > 8, `上下视线没有移动 ${feature}：${JSON.stringify({ up, down })}`);
   }
-  assert.ok(body.left.x < 0 && body.right.x > 0 && body.left.angle < -0.2 && body.right.angle > 0.2, '身体没有向鼠标轻微倾斜');
+  assert.ok(body.left.x < 0 && body.right.x > 0 && body.left.angle < -0.2 && body.right.angle > 0.2,
+    `身体没有向鼠标轻微倾斜：${JSON.stringify(body)}`);
   assert.ok(body.up.y < 0 && body.down.y > 0, '身体没有随上下视线轻微移动');
   assert.ok(Object.values(body).every((pose) => Math.abs(pose.angle) <= 0.451), '身体倾斜超过轻微幅度');
   assert.deepEqual(await application.evaluate(() => ({ ...globalThis.__dragonGirlTest.character })), originalPosition, '身体跟随改变了原生窗口位置');
@@ -205,7 +223,7 @@ try {
   await appearance({});
   await appearance({ eyeTracking: false });
   await until(() => page.locator('.eye-layer:not([hidden])').count().then((count) => count === 0), '关闭后仍显示眼区');
-  await look(-2000, 150);
+  await look(-2000, 150, false);
   assert.ok((await eyeFeatures()).every((eye) => eye.hidden));
   await assertNeutralBody();
   await appearance({});
@@ -223,7 +241,7 @@ try {
   await fs.copyFile(path.join(root, 'assets/characters/codex-dragon-girl.png'), path.join(temporary, 'assets', customName));
   await appearance({}, `dragon://app/user-assets/${customName}`);
   await until(() => page.evaluate((name) => document.getElementById('portrait').src.endsWith(name), customName), '导入图片未加载');
-  await look(2000, 150);
+  await look(2000, 150, false);
   assert.ok((await eyeFeatures()).every((eye) => eye.hidden), '自定义图片被套用默认眼区');
   await assertNeutralBody();
   await appearance({});
