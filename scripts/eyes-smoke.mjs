@@ -41,7 +41,9 @@ async function eyeFeatures() {
       const r = data[index], g = data[index + 1], b = data[index + 2];
       let feature;
       if (r > 110 && r < 220 && g < 190 && b > r + 15 && b > g + 15) feature = iris;
-      else if (r > 45 && r < 120 && g > 25 && g < 100 && b > r + 5 && b < 155) feature = rim;
+      // 用虹膜下方的眼眶弧线取样，避开低显示密度时上睫毛和刘海交界处的混色。
+      else if (y >= eye.iris.cy + eye.iris.ry * 0.25
+        && r > 45 && r < 120 && g > 25 && g < 100 && b > r + 5 && b < 155) feature = rim;
       else if (r < 45 && g < 45 && b < 100 && y < (eyeIndex === 0 ? 718 : 762)) feature = lash;
       if (feature) {
         feature.sum += 1; feature.x += x; feature.y += y;
