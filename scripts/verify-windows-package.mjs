@@ -40,8 +40,10 @@ try {
   ];
   for (const script of scripts) {
     console.log(`验收 ${script}`);
+    // 六款发型各自启动验收窗口，沿用整套项目检查为单项提供的四分钟时限。
+    const timeout = script === 'dragon-config-smoke.mjs' ? 240000 : 120000;
     const result = spawnSync(process.execPath, [path.join(root, 'scripts', script)], {
-      env, encoding: 'utf8', timeout: 120000,
+      env, encoding: 'utf8', timeout,
     });
     if (result.status !== 0) throw new Error(`${script} 验收失败：${result.error?.message || result.stderr || result.stdout || result.signal || result.status}`);
     console.log(result.stdout.trim());

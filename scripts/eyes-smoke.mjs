@@ -31,6 +31,7 @@ async function eyeFeatures() {
     const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
     const eye = artwork.eyes[eyeIndex];
     const iris = { sum: 0, x: 0, y: 0 }, rim = { sum: 0, x: 0, y: 0 }, lash = { sum: 0, x: 0, y: 0 };
+    const lowerRim = new Float64Array(canvas.width);
     const bounds = eyeIndex === 0 ? [380, 620, 610, 840] : [715, 625, 1010, 870];
     // 将像素位置还原到原画坐标，显示密度和角色大小不会改变验收阈值。
     for (let row = 0; row < canvas.height; row += 1) for (let col = 0; col < canvas.width; col += 1) {
@@ -43,7 +44,10 @@ async function eyeFeatures() {
       if (r > 110 && r < 220 && g < 190 && b > r + 15 && b > g + 15) feature = iris;
       // 用虹膜下方的眼眶弧线取样，避开低显示密度时上睫毛和刘海交界处的混色。
       else if (y >= eye.iris.cy + eye.iris.ry * 0.25
-        && r > 45 && r < 120 && g > 25 && g < 100 && b > r + 5 && b < 155) feature = rim;
+        && r > 45 && r < 120 && g > 25 && g < 100 && b > r + 5 && b < 155) {
+        feature = rim;
+        if (Math.abs(x - eye.iris.cx) <= eye.iris.rx * 0.5) lowerRim[col] = y;
+      }
       else if (r < 45 && g < 45 && b < 100 && y < (eyeIndex === 0 ? 718 : 762)) feature = lash;
       if (feature) {
         feature.sum += 1; feature.x += x; feature.y += y;
@@ -52,6 +56,9 @@ async function eyeFeatures() {
     for (const feature of [iris, rim, lash]) {
       feature.x /= feature.sum; feature.y /= feature.sum;
     }
+    // 纵向跟踪各列眼眶底缘的中位数，取样范围固定时仍能量到轮廓的真实位移。
+    const bottomEdges = lowerRim.filter((y) => y > 0).sort();
+    rim.bottom = bottomEdges[Math.floor(bottomEdges.length / 2)];
     return { hidden: canvas.hidden, iris, rim, lash };
   }), EYE_ARTWORK);
 }
@@ -177,7 +184,8 @@ try {
   await page.screenshot({ path: path.join(artifacts, 'eyes-down.png'), omitBackground: true });
   for (let index = 0; index < 2; index += 1) for (const feature of ['iris', 'rim', 'lash']) {
     assert.ok(right[index][feature].x - left[index][feature].x > 8, `左右视线没有移动 ${feature}：${JSON.stringify({ left, right })}`);
-    assert.ok(down[index][feature].y - up[index][feature].y > 8, `上下视线没有移动 ${feature}：${JSON.stringify({ up, down })}`);
+    const vertical = feature === 'rim' ? 'bottom' : 'y';
+    assert.ok(down[index][feature][vertical] - up[index][feature][vertical] > 8, `上下视线没有移动 ${feature}：${JSON.stringify({ up, down })}`);
   }
   assert.ok(body.left.x < 0 && body.right.x > 0 && body.left.angle < -0.2 && body.right.angle > 0.2,
     `身体没有向鼠标轻微倾斜：${JSON.stringify(body)}`);
