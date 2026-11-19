@@ -22,15 +22,19 @@ function run(command, args) {
 // 构建前检查九段内置原声，缺失或损坏时不生成默认无声的安装包。
 if (!(await verifyAudioLibrary(path.join(root, 'assets/audio'))).complete)
   throw new Error('内置原声音效缺失或损坏，macOS 安装包未生成。');
+// 通过锁定的 Electron 包准备运行时，再从其可执行文件定位整个应用包和许可证。
+const { default: electron } = await import('electron');
+const electronApp = path.resolve(path.dirname(electron), '..', '..');
+const electronDist = path.dirname(electronApp);
 // 只清理本项目输出目录中的同名生成物，不碰用户安装或配置。
 await fs.mkdir(output, { recursive: true });
 await fs.rm(bundle, { recursive: true, force: true });
-run('/usr/bin/ditto', [path.join(root, 'node_modules/electron/dist/Electron.app'), bundle]);
+run('/usr/bin/ditto', [electronApp, bundle]);
 const application = path.join(contents, 'Resources/app');
 await fs.mkdir(application, { recursive: true });
 for (const notice of ['LICENSE', 'LICENSES.chromium.html'])
   await fs.copyFile(
-    path.join(root, 'node_modules/electron/dist', notice),
+    path.join(electronDist, notice),
     path.join(contents, 'Resources', notice),
   );
 await copyReleasePayload(root, application);

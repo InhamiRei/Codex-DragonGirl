@@ -20,11 +20,13 @@ await fs.access(native);
 if (!(await verifyAudioLibrary(path.join(root, 'assets/audio'))).complete)
   throw new Error('内置原声音效缺失或损坏，Windows 安装包未生成。');
 
+// 通过锁定的 Electron 包准备运行时，干净环境首次打包也会下载对应平台的二进制。
+const { default: electron } = await import('electron');
 // 成品仅复制 Electron 运行时与明确列出的应用文件，不复制本机配置或制作缓存。
 await fs.mkdir(output, { recursive: true });
 await fs.rm(bundle, { recursive: true, force: true });
-await fs.cp(path.join(root, 'node_modules/electron/dist'), bundle, { recursive: true });
-await fs.rename(path.join(bundle, 'electron.exe'), path.join(bundle, 'DragonGirl.exe'));
+await fs.cp(path.dirname(electron), bundle, { recursive: true });
+await fs.rename(path.join(bundle, path.basename(electron)), path.join(bundle, 'DragonGirl.exe'));
 await copyReleasePayload(root, application, '.exe');
 await verifyReleasePayload(root, application, version, '.exe');
 await fs.writeFile(path.join(bundle, '使用说明.txt'), '\ufeff' + [
