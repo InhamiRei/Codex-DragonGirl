@@ -11,12 +11,12 @@ const portraits = new Map();
 const loadingPortraits = new Map();
 let foreground;
 
-// 图层完整解码后再合成，允许生成画布与原生尺寸有 1 像素的取整差。
+// 解码后要求图层与原画坐标严格对应，避免合成时重采样透明描边。
 async function loadLayer(asset) {
   const image = new Image();
   image.src = asset;
   await image.decode();
-  if (Math.abs(image.naturalWidth - EYE_ARTWORK.width) > 1 || Math.abs(image.naturalHeight - EYE_ARTWORK.height) > 1)
+  if (image.naturalWidth !== EYE_ARTWORK.width || image.naturalHeight !== EYE_ARTWORK.height)
     throw new Error('龙娘图层尺寸与原生画布不一致：' + asset);
   return image;
 }
@@ -61,9 +61,8 @@ export function loadDragonPortrait(asset) {
   if (loading) return loading;
   const style = hairstyles.get(asset);
   if (!style) return Promise.reject(new Error('未知的龙娘发型地址'));
-  const layers = style.rearImage === null
-    ? Promise.all([null, loadLayer(asset)])
-    : Promise.all([loadLayer(new URL(style.rearImage, root).href), sharedForeground()]);
+  const artwork = loadLayer(new URL(style.artwork, root).href);
+  const layers = style.layered ? Promise.all([artwork, sharedForeground()]) : Promise.all([null, artwork]);
   const request = layers.then(([rear, front]) => {
     const canvas = portraitCanvas();
     const context = canvas.getContext('2d');

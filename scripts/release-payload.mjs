@@ -51,7 +51,7 @@ async function releaseFiles(root, nativeExtension) {
   const gearArtwork = new Set([
     ...CHARACTERS.map(({ image }) => image),
     DRAGON_FOREGROUND,
-    ...DRAGON_HAIRSTYLES.flatMap(({ image, rearImage }) => rearImage === null ? [image] : [image, rearImage]),
+    ...DRAGON_HAIRSTYLES.flatMap(({ image, artwork }) => [image, artwork]),
     ...DRAGON_GEAR.flatMap(({ choices }) => choices.map(({ icon }) => icon)),
   ]);
   await Promise.all([...gearArtwork].map((file) => fs.access(path.join(root, file))));

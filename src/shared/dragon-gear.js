@@ -4,20 +4,21 @@ const EYE_ICON = DRAGON_GEAR_DIR + 'eye-purple.webp';
 const DRAGON_PORTRAIT = 'assets/characters/codex-dragon-girl';
 export const DRAGON_FOREGROUND = DRAGON_PORTRAIT + '-foreground.png';
 
-// 发型沿用原来的选择编号和地址。换前发的款式使用独立的完整立绘。
+// 散发使用已验收的原生合成图，避免不同渲染后端缩放后发时改变固定部件像素。
 export const DRAGON_HAIRSTYLES = Object.freeze([
-  { id: 'loose', name: '散发', image: DRAGON_PORTRAIT + '.png', rearImage: DRAGON_PORTRAIT + '-loose-back.png' },
+  { id: 'loose', name: '散发', image: DRAGON_PORTRAIT + '.png', artwork: DRAGON_PORTRAIT + '-loose.png', layered: false },
   { id: 'ponytail', name: '单马尾', mirrorRear: true },
   { id: 'twin-tails', name: '双马尾' },
   { id: 'side-braid', name: '侧麻花辫' },
   { id: 'double-buns', name: '双丸子头' },
-  { id: 'straight-bangs', name: '齐刘海', rearImage: null },
-].map(({ id, name, image = DRAGON_PORTRAIT + '-' + id + '.png', rearImage = image, mirrorRear = false }) => Object.freeze({
+  { id: 'straight-bangs', name: '齐刘海', layered: false },
+].map(({ id, name, image = DRAGON_PORTRAIT + '-' + id + '.png', artwork = image, layered = true, mirrorRear = false }) => Object.freeze({
   id,
   name,
   icon: DRAGON_GEAR_DIR + 'hair-' + id + '.webp',
   image,
-  rearImage,
+  artwork,
+  layered,
   mirrorRear,
 })));
 
