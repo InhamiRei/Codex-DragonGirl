@@ -31,6 +31,7 @@ import { EYE_ARTWORK, eyeTrackingEnabled } from '../shared/gaze.js';
 import { shouldFaceLeft } from '../shared/facing.js';
 import { followWindowStack, followWindowFloating } from '../shared/follow-window.js';
 import { CHARACTERS, characterByAsset, characterById, isDragonAsset } from '../shared/characters.js';
+import { dragonHairstyle } from '../shared/dragon-gear.js';
 import { DRAGON_FACE_EXPRESSIONS, isDragonFace } from '../shared/expression.js';
 import { PRAYER_PALM } from '../shared/prayer-wave.js';
 import { PrayerWave } from './prayer-wave.js';
@@ -40,9 +41,10 @@ const ORIGIN = 'dragon://app';
 const SHORTCUT = 'CommandOrControl+Shift+Alt+D';
 const RECT_KEYS = ['x', 'y', 'width', 'height'];
 
-// 启动、切换角色和多实例共用素材规则，自定义图片始终优先。
+// 启动、切换角色和多实例共用素材规则，所选发型用于内置龙娘，自定义图片优先。
 export function companionAppearance(settings, assetDirectory, status = 'idle') {
-  const { image } = characterById(settings.characterId);
+  const character = characterById(settings.characterId);
+  const image = character.id === 'dragon' ? dragonHairstyle(settings.dragonHairstyleId).image : character.image;
   const custom = settings.characterAsset;
   return {
     settings,

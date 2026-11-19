@@ -240,12 +240,12 @@ try {
   await fs.mkdir(path.join(temporary, 'assets'), { recursive: true });
   await fs.copyFile(path.join(root, 'assets/characters/codex-dragon-girl.png'), path.join(temporary, 'assets', customName));
   await appearance({}, `dragon://app/user-assets/${customName}`);
-  await until(() => page.evaluate((name) => document.getElementById('portrait').src.endsWith(name), customName), '导入图片未加载');
+  await until(() => page.evaluate((name) => document.getElementById('portrait')?.dataset.asset.endsWith(name), customName), '导入图片未加载');
   await look(2000, 150, false);
   assert.ok((await eyeFeatures()).every((eye) => eye.hidden), '自定义图片被套用默认眼区');
   await assertNeutralBody();
   await appearance({});
-  await until(() => page.evaluate((asset) => document.getElementById('portrait').src === asset, DEFAULT_CHARACTER_ASSET), '恢复默认图片失败');
+  await until(() => page.evaluate((asset) => document.getElementById('portrait')?.dataset.asset === asset, DEFAULT_CHARACTER_ASSET), '恢复默认图片失败');
   await look(2000, 150);
   assert.ok((await eyeFeatures()).every((eye) => !eye.hidden));
   await application.evaluate(() => globalThis.__dragonGirlTest.hide());

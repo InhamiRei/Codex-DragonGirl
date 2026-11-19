@@ -204,7 +204,8 @@ try {
   const alpha = await page.evaluate(() => {
     const image = document.getElementById('portrait');
     const canvas = document.createElement('canvas');
-    canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+    canvas.width = image.naturalWidth ?? image.width;
+    canvas.height = image.naturalHeight ?? image.height;
     const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
     const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
     let clear = 0; let solidWhite = 0;
@@ -216,7 +217,7 @@ try {
     return { clear, solidWhite };
   });
   assert.ok(alpha.clear > 10000 && alpha.solidWhite > 10000, `透明背景或白色角色表面不正确：${JSON.stringify(alpha)}`);
-  console.log('✓ 素材是真透明 PNG，白发与衣服保持不透明。');
+  console.log('✓ 立绘保留透明轮廓，白发与衣服保持不透明。');
 
   // 默认贴边已单独验过；受控输入移到屏幕中部，避免与用户正在运行的右下角角色重叠。
   await application.evaluate(() => {

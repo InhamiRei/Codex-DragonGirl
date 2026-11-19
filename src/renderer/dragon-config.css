@@ -100,16 +100,12 @@
   object-fit: contain;
   filter: drop-shadow(0 0 7px #9b8fdb70);
 }
-.dragon-inactive {
-  margin-top: 10px;
-  text-align: center;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
 .dragon-gear-options {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   gap: 10px;
+  max-width: 730px;
   margin: 24px auto 0;
   padding: 3px;
 }

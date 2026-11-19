@@ -455,11 +455,12 @@ export class Dashboard {
       return true;
     }
     if (command === 'settings' || command === 'replace-settings') {
-      // 普通表单保留最新的拖动位置和瞳色，避免旧草稿覆盖另一页刚应用的外观。
+      // 普通表单保留最新的拖动位置和龙娘外观，避免旧草稿覆盖刚应用的发型与瞳色。
       const persist = (settings) => this.monitor.saveSettings(command === 'replace-settings'
         ? settings : (current) => ({
             ...settings,
             followOffsets: current.followOffsets,
+            dragonHairstyleId: current.dragonHairstyleId,
             dragonEyeId: current.dragonEyeId,
             dragonEyeColor: current.dragonEyeColor,
           }));

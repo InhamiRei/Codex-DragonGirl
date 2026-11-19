@@ -277,7 +277,7 @@ try {
   await happy();
   await restored();
   await appearance();
-  await until(() => page.evaluate(() => document.getElementById('portrait').src === 'dragon://app/assets/characters/codex-dragon-girl.png'), '默认图片未恢复');
+  await until(() => page.evaluate(() => document.getElementById('portrait')?.dataset.asset === 'dragon://app/assets/characters/codex-dragon-girl.png'), '默认图片未恢复');
   await appearance({ blinkEnabled: true });
   await happy();
   await until(async () => (await faceState()).happy, '恢复默认后没有开心');

@@ -11,7 +11,8 @@
     <!-- 角色只占据自身窗口，气泡在另一个透明窗口里独立排版。 -->
     <main id="stage" class="stage" aria-label="龙娘，可以拖动，轻点说话，右键设置">
       <div id="character" class="character">
-        <img id="portrait" alt="白发紫眼睛、带龙角的 龙娘" draggable="false">
+        <!-- 同一个底图容器承载已解码的图片或已合成的龙娘画布。 -->
+        <div id="portrait-slot"></div>
         <!-- 耳朵或头发有位移时用画布替换底图，眼睛和祈祷层仍画在上面。 -->
         <canvas id="dragon-motion" aria-hidden="true" hidden></canvas>
         <!-- 三款眼神与原画先在原生分辨率合成，缩小后不会露出旧眼线。 -->

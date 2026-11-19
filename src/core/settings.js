@@ -2,7 +2,7 @@ import { AUDIO_GROUPS, DEFAULT_EVENT_SOUNDS, audioFile } from '../shared/audio-l
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { characterById } from '../shared/characters.js';
-import { DEFAULT_DRAGON_EYE_COLOR, parseDragonEyeColor } from '../shared/dragon-gear.js';
+import { DEFAULT_DRAGON_EYE_COLOR, dragonHairstyle, parseDragonEyeColor } from '../shared/dragon-gear.js';
 
 // 旧预设迁移为相近的自选色，让现有偏好在精简选项后仍可恢复。
 const LEGACY_DRAGON_EYE_COLORS = new Map([
@@ -51,6 +51,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   expressionsEnabled: true,
   characterAsset: '',
   characterId: 'dragon',
+  dragonHairstyleId: dragonHairstyle().id,
   dragonEyeId: 'purple',
   dragonEyeColor: DEFAULT_DRAGON_EYE_COLOR,
   manualHomes: [],
@@ -139,6 +140,8 @@ export function normalizeSettings(value = {}) {
   ];
   if (d.characterAsset && !/^[a-f0-9]{32}\.(png|webp)$/.test(d.characterAsset)) d.characterAsset = '';
   d.characterId = characterById(v.characterId).id;
+  // 只接受已登记的发型编号，旧设置默认使用散发。
+  d.dragonHairstyleId = dragonHairstyle(v.dragonHairstyleId).id;
   const legacyEyeColor = LEGACY_DRAGON_EYE_COLORS.get(v.dragonEyeId);
   const eyeColor = legacyEyeColor ?? parseDragonEyeColor(v.dragonEyeColor);
   d.dragonEyeColor = eyeColor ?? DEFAULT_DRAGON_EYE_COLOR;

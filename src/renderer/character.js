@@ -10,16 +10,18 @@ import { characterByAsset, isCharacterMenuPoint, isDragonAsset } from '../shared
 import { EYE_ARTWORK } from '../shared/gaze.js';
 import { isDragonFace } from '../shared/expression.js';
 import { dragonEyeTone } from '../shared/dragon-gear.js';
-import { paintDragonPortrait, tintedDragonPortrait } from './dragon-portrait.js';
+import { loadDragonPortrait, tintedDragonPortrait } from './dragon-portrait.js';
 
 // 将短过渡计入原来的祈祷时长，中间停留在定稿姿势。
 const PRAYER_DURATION = 2400;
 const PRAYER_ENTER = 360;
 const PRAYER_EXIT = 320;
+// 半闭眼与闭眼共用眼区，合掌期间保留当前发型。
+const PRAYER_EYE_AREA = [319, 602, 718, 273];
 const bridge = window.dragonGirl;
 const stage = document.getElementById('stage');
 const character = document.getElementById('character');
-const portrait = document.getElementById('portrait');
+const portraitSlot = document.getElementById('portrait-slot');
 const prayerPortrait = document.getElementById('prayer-portrait');
 const prayerHalf = document.getElementById('prayer-half');
 const prayerHands = document.getElementById('prayer-hands');
@@ -32,11 +34,12 @@ const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const sound = new SoundEngine();
 window.__soundEngine = sound;
 let layout;
-let assetLoading = '';
+let assetLoading;
 // 用序号识别仍在解码的预览，后续表情或手势可以作废它。
 let expressionRequest = 0;
 let decodedPortrait;
 let portraitArtwork;
+let paintedAsset;
 let paintedKey;
 let mask;
 let baseMask;
@@ -57,16 +60,17 @@ let prayerProgress = null;
 let prayerFrame = 0;
 let prayerTimer = 0;
 // 每次换表情或动作帧都同步命中，切回普通图片时恢复原始透明图。
-const sprites = new CharacterSprites(character, portrait, (next) => {
+const sprites = new CharacterSprites(character, portraitSlot, (next) => {
   mask = next || baseMask;
   updateInteractive();
 });
 
 // 从原图读取一次透明度，不按白色抠图，因此白发、衣服和眼睛高光都能正常响应。
 function buildAlphaMask(image) {
+  // 在独立画布取样，避免读取显示画布切换其渲染路径，影响半透明描边。
   const canvas = document.createElement('canvas');
-  canvas.width = image.naturalWidth;
-  canvas.height = image.naturalHeight;
+  canvas.width = image.naturalWidth ?? image.width;
+  canvas.height = image.naturalHeight ?? image.height;
   const context = canvas.getContext('2d', { willReadFrequently: true });
   context.drawImage(image, 0, 0);
   const rgba = context.getImageData(0, 0, canvas.width, canvas.height).data;
@@ -127,7 +131,7 @@ async function preparePrayer() {
 
 // 只在已解码的内置龙娘可见时播放，按压、换图或关闭动态表情都会结束预览。
 function canPray() {
-  return prayerReady && isDragonAsset(layout?.asset) && isDragonAsset(decodedPortrait?.src)
+  return prayerReady && isDragonAsset(layout?.asset) && paintedAsset === layout.asset
     && layout.visible !== false && !document.hidden && activePointer === null
     && layout.appearance?.settings?.expressionsEnabled !== false;
 }
@@ -219,9 +223,8 @@ function showPrayer() {
 // 内置龙娘待机时播放局部动作，拖动、祈祷和减少动态效果时收起。
 function configureDragonMotion(nativeResolution = !dragonFaces.canvas.hidden) {
   const dragging = activePointer !== null && stage.dataset.gesture === 'dragging';
-  const image = decodedPortrait.src === layout.asset ? portraitArtwork : decodedPortrait;
-  dragonMotion.configure(image, layout, reducedMotion.matches || prayerProgress !== null || dragging,
-    activePointer !== null, nativeResolution);
+  const blocked = paintedAsset !== layout.asset || reducedMotion.matches || prayerProgress !== null || dragging;
+  dragonMotion.configure(portraitArtwork, layout, blocked, activePointer !== null, nativeResolution);
 }
 
 // 眼神和收耳在同一帧合成，结束或切换表情时交回待机姿态。
@@ -253,78 +256,85 @@ function configureEyes() {
   configureDragonMotion();
   const pressed = activePointer !== null;
   const gazePose = { ...pose, scaleX: pose.scaleX * flip.value };
-  const image = decodedPortrait.src === layout.asset ? portraitArtwork : decodedPortrait;
-  eyes.configure(image, layout, gazePose, reducedMotion.matches, pressed);
+  // 解码完成以前保留上一张立绘，等新画面提交后再让眼区动作接管。
+  if (paintedAsset === layout.asset) eyes.configure(portraitArtwork, layout, gazePose, reducedMotion.matches, pressed);
+  else eyes.reset();
   sprites.configure(layout, reducedMotion.matches, pressed, gazePose);
 }
 
-// 只有角色或瞳色变化才需要更新画面。
+// 发型随立绘地址一起参与缓存，瞳色单独参与绘制。
 function portraitKey(model) {
   const tone = isDragonAsset(model.asset) ? dragonEyeTone(model.appearance?.settings) : null;
   return `${model.asset}|${tone ?? ''}`;
 }
 
-// 默认直接显示角色原图，只有内置龙娘的自选瞳色需要额外绘制。
-async function preparePortrait(model) {
-  const { asset } = model;
-  const raw = decodedPortrait?.src === asset ? decodedPortrait : new Image();
-  if (raw.src !== asset) {
-    raw.src = asset;
-    await raw.decode();
-  }
-  const tone = isDragonAsset(asset) ? dragonEyeTone(model.appearance?.settings) : null;
-  return { raw, image: tintedDragonPortrait(raw, tone), tone };
+// 内置龙娘复用合成画布。普通图片解码后直接显示，两种来源都只加载一次。
+async function preparePortrait(asset) {
+  if (isDragonAsset(asset)) return loadDragonPortrait(asset);
+  const image = new Image();
+  image.src = asset;
+  await image.decode();
+  return image;
 }
 
-// 同时提交画面与透明命中；只调色时复用原来的透明度。
-function displayPortrait({ raw, image, tone }, key) {
+// 同时提交画面与透明命中，只调瞳色时复用透明度。
+function displayPortrait(raw, model, key) {
+  const { asset } = model;
+  const dragon = isDragonAsset(asset);
+  const tone = dragon ? dragonEyeTone(model.appearance?.settings) : null;
   const geometryChanged = !baseMask || raw !== decodedPortrait;
   const nextMask = geometryChanged ? buildAlphaMask(raw) : baseMask;
-  if (portraitArtwork instanceof HTMLCanvasElement) portraitArtwork.remove();
-  if (portrait.src !== raw.src) portrait.src = raw.src;
+  const image = tintedDragonPortrait(raw, tone);
+  image.id = 'portrait';
+  image.dataset.asset = asset;
+  if (dragon) {
+    image.dataset.tone = tone ?? 'original';
+    image.setAttribute('aria-hidden', 'true');
+  } else {
+    const definition = characterByAsset(asset);
+    image.alt = definition ? `${definition.name}桌面角色` : '自定义桌面角色';
+    image.draggable = false;
+  }
+  portraitSlot.replaceChildren(image);
   decodedPortrait = raw;
   portraitArtwork = image;
-  if (image !== raw) {
-    portraitArtwork.id = 'dragon-tinted-portrait';
-    portraitArtwork.dataset.tone = tone;
-    portraitArtwork.setAttribute('aria-hidden', 'true');
-    portrait.after(portraitArtwork);
-  }
-  if (isDragonAsset(raw.src) && prayerReady) preparePrayerFrames(tone);
+  paintedAsset = asset;
+  if (dragon && prayerReady) preparePrayerFrames(tone);
   paintedKey = key;
   if (geometryChanged) mask = baseMask = nextMask;
   if (prayerProgress !== null) paintPrayer(prayerProgress);
 }
 
-// 闭眼像素只绘制一次，半闭帧在瞳色改变时直接重绘到原画布。
+// 两帧都只覆盖眼区，半闭帧随当前瞳色重绘。
 function preparePrayerFrames(tone) {
   if (prayerPortrait.width !== EYE_ARTWORK.width) {
     prayerPortrait.width = EYE_ARTWORK.width;
     prayerPortrait.height = EYE_ARTWORK.height;
-    // 只覆盖校准过的闭眼区域，其他部位由原版立绘和手部图层绘制。
-    const area = [319, 602, 718, 273];
-    prayerPortrait.getContext('2d').drawImage(prayerEyes[0], ...area, ...area);
+    prayerPortrait.getContext('2d').drawImage(prayerEyes[0], ...PRAYER_EYE_AREA, ...PRAYER_EYE_AREA);
   }
   if (prayerMotionReady && prayerTone !== tone) {
-    paintDragonPortrait(prayerHalf, prayerEyes[1], tone);
+    const artwork = tintedDragonPortrait(prayerEyes[1], tone);
+    const context = prayerHalf.getContext('2d');
+    context.clearRect(...PRAYER_EYE_AREA);
+    context.drawImage(artwork, ...PRAYER_EYE_AREA, ...PRAYER_EYE_AREA);
     prayerTone = tone;
   }
 }
 
-// 先完整解码再替换画面与命中图，快速切换图片时丢弃过期结果，避免错套默认眼区。
+// 只提交最后一次解码请求，在调色和读取命中图以前丢弃过期结果。
 async function loadPortrait(model, key) {
-  assetLoading = key;
+  const request = assetLoading = { key };
   try {
-    const result = await preparePortrait(model);
-    if (portraitKey(layout) !== key) return;
-    displayPortrait(result, key);
+    const raw = await preparePortrait(model.asset);
+    if (assetLoading !== request) return;
+    displayPortrait(raw, model, key);
     configureEyes();
     paintCharacter();
     routeCursor(lastCursor);
   } catch {
-    if (portraitKey(layout) === key) bridge.assetError();
+    if (assetLoading === request) bridge.assetError();
   } finally {
-    if (assetLoading === key) assetLoading = '';
+    if (assetLoading === request) assetLoading = null;
   }
 }
 
@@ -346,10 +356,10 @@ function applyLayout(model) {
   if (model.appearance?.settings) sound.configure(model.appearance.settings);
   stage.dataset.status = model.appearance?.status || 'idle';
   const definition = characterByAsset(model.asset);
-  portrait.alt = definition ? `${definition.name}桌面角色` : '自定义桌面角色';
   stage.setAttribute('aria-label', `${definition?.name || '桌面角色'}，可以拖动，轻点说话，右键切换角色`);
   const artworkKey = portraitKey(model);
-  if (paintedKey !== artworkKey && assetLoading !== artworkKey) void loadPortrait(model, artworkKey);
+  if (paintedKey === artworkKey) assetLoading = null;
+  else if (assetLoading?.key !== artworkKey) void loadPortrait(model, artworkKey);
   paintPose(pose);
   character.style.left = `${model.rect.x}px`;
   character.style.top = `${model.rect.y}px`;
@@ -477,7 +487,7 @@ function finishPointer(event, cancelled, notify = true) {
 
 // 局部表情只对可见的内置龙娘开放，解码前后都检查当前角色和手势。
 function canPreviewDragonFace() {
-  return isDragonAsset(layout?.asset) && decodedPortrait?.src === layout.asset
+  return isDragonAsset(layout?.asset) && paintedAsset === layout.asset
     && layout.visible !== false && !document.hidden && !layout.praying && activePointer === null
     && layout.appearance?.settings?.expressionsEnabled !== false;
 }
@@ -506,8 +516,8 @@ async function showExpression(message) {
 // 命中图先于窗口 ready 信号建立，启动时也不会短暂拦截透明区域。
 async function start() {
   const model = await bridge.bootstrap();
-  const [picture] = await Promise.all([preparePortrait(model), eyes.prepareSad(), preparePrayer()]);
-  displayPortrait(picture, portraitKey(model));
+  const [picture] = await Promise.all([preparePortrait(model.asset), eyes.prepareSad(), preparePrayer()]);
+  displayPortrait(picture, model, portraitKey(model));
   applyLayout(model);
   stage.dataset.gesture = 'idle';
   bridge.onSound((event) => {

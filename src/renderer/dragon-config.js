@@ -1,15 +1,15 @@
-import { DRAGON_GEAR, dragonEyeTone } from '../shared/dragon-gear.js';
-import { loadOriginalDragonPortrait, paintDragonPortrait } from './dragon-portrait.js';
+import { DRAGON_GEAR, dragonEyeTone, dragonHairstyle } from '../shared/dragon-gear.js';
+import { loadDragonPortrait, paintDragonPortrait } from './dragon-portrait.js';
 
 const ASSET_ORIGIN = 'dragon://app/';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-// 连线终点用原版立绘的像素坐标，随预览同比缩放。
+// 连线落在各款发型都露出的部件上，发型连线指向刘海。
 const GEAR_TARGETS = {
-  horns: [255, 296],
+  horns: [385, 235],
   eyes: [420, 746],
-  hairpin: [1180, 574],
-  clothes: [918, 1138],
+  hair: [1001, 444],
+  clothes: [780, 1130],
 };
 
 // 四张分类卡和带缩略图的装备选项共用布局。
@@ -27,7 +27,7 @@ function gearView(className, tagName, item, label = item.name) {
   name.textContent = label;
   visual.append(image);
   tile.append(visual, name);
-  return { tile, visual };
+  return { tile, visual, image };
 }
 
 // 连线作为卡片的装饰，延伸到立绘且不会拦截点击或键盘操作。
@@ -44,7 +44,7 @@ function addGearLink(tile) {
   return { link, line, dot };
 }
 
-// 四角分类展开对应装备，瞳孔同时提供原色和自选色。
+// 四角分类展开对应装备，发型和瞳色可以独立切换。
 export class DragonConfigView {
   // 仅保存区块的引用，装备页首次打开前不请求缩略图。
   constructor(root, { save, toast }) {
@@ -54,7 +54,6 @@ export class DragonConfigView {
     this.columns = [root.querySelector('#dragon-equipment-left'), root.querySelector('#dragon-equipment-right')];
     this.options = root.querySelector('#dragon-gear-options');
     this.portrait = root.querySelector('#dragon-config-portrait');
-    this.inactive = root.querySelector('#dragon-config-inactive');
   }
 
   // 首次进入时创建四张分类卡，再次进入时收起已展开的选项。
@@ -62,19 +61,20 @@ export class DragonConfigView {
     if (!this.slots) {
       this.slots = new Map();
       for (const [index, slot] of DRAGON_GEAR.entries()) {
-        const { tile, visual } = gearView('dragon-slot', 'button', slot.choices[0], slot.label);
+        const { tile, visual, image } = gearView('dragon-slot', 'button', slot.choices[0], slot.label);
         tile.dataset.slot = slot.id;
         tile.setAttribute('aria-controls', this.options.id);
         tile.setAttribute('aria-expanded', 'false');
         tile.addEventListener('click', () => this.toggleSlot(slot));
-        // 只有瞳孔需要在分类卡上标出用户选中的颜色。
-        if (slot.setting) {
+        // 瞳孔附加自选色标记，发型直接显示当前款式的缩略图。
+        if (slot.id === 'eyes') {
           this.eyeSwatch = document.createElement('span');
           this.eyeSwatch.className = 'dragon-gear-swatch';
           this.eyeSwatch.hidden = true;
           this.eyeSwatch.setAttribute('aria-hidden', 'true');
           visual.append(this.eyeSwatch);
         }
+        if (slot.id === 'hair') this.hairIcon = image;
         const left = index < 2;
         this.columns[left ? 0 : 1].append(tile);
         this.slots.set(slot.id, { tile, ...addGearLink(tile), left });
@@ -110,25 +110,41 @@ export class DragonConfigView {
     this.options.hidden = !this.activeSlot;
     this.options.replaceChildren();
     this.color = null;
+    this.hairOptions = null;
     if (this.activeSlot) {
       this.slots.get(slot.id).tile.setAttribute('aria-expanded', 'true');
       this.options.setAttribute('aria-label', '选择' + slot.label);
-      if (slot.setting) {
+      if (slot.id === 'eyes') {
         this.showEyeOptions(slot);
+      } else if (slot.id === 'hair') {
+        this.showHairstyleOptions(slot);
       } else {
         const { tile } = gearView('dragon-gear-option', 'div', slot.choices[0]);
         tile.dataset.selected = '';
         this.options.append(tile);
       }
+      if (this.pending) this.setOptionsDisabled(true);
     }
     this.update(this.settings);
+  }
+
+  // 每张发型缩略图都是可用键盘操作的按钮，已选款式无需再次保存。
+  showHairstyleOptions(slot) {
+    this.hairOptions = new Map();
+    for (const item of slot.choices) {
+      const { tile } = gearView('dragon-gear-option', 'button', item);
+      tile.addEventListener('click', () => {
+        if (tile.getAttribute('aria-pressed') !== 'true') void this.commit({ slotId: slot.id, itemId: item.id });
+      });
+      this.hairOptions.set(item.id, tile);
+      this.options.append(tile);
+    }
   }
 
   // 原色卡可一键恢复紫瞳，自选色卡单独打开原生调色板。
   showEyeOptions(slot) {
     const [original, custom] = slot.choices;
     const { tile: preset } = gearView('dragon-gear-option', 'button', original);
-    preset.disabled = !!this.pending;
     preset.addEventListener('click', () => {
       if (preset.getAttribute('aria-pressed') !== 'true') void this.commit({ slotId: slot.id, itemId: original.id });
     });
@@ -143,7 +159,6 @@ export class DragonConfigView {
     const input = document.createElement('input');
     input.id = 'dragon-eye-color';
     input.type = 'color';
-    input.disabled = !!this.pending;
     // 拖动时更新立绘，选定颜色时直接应用到桌宠。
     input.addEventListener('input', () => {
       if (this.color?.input !== input) return;
@@ -158,11 +173,18 @@ export class DragonConfigView {
     this.color = { preset, picker, chip, input };
   }
 
-  // 只有角色或瞳色变化才更新相应控件，额度推送不重写配置页。
+  // 只在外观变化时更新缩略图、选中状态和立绘，额度推送不重写控件。
   update(settings) {
     this.settings = settings;
-    const inactiveHidden = settings.characterId === 'dragon' && !settings.characterAsset;
-    if (this.inactive.hidden !== inactiveHidden) this.inactive.hidden = inactiveHidden;
+    const hairstyle = dragonHairstyle(settings.dragonHairstyleId);
+    const icon = ASSET_ORIGIN + hairstyle.icon;
+    if (this.hairIcon.src !== icon) this.hairIcon.src = icon;
+    for (const [id, tile] of this.hairOptions ?? []) {
+      const selected = id === hairstyle.id;
+      if (tile.getAttribute('aria-pressed') === String(selected)) continue;
+      tile.toggleAttribute('data-selected', selected);
+      tile.setAttribute('aria-pressed', String(selected));
+    }
     const savedTone = dragonEyeTone(settings);
     if (this.eyeTone !== savedTone) {
       this.eyeTone = savedTone;
@@ -185,33 +207,46 @@ export class DragonConfigView {
         picker.toggleAttribute('data-selected', tone !== null);
       }
     }
-    if (this.previewTone !== tone) {
-      this.previewTone = tone;
+    if (this.preview?.hairstyle !== hairstyle || this.preview?.tone !== tone) {
+      const preview = this.preview = { hairstyle, tone };
       cancelAnimationFrame(this.previewFrame);
-      this.previewFrame = requestAnimationFrame(() => void this.updatePortrait(tone));
+      this.previewFrame = requestAnimationFrame(() => void this.updatePortrait(preview));
     }
   }
 
-  // 直接绘制原画；快速选色时只显示最后一次预览。
-  async updatePortrait(tone) {
+  // 立绘载入期间若更换发型或瞳色，只绘制最新的预览请求。
+  async updatePortrait(preview) {
+    const { hairstyle, tone } = preview;
     try {
-      const original = await loadOriginalDragonPortrait();
-      if (this.previewTone !== tone) return;
-      paintDragonPortrait(this.portrait, original, tone);
+      const portrait = await loadDragonPortrait(ASSET_ORIGIN + hairstyle.image);
+      if (this.preview !== preview) return;
+      paintDragonPortrait(this.portrait, portrait, tone);
+      this.portrait.dataset.hairstyle = hairstyle.id;
       this.portrait.dataset.tone = tone ?? 'original';
     } catch {
-      if (this.previewTone === tone) {
-        this.previewTone = undefined;
+      if (this.preview === preview) {
+        this.preview = null;
         this.toast('龙娘预览暂时无法加载');
       }
     }
   }
 
+  // 保存时标记按钮暂不可用，保留卡片亮度和键盘焦点。
+  setOptionsDisabled(disabled) {
+    for (const button of this.options.querySelectorAll('button')) {
+      if (disabled) button.setAttribute('aria-disabled', 'true');
+      else button.removeAttribute('aria-disabled');
+    }
+    // 原生调色板暂时禁止打开，避免保存期间编辑另一种颜色。
+    if (this.color) this.color.input.disabled = disabled;
+  }
+
   // 保存成功后只刷新选中状态和预览，已提交的设置不受切换类别影响。
   async commit(selection) {
+    // 鼠标和键盘共用这道检查，保存期间的重复操作不会再次写入。
     if (this.pending) return;
     this.pending = true;
-    if (this.color) this.color.input.disabled = this.color.preset.disabled = true;
+    this.setOptionsDisabled(true);
     this.options.setAttribute('aria-busy', 'true');
     try {
       const settings = await this.save(selection);
@@ -223,7 +258,7 @@ export class DragonConfigView {
       this.update(this.settings);
     } finally {
       this.pending = false;
-      if (this.color) this.color.input.disabled = this.color.preset.disabled = false;
+      this.setOptionsDisabled(false);
       this.options.removeAttribute('aria-busy');
     }
   }

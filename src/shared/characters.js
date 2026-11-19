@@ -1,12 +1,16 @@
+import { DRAGON_HAIRSTYLES, dragonHairstyle } from './dragon-gear.js';
+
 const ORIGIN = 'dragon://app/';
 
 // 内置角色以稳定编号区分；自定义图片仍独立保存，不覆盖任何内置原画。
 export const CHARACTERS = Object.freeze([
-  Object.freeze({ id: 'dragon', name: '龙娘', image: 'assets/characters/codex-dragon-girl.png' }),
+  Object.freeze({ id: 'dragon', name: '龙娘', image: dragonHairstyle().image }),
   Object.freeze({ id: 'maro', name: '麻吕', image: 'assets/characters/maro/idle.png' }),
 ]);
 export const DEFAULT_CHARACTER_ASSET = ORIGIN + CHARACTERS[0].image;
 export const MARO_ASSET = ORIGIN + CHARACTERS[1].image;
+// 内置发型沿用原画坐标，共用眼区、表情和发饰点击区域。
+const DRAGON_ASSETS = new Set(DRAGON_HAIRSTYLES.map(({ image }) => ORIGIN + image));
 export const HAIR_FRAMES = 30;
 export const MARO_FRAME_SIZE = 1254;
 // 动作帧使用原生 1254 像素的无损 WebP，首尾复用待机图，播放仍为三十帧。
@@ -40,9 +44,9 @@ export function characterById(id) {
   return CHARACTERS.find((character) => character.id === id) || CHARACTERS[0];
 }
 
-// 只有内置原画使用龙娘标定的眼区、表情和发饰交互。
+// 只有内置龙娘的立绘使用标定的眼区、表情和发饰交互。
 export function isDragonAsset(asset) {
-  return asset === DEFAULT_CHARACTER_ASSET;
+  return DRAGON_ASSETS.has(asset);
 }
 
 // 导入图片不会借用内置角色的动画。

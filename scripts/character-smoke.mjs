@@ -186,7 +186,7 @@ try {
   await until(async () => await state() === null, '切换龙娘后仍显示麻吕');
   await until(() => page.evaluate(() => {
     const image = document.getElementById('portrait');
-    return image.complete && image.naturalWidth === 1330;
+    return image instanceof HTMLCanvasElement && image.width === 1330;
   }), '龙娘原画未解码');
   await page.bringToFront();
   const bounds = await application.evaluate(() => globalThis.__dragonGirlTest.windows.get('character').getContentBounds());

@@ -5,9 +5,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 import { DEFAULT_CHARACTER_ASSET, MARO_ASSET } from '../src/shared/characters.js';
+import { DRAGON_HAIRSTYLES } from '../src/shared/dragon-gear.js';
+import { prepareHairstyleActions, verifyHairstyleActions } from './dragon-hairstyle-actions.mjs';
+import {
+  captureFixedPortrait, verifyFixedPortrait, verifyRightPonytail, verifyStraightBangsPortrait,
+} from './dragon-hairstyle-pixels.mjs';
 import { readReleaseVersion } from './release-payload.mjs';
 
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
+const hairstyleNames = DRAGON_HAIRSTYLES.map(({ name }) => name);
+// 散发与单马尾已有独立的初始切换和保存检查，其余款式共用逐款验收。
+const additionalHairstyles = DRAGON_HAIRSTYLES.filter(({ id }) => id !== 'loose' && id !== 'ponytail');
+const ponytailAsset = 'dragon://app/assets/characters/codex-dragon-girl-ponytail.png';
 const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-dragon-config-'));
 const data = path.join(temporary, 'data');
@@ -42,11 +51,11 @@ async function boot() {
   return { dashboard, pet };
 }
 
-// 确认桌宠加载的是实际原图，而不是旧配置中的派生立绘。
+// 等待相应发型实际提交，同时确认角色原生画幅。
 async function waitForPortrait(page, asset, width = 1330) {
   await page.waitForFunction(({ asset, width }) => {
     const image = document.getElementById('portrait');
-    return image.src === asset && image.complete && image.naturalWidth === width;
+    return image?.dataset.asset === asset && (image.naturalWidth ?? image.width) === width;
   }, { asset, width });
 }
 
@@ -72,7 +81,22 @@ async function irisColor(locator) {
   });
 }
 
-// 分别检查固定装备和瞳孔的选项数量及排列顺序。
+// 逐张点击缩略图，核对配置页和桌宠显示同一幅画面，并与散发比对固定部位。
+async function verifyAdditionalHairstyles(dashboard, pet, options, tone) {
+  const artwork = pet.locator(tone === 'original' ? '#portrait[data-tone="original"]' : '#portrait[data-tone="' + tone + '"]');
+  const pixels = {};
+  for (const { id, name, image } of additionalHairstyles) {
+    await options.getByRole('button', { name, exact: true }).click();
+    const preview = dashboard.locator('#dragon-config-portrait[data-hairstyle="' + id + '"][data-tone="' + tone + '"]');
+    await preview.waitFor({ state: 'visible' });
+    await waitForPortrait(pet, 'dragon://app/' + image);
+    assert.deepEqual(await portraitDigest(preview), await portraitDigest(artwork), name + '在桌宠与配置页的画面不一致');
+    pixels[id] = id === 'straight-bangs' ? await verifyStraightBangsPortrait(preview) : await verifyFixedPortrait(preview);
+  }
+  return pixels;
+}
+
+// 分别检查固定装备、发型和瞳孔的选项数量及排列顺序。
 async function openGearOptions(page, id, ...names) {
   const slot = page.locator('.dragon-slot[data-slot="' + id + '"]');
   if (await slot.getAttribute('aria-expanded') !== 'true') await slot.click();
@@ -89,7 +113,7 @@ async function waitForGearLinks(page) {
     const preview = document.querySelector('#dragon-config-portrait');
     const portrait = preview.getBoundingClientRect();
     const scale = portrait.width / preview.width;
-    const targets = { horns: [255, 296], eyes: [420, 746], hairpin: [1180, 574], clothes: [918, 1138] };
+    const targets = { horns: [385, 235], eyes: [420, 746], hair: [1001, 444], clothes: [780, 1130] };
     const cards = [...document.querySelectorAll('.dragon-slot')];
     return cards.length === 4 && cards.every((card) => {
       const [x, y] = targets[card.dataset.slot];
@@ -112,25 +136,80 @@ async function verifyStableGear(page) {
     const audit = window.__gearAudit = { pushed: 0, mutations: 0 };
     const observer = new MutationObserver((records) => { audit.mutations += records.length; });
     observer.observe(document.querySelector('#dragon-config'), { subtree: true, attributes: true, childList: true });
-    window.dragonGirl.onMonitor(() => audit.pushed++);
+    const unsubscribe = window.dragonGirl.onMonitor(() => audit.pushed++);
+    // 每次验收结束后释放观察器，瞳色和发型各自统计新的推送。
+    audit.stop = () => {
+      observer.disconnect();
+      unsubscribe();
+      delete window.__gearAudit;
+    };
   });
+  try {
+    await application.evaluate(() => {
+      const { monitor } = globalThis.__dragonGirlApp;
+      for (let index = 0; index < 10; index++) monitor.emit('update', monitor.snapshot());
+    });
+    await page.waitForFunction(() => window.__gearAudit.pushed >= 10);
+    assert.equal(await page.evaluate(() => window.__gearAudit.mutations), 0);
+  } finally {
+    await page.evaluate(() => window.__gearAudit.stop());
+  }
+}
+
+// 暂停一次真实保存，逐张检查等待期间的透明度和键盘焦点。
+async function switchHairstyleWithoutFlicker(page, option) {
+  const row = page.locator('#dragon-gear-options');
+  const idleOpacity = await row.getByRole('button').evaluateAll((buttons) =>
+    buttons.map((button) => getComputedStyle(button).opacity));
   await application.evaluate(() => {
-    const { monitor } = globalThis.__dragonGirlApp;
-    for (let index = 0; index < 10; index++) monitor.emit('update', monitor.snapshot());
+    const { dashboard } = globalThis.__dragonGirlApp;
+    const select = dashboard.selectDragonGear;
+    const save = globalThis.__hairstyleSave = { calls: 0 };
+    const gate = new Promise((resolve) => {
+      save.release = () => {
+        dashboard.selectDragonGear = select;
+        resolve();
+      };
+    });
+    dashboard.selectDragonGear = async (selection) => {
+      save.calls++;
+      await gate;
+      return select.call(dashboard, selection);
+    };
   });
-  await page.waitForFunction(() => window.__gearAudit.pushed >= 10);
-  assert.equal(await page.evaluate(() => window.__gearAudit.mutations), 0);
+  try {
+    await option.focus();
+    await page.keyboard.press('Space');
+    await page.locator('#dragon-gear-options[aria-busy="true"]').waitFor({ state: 'visible' });
+    const savingOpacity = await row.getByRole('button').evaluateAll((buttons) =>
+      buttons.map((button) => getComputedStyle(button).opacity));
+    assert.deepEqual(savingOpacity, idleOpacity, '保存时整排发型卡片的透明度不应变化');
+    assert.equal(await option.evaluate((button) => button === document.activeElement), true, '保存期间应保留键盘焦点');
+    assert.equal(await option.getAttribute('aria-disabled'), 'true');
+    // 再触发键盘与点击事件，用同一 IPC 通道确认重复操作没有发出保存请求。
+    await page.keyboard.press('Space');
+    await option.dispatchEvent('click');
+    await page.evaluate(async () => { await window.dragonGirl.command('snapshot'); });
+    assert.equal(await application.evaluate(() => globalThis.__hairstyleSave.calls), 1);
+  } finally {
+    await application.evaluate(() => {
+      globalThis.__hairstyleSave.release();
+      delete globalThis.__hairstyleSave;
+    });
+  }
 }
 
 try {
   await fs.mkdir(path.join(home, '.codex'), { recursive: true });
   await fs.mkdir(data);
-  // 使用已保存的旧版发型配置启动，验证只迁移保留的瞳色和其他偏好。
+  // 使用已移除的发型及旧版配置启动，确认会回到散发并迁移保留的瞳色。
   const settingsFile = path.join(data, 'settings.json');
   const retiredSettings = { dragonHairId: 'half-up', dragonFrontHairId: 'high-ponytail',
     dragonBackHairId: 'side-braid', dragonHornsVisible: false };
-  await fs.writeFile(settingsFile, JSON.stringify({ mode: 'desktop', soundEnabled: false, motion: false,
-    blinkEnabled: false, eyeTracking: false, dragonEyeId: 'green', ...retiredSettings }));
+  const fixture = { mode: 'desktop', soundEnabled: false, motion: false, blinkEnabled: false, eyeTracking: false };
+  await fs.writeFile(settingsFile, JSON.stringify({
+    ...fixture, dragonHairstyleId: 'shoulder-bob', dragonEyeId: 'green', ...retiredSettings,
+  }));
   const version = await readReleaseVersion(root);
   let { dashboard, pet } = await boot();
   await dashboard.waitForFunction((version) => document.querySelector('.brand #app-version').textContent === 'v' + version, version);
@@ -138,8 +217,10 @@ try {
   for (const key of Object.keys(retiredSettings)) assert.equal(Object.hasOwn(oldSettings, key), false, key);
   assert.equal(oldSettings.dragonEyeId, 'custom');
   assert.equal(oldSettings.dragonEyeColor, '#73b29c');
+  assert.equal(oldSettings.dragonHairstyleId, 'loose');
   await waitForPortrait(pet, DEFAULT_CHARACTER_ASSET);
-  await pet.locator('#dragon-tinted-portrait[data-tone="#73b29c"]').waitFor({ state: 'visible' });
+  await pet.locator('#portrait[data-tone="#73b29c"]').waitFor({ state: 'visible' });
+  assert.equal(await pet.locator('#portrait-slot > img').count(), 0, '内置龙娘不应再加载一张隐藏底图');
 
   for (const nav of await dashboard.locator('.main-nav button').all()) {
     await nav.click();
@@ -150,9 +231,11 @@ try {
   await config.click();
   assert.equal(await dashboard.locator('#subtitle').textContent(), '个性化你的龙娘');
   assert.deepEqual(await dashboard.locator('#dragon-equipment-left .dragon-slot').allTextContents(), ['龙角', '瞳孔']);
-  assert.deepEqual(await dashboard.locator('#dragon-equipment-right .dragon-slot').allTextContents(), ['发饰', '服饰']);
+  assert.deepEqual(await dashboard.locator('#dragon-equipment-right .dragon-slot').allTextContents(), ['发型', '服饰']);
   assert.equal(await dashboard.locator('button.dragon-slot').count(), 4);
-  await openGearOptions(dashboard, 'hairpin', 'GPT发饰');
+  await openGearOptions(dashboard, 'hair', ...hairstyleNames);
+  await dashboard.waitForFunction(() => [...document.querySelectorAll('#dragon-gear-options img')]
+    .every((image) => image.complete && image.naturalWidth === 192 && image.naturalHeight === 192));
   await openGearOptions(dashboard, 'clothes', 'GPT白衣');
   await openGearOptions(dashboard, 'horns', 'GPT龙角');
   const preview = dashboard.locator('#dragon-config-portrait');
@@ -165,13 +248,13 @@ try {
   assert.equal(await picker.getAttribute('data-selected'), '');
   await preset.click();
   await dashboard.locator('#dragon-config-portrait[data-tone="original"]').waitFor({ state: 'visible' });
-  await pet.locator('#dragon-tinted-portrait').waitFor({ state: 'detached' });
+  await pet.locator('#portrait[data-tone^="#"]').waitFor({ state: 'detached' });
   // 恢复原色和收起选项时，只更新配置页里的状态。
   await idleOptions.waitFor({ state: 'visible' });
   assert.equal(await toast.isHidden(), true);
   assert.equal(await preset.getAttribute('aria-pressed'), 'true');
   assert.equal(await picker.getAttribute('data-selected'), null);
-  const original = pet.locator('#portrait');
+  const original = pet.locator('#portrait[data-tone="original"]');
   assert.equal(await original.evaluate((image) => getComputedStyle(image).opacity), '1');
   assert.deepEqual(await portraitDigest(preview), await portraitDigest(original));
   assert.equal(await preview.evaluate((canvas) => getComputedStyle(canvas).filter.startsWith('drop-shadow(')
@@ -197,6 +280,16 @@ try {
       && bottomLeft.top - topLeft.bottom > 40
       && wardrobe.scrollWidth <= wardrobe.clientWidth;
   }), true);
+  // 发型卡允许换行，最小窗口也要完整可见和可点。
+  const compactOptions = await openGearOptions(dashboard, 'hair', ...hairstyleNames);
+  assert.ok(await compactOptions.evaluate((row) => {
+    const { left, right } = row.getBoundingClientRect();
+    return [...row.querySelectorAll('button')].every((button) => {
+      const bounds = button.getBoundingClientRect();
+      return bounds.left >= left && bounds.right <= right && button.clientWidth >= 48;
+    });
+  }));
+  await dashboard.getByRole('button', { name: '发型', exact: true }).click();
   await waitForGearLinks(dashboard);
   await window.evaluate((dashboardWindow) => dashboardWindow.setSize(1160, 820));
   await dashboard.waitForFunction(() => innerWidth > 1100);
@@ -204,6 +297,34 @@ try {
   const artifacts = path.join(root, '.artifacts');
   await fs.mkdir(artifacts, { recursive: true });
   await dashboard.screenshot({ path: path.join(artifacts, 'dragon-config.png'), animations: 'disabled' });
+
+  // 先用散发和单马尾核对切换后中央预览和桌宠使用同一张立绘。
+  const originalDigest = await portraitDigest(original);
+  await openGearOptions(dashboard, 'hair', ...hairstyleNames);
+  const loose = options.getByRole('button', { name: '散发', exact: true });
+  const ponytail = options.getByRole('button', { name: '单马尾', exact: true });
+  const ponytailPreview = dashboard.locator('#dragon-config-portrait[data-hairstyle="ponytail"]');
+  assert.equal(await loose.getAttribute('aria-pressed'), 'true');
+  await captureFixedPortrait(preview);
+  await verifyStableGear(dashboard);
+  await switchHairstyleWithoutFlicker(dashboard, ponytail);
+  await ponytailPreview.waitFor({ state: 'visible' });
+  await waitForPortrait(pet, ponytailAsset);
+  await idleOptions.waitFor({ state: 'visible' });
+  assert.equal(await ponytail.getAttribute('aria-disabled'), null);
+  console.log('发型缩略图通过后台刷新、保存期间透明度、键盘焦点与重复操作验证。');
+  assert.equal(await ponytail.getAttribute('aria-pressed'), 'true');
+  assert.match(await dashboard.locator('.dragon-slot[data-slot="hair"] img').getAttribute('src'), /hair-ponytail\.webp$/);
+  const ponytailDigest = await portraitDigest(original);
+  assert.notDeepEqual(ponytailDigest, originalDigest);
+  assert.deepEqual(await portraitDigest(ponytailPreview), ponytailDigest);
+  const defaultPixels = { ponytail: await verifyRightPonytail(ponytailPreview) };
+  await dashboard.screenshot({ path: path.join(artifacts, 'dragon-config-ponytail.png'), animations: 'disabled' });
+  Object.assign(defaultPixels, await verifyAdditionalHairstyles(dashboard, pet, options, 'original'));
+  await loose.click();
+  await dashboard.locator('#dragon-config-portrait[data-hairstyle="loose"]').waitFor({ state: 'visible' });
+  await waitForPortrait(pet, DEFAULT_CHARACTER_ASSET);
+  assert.deepEqual(await portraitDigest(preview), originalDigest);
 
   // 悬停的服饰卡整块填色，展开的选项与立绘留出间距。
   await window.evaluate((dashboardWindow) => dashboardWindow.focus());
@@ -236,7 +357,7 @@ try {
   }), true);
   const custom = '#e14b58';
   const customPreview = '#dragon-config-portrait[data-tone="' + custom + '"]';
-  const tinted = '#dragon-tinted-portrait[data-tone="' + custom + '"]';
+  const tinted = '#portrait[data-tone="' + custom + '"]';
   const purple = await irisColor(original);
   await colorInput.evaluate((input, color) => {
     input.value = color;
@@ -244,7 +365,7 @@ try {
   }, custom);
   await dashboard.locator(customPreview).waitFor({ state: 'visible' });
   assert.deepEqual(await irisColor(original), purple);
-  assert.equal(await pet.locator('#dragon-tinted-portrait').count(), 0);
+  assert.equal(await pet.locator('#portrait[data-tone^="#"]').count(), 0);
   // 用量索引维持原来的采集计时器，瞳色走独立的写入路径。
   await application.evaluate(() => {
     const { monitor } = globalThis.__dragonGirlApp;
@@ -259,38 +380,106 @@ try {
   assert.equal(await picker.getAttribute('data-selected'), '');
   assert.deepEqual(await irisColor(preview), await irisColor(pet.locator(tinted)));
   assert.notDeepEqual(await irisColor(preview), purple);
-  for (const [slotId, itemId] of [['front-hair', 'half-up'], ['back-hair', 'high-ponytail'], ['hairpin', 'hide'], ['horns', 'hide']]) {
+  for (const [slotId, itemId] of [['front-hair', 'half-up'], ['back-hair', 'high-ponytail'], ['hairpin', 'hide'],
+    ['horns', 'hide'], ['hair', '../portrait.png']]) {
     await assert.rejects(dashboard.evaluate((selection) => window.dragonGirl.command('dragon-equipment', selection),
       { slotId, itemId }), /找不到可切换的龙娘装备/);
   }
 
-  // 合掌沿用原画动作素材，切到麻吕时保留龙娘的已存瞳色。
+  // 发型与自选瞳色同时应用，保存另一页的旧草稿时保留最新的外观。
+  await openGearOptions(dashboard, 'hair', ...hairstyleNames);
+  await captureFixedPortrait(preview);
+  const customPixels = await verifyAdditionalHairstyles(dashboard, pet, options, custom);
+  await ponytail.click();
+  await ponytailPreview.waitFor({ state: 'visible' });
+  await waitForPortrait(pet, ponytailAsset);
+  await idleOptions.waitFor({ state: 'visible' });
+  assert.deepEqual(await portraitDigest(ponytailPreview), await portraitDigest(pet.locator(tinted)));
+  customPixels.ponytail = await verifyRightPonytail(ponytailPreview);
+  const preferences = await dashboard.evaluate((settings) => window.dragonGirl.command('settings', settings), oldSettings);
+  assert.equal(preferences.dragonHairstyleId, 'ponytail');
+  assert.equal(preferences.dragonEyeColor, custom);
+
+  // 合掌只覆盖眼区和手部，切到麻吕后仍记住所选发型与瞳色。
   await application.evaluate(() => globalThis.__dragonGirlTest.showExpression('prayer', { preview: true }));
   await pet.locator('#prayer-portrait').waitFor({ state: 'visible' });
   assert.equal(await pet.locator('#prayer-hands').isVisible(), true);
+  assert.equal(await pet.locator('#prayer-half').evaluate((canvas) => canvas.getContext('2d')
+    .getImageData(100, 858, 1, 1).data[3]), 0);
   await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.selectCharacter('maro'));
   await waitForPortrait(pet, MARO_ASSET, 1254);
-  await dashboard.locator('#dragon-config-inactive').waitFor({ state: 'visible' });
+  // 使用麻吕时可以继续试选龙娘发型，切回龙娘后才同步桌宠。
+  assert.equal(await dashboard.locator('#dragon-config-inactive').count(), 0);
+  await loose.click();
+  await dashboard.locator('#dragon-config-portrait[data-hairstyle="loose"]').waitFor({ state: 'visible' });
+  await waitForPortrait(pet, MARO_ASSET, 1254);
+  await ponytail.click();
+  await ponytailPreview.waitFor({ state: 'visible' });
+  await idleOptions.waitFor({ state: 'visible' });
   await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.selectCharacter('dragon'));
-  await waitForPortrait(pet, DEFAULT_CHARACTER_ASSET);
+  await waitForPortrait(pet, ponytailAsset);
   await pet.locator(tinted).waitFor({ state: 'visible' });
   await application.close();
   application = null;
 
-  // 真正重启后仍保持原图和自选色，重新写出的设置里没有旧发型字段。
+  // 重启后恢复单马尾和自选色，已淘汰的发型字段不再写入。
   const persisted = JSON.parse(await fs.readFile(settingsFile, 'utf8'));
   assert.equal(persisted.dragonEyeColor, custom);
+  assert.equal(persisted.dragonHairstyleId, 'ponytail');
   for (const key of Object.keys(retiredSettings)) assert.equal(Object.hasOwn(persisted, key), false, key);
   ({ dashboard, pet } = await boot());
-  await waitForPortrait(pet, DEFAULT_CHARACTER_ASSET);
+  await waitForPortrait(pet, ponytailAsset);
   await pet.locator(tinted).waitFor({ state: 'visible' });
   await dashboard.getByRole('button', { name: '龙娘配置', exact: true }).click();
   await dashboard.locator(customPreview).waitFor({ state: 'visible' });
+  await openGearOptions(dashboard, 'hair', ...hairstyleNames);
+  assert.equal(await dashboard.getByRole('button', { name: '单马尾', exact: true }).getAttribute('aria-pressed'), 'true');
   const reopenedOptions = await openGearOptions(dashboard, 'eyes', 'GPT紫瞳', '自选瞳色');
   assert.equal(await reopenedOptions.getByLabel('自选瞳色', { exact: true }).inputValue(), custom);
   assert.equal(await reopenedOptions.locator('.dragon-color-picker').getAttribute('data-selected'), '');
+
+  await application.close();
+  application = null;
+
+  // 每款从独立窗口开始，前一款动作、缓存或焦点变化不会影响取样。
+  const hairstyleArtifacts = path.join(artifacts, 'dragon-hairstyles');
+  await fs.mkdir(hairstyleArtifacts, { recursive: true });
+  await fs.writeFile(path.join(hairstyleArtifacts, 'pixel-report.json'),
+    JSON.stringify({ default: defaultPixels, custom: customPixels }, null, 2));
+  const verified = [];
+  for (const { id, name, image } of DRAGON_HAIRSTYLES) {
+    try {
+      await fs.writeFile(settingsFile, JSON.stringify({
+        ...fixture, dragonHairstyleId: id === 'loose' ? 'ponytail' : 'loose',
+      }));
+      ({ dashboard, pet } = await boot());
+      await dashboard.getByRole('button', { name: '龙娘配置', exact: true }).click();
+      const hairstyleOptions = await openGearOptions(dashboard, 'hair', ...hairstyleNames);
+      await prepareHairstyleActions(application, pet);
+      await hairstyleOptions.getByRole('button', { name, exact: true }).click();
+      const selected = dashboard.locator('#dragon-config-portrait[data-hairstyle="' + id + '"][data-tone="original"]');
+      await selected.waitFor({ state: 'visible' });
+      await waitForPortrait(pet, 'dragon://app/' + image);
+      assert.deepEqual(await portraitDigest(selected), await portraitDigest(pet.locator('#portrait[data-tone="original"]')));
+      await waitForGearLinks(dashboard);
+      await pet.screenshot({ path: path.join(hairstyleArtifacts, id + '.png'), omitBackground: true });
+      if (id === 'ponytail')
+        await dashboard.screenshot({ path: path.join(hairstyleArtifacts, 'configuration.png'), animations: 'disabled' });
+      if (additionalHairstyles.some((style) => style.id === id))
+        await dashboard.screenshot({ path: path.join(hairstyleArtifacts, 'configuration-' + id + '.png'), animations: 'disabled' });
+      await verifyHairstyleActions(application, pet);
+      verified.push({ id, name, passed: true });
+      console.log(name + '通过视线、眨眼、回弹、表情、合掌和镜像验证。');
+    } catch (error) {
+      throw new Error(name + '的画面或动作验证失败', { cause: error });
+    } finally {
+      if (application) await application.close().catch(() => {});
+      application = null;
+    }
+  }
+  await fs.writeFile(path.join(hairstyleArtifacts, 'report.json'), JSON.stringify(verified, null, 2));
   assert.deepEqual(errors, []);
-  console.log('龙娘配置验证通过：v' + version + '、四角连线、原画像素一致、独立选色与恢复、原版合掌。');
+  console.log('龙娘配置验证通过：v' + version + '、四角连线、发型缩略图、立绘同步、重启恢复、独立选色与合掌。');
 } finally {
   if (application) await application.close().catch(() => {});
   await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });

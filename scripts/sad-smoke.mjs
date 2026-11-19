@@ -201,7 +201,7 @@ try {
 
   // 成功和失败相互替换，不同时留下星芒与眼泪；自然播放结束后眨眼重新接管。
   await appearance({ blinkEnabled: true });
-  await until(() => page.evaluate(() => document.getElementById('portrait').src.endsWith('/codex-dragon-girl.png')), '默认原画没有恢复');
+  await until(() => page.evaluate(() => document.getElementById('portrait')?.dataset.asset.endsWith('/codex-dragon-girl.png')), '默认原画没有恢复');
   await trigger(); await until(async () => await expression() === 'sad', '恢复默认后无法伤心');
   await trigger('happy'); await until(async () => await expression() === 'happy', '开心没有替换伤心');
   await trigger(); await until(async () => await expression() === 'sad', '伤心没有替换开心');
