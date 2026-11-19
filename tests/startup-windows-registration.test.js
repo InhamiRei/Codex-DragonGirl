@@ -10,15 +10,10 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const run = promisify(execFile);
 
-// 只读取本产品自己的登录项，固定脚本不接收外部路径或账户信息。
-async function registration() {
-  const script = `$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\\Microsoft\\Windows\\CurrentVersion\\Run')
-try { $value = if ($null -ne $key) { $key.GetValue('Codex DragonGirl Startup', $null) } else { $null }; [Console]::WriteLine((ConvertTo-Json -InputObject @{ value = $value } -Compress)) }
-finally { if ($null -ne $key) { $key.Dispose() } }`;
-  const result = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
-  return JSON.parse(result.stdout.trim().replace(/^\uFEFF/, '')).value;
+// 使用预编译探针直接读取注册表，避免每次查询都等待 PowerShell 启动。
+async function registration(probe) {
+  const { stdout } = await run(probe, [], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+  return JSON.parse(stdout);
 }
 
 // Windows 可能展开 8.3 短路径；按真实文件比较，同时要求完整引号防止空格拆参。
@@ -32,18 +27,29 @@ async function matchesHelper(command, helper) {
 test('Windows 原生助手注册和移除当前用户登录项，中文空格路径保持完整', {
   skip: process.platform !== 'win32' || process.env.GITHUB_ACTIONS !== 'true', timeout: 120000,
 }, async (t) => {
-  assert.equal(await registration(), null, '测试环境已有同名登录项，不覆盖已有设置');
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), '龙娘 启动注册-'));
   const helper = path.join(directory, '启动 助手.exe');
-  await fs.copyFile(path.join(root, 'native/bin/dragongirl-startup.exe'), helper);
+  const probe = path.join(directory, 'registry-probe.exe');
+  let registrationStarted = false;
   // 即使中途断言失败，也移除本测试创建的登录项和二进制副本。
   t.after(async () => {
-    const saved = await registration();
-    if (await matchesHelper(saved, helper)) await run(helper, ['--disable'], { windowsHide: true });
-    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    try {
+      if (registrationStarted && await matchesHelper(await registration(probe), helper))
+        await run(helper, ['--disable'], { windowsHide: true, timeout: 10000 });
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
-  await run(helper, ['--enable'], { windowsHide: true });
-  assert.ok(await matchesHelper(await registration(), helper), '登录项没有完整指向该测试助手');
-  await run(helper, ['--disable'], { windowsHide: true });
-  assert.equal(await registration(), null);
+  // 使用编译原生组件的同一套 x64 编译器，读写两端采用相同的注册表视图。
+  const csc = path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
+  await run(csc, ['/nologo', '/target:exe', '/platform:x64', '/reference:System.Web.Extensions.dll', `/out:${probe}`,
+    path.join(root, 'tests/fixtures/StartupRegistryFixture.cs')], { windowsHide: true, timeout: 20000 });
+  assert.equal(await registration(probe), null, '测试环境已有同名登录项，不覆盖已有设置');
+  await fs.copyFile(path.join(root, 'native/bin/dragongirl-startup.exe'), helper);
+  registrationStarted = true;
+  await run(helper, ['--enable'], { windowsHide: true, timeout: 10000 });
+  assert.ok(await matchesHelper(await registration(probe), helper), '登录项没有完整指向该测试助手');
+  await run(helper, ['--disable'], { windowsHide: true, timeout: 10000 });
+  assert.equal(await registration(probe), null);
+  registrationStarted = false;
 });
