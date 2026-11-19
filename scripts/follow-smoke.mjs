@@ -59,10 +59,26 @@ async function fixture(name) {
   return { directory, child, id: String(ready.window) };
 }
 
+// 先写完临时文件再发布命令；Windows 文件短暂占用时等待下一次尝试。
+async function writeCommand(directory, value) {
+  const file = path.join(directory, 'command');
+  const temporary = file + '.tmp';
+  await fs.writeFile(temporary, value);
+  await until(async () => {
+    try {
+      await fs.rename(temporary, file);
+      return true;
+    } catch (error) {
+      if (['EBUSY', 'EPERM'].includes(error.code)) return false;
+      throw error;
+    }
+  }, '测试窗口指令文件持续被占用');
+}
+
 // 递增序号使同一个置前命令也能重复执行，不影响旧测试使用的单行指令。
 async function send(target, command) {
   const value = `${command}\n${++serial}`;
-  await fs.writeFile(path.join(target.directory, 'command'), value);
+  await writeCommand(target.directory, value);
   await until(async () => (await fs.readFile(path.join(target.directory, 'command-complete'), 'utf8').catch(() => '')) === value, `测试窗口未处理 ${command}`);
 }
 
@@ -469,7 +485,7 @@ try {
       if (child.exitCode === null && child.signalCode === null) {
         // 先正常关闭测试窗口，让正在拖动的线程释放鼠标；进程失去响应时才强制清理。
         const exited = new Promise((resolve) => child.exitCode !== null || child.signalCode !== null ? resolve() : child.once('exit', resolve));
-        await fs.writeFile(path.join(directory, 'command'), `quit\n${++serial}`).catch(() => {});
+        await writeCommand(directory, `quit\n${++serial}`).catch(() => {});
         let timer;
         await Promise.race([exited, new Promise((resolve) => { timer = setTimeout(resolve, 2500); })]);
         clearTimeout(timer);

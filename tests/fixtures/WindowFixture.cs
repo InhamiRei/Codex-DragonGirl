@@ -148,7 +148,13 @@ internal static class WindowFixture
             if (restoreCursor.HasValue) { Cursor.Position = restoreCursor.Value; restoreCursor = null; }
             if (directory == null) return;
             string command;
-            try { command = File.ReadAllText(Path.Combine(directory, "command")); }
+            // 读完整命令时允许发布端替换文件，当前句柄仍对应同一份内容。
+            try
+            {
+                using (FileStream stream = new FileStream(Path.Combine(directory, "command"), FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+                using (StreamReader reader = new StreamReader(stream))
+                    command = reader.ReadToEnd();
+            }
             catch (IOException) { return; }
             if (command == previous) return;
             previous = command;
