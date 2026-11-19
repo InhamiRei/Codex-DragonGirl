@@ -27,63 +27,12 @@ jobs:
         run: npm run check
       - name: 准备隔离音效测试缓存
         run: node scripts/fetch-reference-audio.mjs
-      - name: 验证跟随窗口的遮挡层级与恢复
-        run: npm run test:follow
-        timeout-minutes: 3
-      - name: 验证后台刷新与常驻信息更新
-        run: npm run test:performance
-        timeout-minutes: 3
-      - name: 验证原生菜单与表情预览入口
-        run: npm run test:menu
-        timeout-minutes: 3
       - name: 验证统计、交互与真实 Windows 窗口
         run: npm test
-      - name: 验证桌面应用
-        run: npm run test:windows
-        timeout-minutes: 3
-      - name: 验证静默启动与 Codex 联动
-        run: npm run test:startup
-        timeout-minutes: 3
-      - name: 验证位置和音效重启恢复
-        run: npm run test:position
-        timeout-minutes: 3
-      - name: 验证气泡缩放与原生滚动条
-        run: npm run test:bubble
-        timeout-minutes: 3
-      - name: 验证气泡打开与并发刷新
-        run: npm run test:bubble-refresh
-        timeout-minutes: 3
-      - name: 验证眼睛和身体跟随
-        run: npm run test:eyes
-        timeout-minutes: 3
-      - name: 验证拖拽松手自动朝向
-        run: npm run test:facing
-        timeout-minutes: 3
-      - name: 验证自然眨眼
-        run: npm run test:blink
-        timeout-minutes: 3
-      - name: 验证开心星光
-        run: npm run test:expression
-        timeout-minutes: 3
-      - name: 验证失败伤心表情
-        run: npm run test:sad
-        timeout-minutes: 3
-      - name: 验证账号测智界面与本地协议
-        run: npm run test:accounts
-        timeout-minutes: 3
-      - name: 验证角色切换与麻吕逐帧像素
-        run: |
-          foreach ($script in @('test:characters', 'test:character-frames', 'test:maro-interaction', 'test:maro-gaze-pixels')) {
-            npm run $script
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-        timeout-minutes: 5
-      - name: 验证龙娘装备页、版本与重启恢复
-        run: npm run test:dragon-config
-        timeout-minutes: 3
       - name: 构建 Windows 便携包
         run: npm run package:win
-      - name: 验证解压后的安装包
+      # 桌面功能统一用解压后的便携包验收，包含原先源码阶段的账号测智。
+      - name: 验证便携包与桌面功能
         run: npm run verify:windows
       - uses: actions/upload-artifact@v4
         with:

@@ -427,6 +427,46 @@ test('网络错误与限流错误分别分类', async () => {
     /连接/,
   );
   assert.match(rpcError({ message: 'HTTP 429 too many requests' }), /限流/);
+  assert.match(rpcError({ code: 429, message: 'authentication endpoint refused the request' }), /限流/);
+});
+
+// 旧服务拒绝带参数的额度查询，现代服务返回的限流也要经过初始化和 UI 两层诊断。
+test('账户 RPC 兼容空参数的旧服务并保留初始化限流分类', async (t) => {
+  const { rpcError } = await import('../src/core/rpc.js');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-rpc-compat-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const script = path.join(dir, 'fixture.cjs');
+  await fs.writeFile(script, `
+const readline = require('node:readline');
+const fs = require('node:fs');
+const scenario = process.argv[2];
+// 模拟真实子进程的初始化错误和两个版本的参数要求。
+readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  const { method, id, params } = JSON.parse(line);
+  if (!id) return;
+  if (method === 'initialize' && scenario === 'limited') {
+    console.log(JSON.stringify({ id, error: { code: -32603, message: 'HTTP 429 fixture-private-detail' } }));
+    return;
+  }
+  if (method === 'account/rateLimits/read') {
+    fs.appendFileSync(__filename + '.calls', JSON.stringify({ id, params }) + '\\n');
+    if (params !== null) console.log(JSON.stringify({ id, error: { code: -32602, message: 'Invalid params' } }));
+    else console.log(JSON.stringify({ id, result: { rateLimits: { primary: { usedPercent: 25 } } } }));
+    return;
+  }
+  console.log(JSON.stringify({ id, result: {} }));
+});`);
+  const legacy = await readAccount(dir, { executable: process.execPath, prefixArgs: [script, 'legacy'] });
+  assert.equal(legacy.quota.rateLimits.primary.usedPercent, 25);
+  assert.deepEqual((await fs.readFile(script + '.calls', 'utf8')).trim().split('\n').map(JSON.parse), [
+    { id: 3, params: { excludeResetCreditDetails: true } }, { id: 4, params: null },
+  ]);
+  await assert.rejects(readAccount(dir, { executable: process.execPath, prefixArgs: [script, 'limited'] }), (error) => {
+    assert.match(error.message, /限流/);
+    assert.match(rpcError(error), /限流/);
+    assert.doesNotMatch(error.message, /fixture-private-detail/);
+    return true;
+  });
 });
 
 // 压缩归档可独立读取，明文与压缩副本同时存在时只扫描明文。

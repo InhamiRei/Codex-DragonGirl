@@ -11,7 +11,7 @@ using System.Web.Script.Serialization;
 internal static class DragonBridge
 {
     private delegate bool WindowCallback(IntPtr window, IntPtr parameter);
-    private static readonly string[] NetworkKeys = { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS" };
+    private static readonly string[] NetworkKeys = { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS" };
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
     private static List<ProcessRow> processes = new List<ProcessRow>();
     private static DateTime discoveredAt = DateTime.MinValue;
@@ -181,7 +181,7 @@ internal static class DragonBridge
         return null;
     }
 
-    // 完整读取后只保留实例目录和网络白名单，其他环境变量不进入快照。
+    // Windows 环境变量名不区分大小写；将白名单字段统一为标准键名后再识别实例和代理。
     private static Dictionary<string, string> ParseEnvironment(string block)
     {
         Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -189,7 +189,7 @@ internal static class DragonBridge
         {
             int separator = entry.IndexOf('=');
             if (separator < 1) continue;
-            string key = entry.Substring(0, separator);
+            string key = entry.Substring(0, separator).ToUpperInvariant();
             if (key == "CODEX_HOME" || Array.IndexOf(NetworkKeys, key) >= 0)
                 result[key] = entry.Substring(separator + 1);
         }

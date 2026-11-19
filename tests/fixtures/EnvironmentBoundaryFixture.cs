@@ -54,10 +54,10 @@ internal static class EnvironmentBoundaryFixture
             IntPtr handle = GetCurrentProcess();
             const string home = "C:\\Users\\Fixture\\\u8d26\u53f7\U0001F642";
 
-            // 首次 4096 字节之后仍有完整内容，固定读取第二个 4096 字节才会越界。
+            // 首次 4096 字节之后仍有完整内容，验证跨边界读取和 Windows 混合大小写白名单。
             IntPtr start = IntPtr.Add(memory, (page / 3) & ~1);
-            WriteBlock(start, "IGNORED=" + new string('x', 2300) + "\0CODEX_HOME=" + home
-                + "\0HTTPS_PROXY=http://127.0.0.1:9000\0PRIVATE_FIXTURE=hidden\0\0");
+            WriteBlock(start, "IGNORED=" + new string('x', 2300) + "\0Codex_Home=" + home
+                + "\0Https_Proxy=http://127.0.0.1:9000\0PRIVATE_FIXTURE=hidden\0\0");
             var result = (Dictionary<string, string>)readBlock.Invoke(null, new object[] { handle, start });
             if (result == null || result.Count != 2 || result["CODEX_HOME"] != home
                 || result["HTTPS_PROXY"] != "http://127.0.0.1:9000")

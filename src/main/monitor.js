@@ -33,6 +33,9 @@ export class Monitor extends EventEmitter {
     this.pending = new Map();
     this.controllers = new Set();
     this.requestId = 0;
+    this.nativeSequence = 0;
+    this.appliedNativeSequence = 0;
+    this.nativeHomeLookups = new Map();
     this.progress = { done: 0, total: 0 };
     this.alerts = new AlertTracker();
     this.activeTasks = new Map();
@@ -139,13 +142,25 @@ export class Monitor extends EventEmitter {
     input.write(JSON.stringify({ host: Number(host), overlays: overlays.map(Number), owned: owned.map(Number) }) + '\n', () => {});
     return true;
   }
+  // 窗口心跳共用正在进行的目录查询；查询结束后仍允许识别链接变化或目录恢复。
+  resolveNativeHome(home) {
+    let lookup = this.nativeHomeLookups.get(home);
+    if (!lookup) {
+      lookup = fs.realpath(home).catch(() => home).finally(() => this.nativeHomeLookups.delete(home));
+      this.nativeHomeLookups.set(home, lookup);
+    }
+    return lookup;
+  }
   // 统一符号链接、盘符与目录大小写，迟到的桥接结果不能覆盖更新的窗口状态。
   async receiveNative(state, bridge) {
-    const sequence = this.nativeSequence = (this.nativeSequence || 0) + 1;
+    if (this.stopped || bridge !== this.native) return;
+    const sequence = ++this.nativeSequence;
     const processes = await Promise.all((state.processes || []).map(async (process) => ({
-      ...process, home: await fs.realpath(process.home).catch(() => process.home),
+      ...process, home: await this.resolveNativeHome(process.home),
     })));
-    if (this.stopped || bridge !== this.native || sequence !== this.nativeSequence) return;
+    // 已完成的快照不等待后续目录查询；仅丢弃会覆盖更新位置的旧结果。
+    if (this.stopped || bridge !== this.native || sequence <= this.appliedNativeSequence) return;
+    this.appliedNativeSequence = sequence;
     // 几何与层级直接同步给桌宠，账户状态按实例和运行时路径变化更新。
     const changed = this.nativeError || this.screenPermission !== state.screenPermission
       || this.processes.length !== processes.length || processes.some(({ pid, home, frontmost, appPath }, index) => {

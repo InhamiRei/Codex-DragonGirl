@@ -67,7 +67,7 @@ try {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
   // 从解压后的真实安装包验证窗口遮挡、菜单、气泡时序与表情，避免只在源码目录中通过。
-  for (const script of ['follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'performance-smoke.mjs',
+  for (const script of ['follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'account-tests-smoke.mjs', 'performance-smoke.mjs',
     'character-smoke.mjs', 'dragon-config-smoke.mjs', 'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
@@ -93,6 +93,7 @@ try {
       '拖拽松手自动朝向、镜像命中与动画偏好',
       '安装包成功与失败表情、素材加载和自动恢复',
       '原生菜单四角完整展开、二级输入与人物窗口几何稳定',
+      '账号测智界面与本地协议',
       '后台刷新复用节点与菜单、常驻气泡和账号状态及时更新',
       '首次默认龙娘、角色切换与工作中手动捋发',
       '实际安装包侧栏版本、龙娘瞳色与重启恢复',

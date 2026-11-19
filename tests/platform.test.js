@@ -21,6 +21,19 @@ test('账户环境仅传递运行时与网络白名单', () => {
   assert.equal(env.ELECTRON_RUN_AS_NODE, undefined);
 });
 
+// 同名不同大小写在 Windows 只能传一个值，且实例代理可以显式覆盖或清空父进程代理。
+test('Windows 实例代理按大小写无关覆盖，macOS 保持各变量独立', () => {
+  const environment = { pAtH: 'native-path', SYSTEMROOT: 'C:\\Windows', HTTPS_PROXY: 'http://parent.invalid', NO_PROXY: 'old' };
+  const network = { https_proxy: 'http://instance.invalid', No_Proxy: '', Ssl_Cert_File: 'C:\\instance.pem', Path: 'ignored' };
+  assert.deepEqual(accountEnvironment('C:\\fixture', network, environment, 'win32'), {
+    PATH: 'native-path', SystemRoot: 'C:\\Windows', HTTPS_PROXY: 'http://instance.invalid', NO_PROXY: '',
+    SSL_CERT_FILE: 'C:\\instance.pem', CODEX_HOME: 'C:\\fixture',
+  });
+  const mac = accountEnvironment('/fixture', { https_proxy: network.https_proxy }, environment, 'darwin');
+  assert.equal(mac.HTTPS_PROXY, environment.HTTPS_PROXY);
+  assert.equal(mac.https_proxy, network.https_proxy);
+});
+
 // 平台差异集中在路径边界，不改变原有账户统计协议。
 test('Windows 桥与 CLI 使用原生可执行文件', () => {
   assert.equal(nativeBridgePath('/project', 'win32'), path.join('/project', 'native/bin/dragongirl-native.exe'));

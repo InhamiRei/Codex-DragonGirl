@@ -10,6 +10,15 @@ const runFile = promisify(execFile);
 export const CLI_UNAVAILABLE = 'CODEX_CLI_UNAVAILABLE';
 export const CLI_UNAVAILABLE_MESSAGE = '找不到可运行的 Codex CLI，请检查安装后刷新账户';
 export const GENERIC_RPC_ERROR = 'Codex 查询失败，请刷新或查看连接诊断';
+// 初始化错误可能已经脱敏；诊断层再次分类时保留这组固定提示。
+const RPC_MESSAGES = {
+  login: '登录状态失效，请在对应 Codex 实例重新登录',
+  rateLimit: '查询被限流，稍后自动重试',
+  connection: '连接暂不可用，请检查该实例的代理或网络',
+  unsupported: '当前 Codex 版本不支持这个查询',
+};
+const SAFE_RPC_MESSAGES = new Set([...Object.values(RPC_MESSAGES), CLI_UNAVAILABLE_MESSAGE, GENERIC_RPC_ERROR]);
+const RPC_MESSAGES_BY_CODE = new Map([['401', RPC_MESSAGES.login], ['429', RPC_MESSAGES.rateLimit], ['-32601', RPC_MESSAGES.unsupported]]);
 
 // 先尝试现有路径，再按版本文件的修改时间检查桌面版缓存；目录名不代表版本顺序。
 async function* windowsCliFiles(appPath, environment) {
@@ -38,7 +47,7 @@ async function verifyWindowsCli(file, environment, signal) {
   }
   try {
     const { stdout } = await runFile(file, ['--version'], {
-      env: accountEnvironment(undefined, {}, environment), signal, windowsHide: true, timeout: 3000, maxBuffer: 16384,
+      env: accountEnvironment(undefined, {}, environment, 'win32'), signal, windowsHide: true, timeout: 3000, maxBuffer: 16384,
     });
     if (!/^codex-cli\s+\d+\.\d+\.\d+(?:[-+][\w.+-]+)?$/i.test(stdout.trim())) return false;
     verifiedWindowsClis.set(file, signature);
@@ -69,13 +78,13 @@ export async function locateCodex(appPath, { platform = process.platform, enviro
 export function rpcError(error) {
   if (error?.code === CLI_UNAVAILABLE) return CLI_UNAVAILABLE_MESSAGE;
   const message = String(error?.message || error);
-  if (/401|unauthorized|refresh.token|authentication/i.test(message))
-    return '登录状态失效，请在对应 Codex 实例重新登录';
-  if (/429|too many requests|rate.limit.exceeded|rate_limited/i.test(message))
-    return '查询被限流，稍后自动重试';
-  if (/sending request|connect|network|timeout|timed out|deadline/i.test(message))
-    return '连接暂不可用，请检查该实例的代理或网络';
-  if (/method not found|-32601/i.test(message)) return '当前 Codex 版本不支持这个查询';
+  if (SAFE_RPC_MESSAGES.has(message)) return message;
+  const category = RPC_MESSAGES_BY_CODE.get(String(error?.code ?? ''));
+  if (category) return category;
+  if (/\b401\b|unauthorized|refresh.token|authentication/i.test(message)) return RPC_MESSAGES.login;
+  if (/\b429\b|too many requests|rate.limit.(?:exceeded|reached)|rate_limited/i.test(message)) return RPC_MESSAGES.rateLimit;
+  if (/sending request|connect|network|timeout|timed out|deadline/i.test(message)) return RPC_MESSAGES.connection;
+  if (/method not found|-32601/i.test(message)) return RPC_MESSAGES.unsupported;
   return GENERIC_RPC_ERROR;
 }
 // 每次查询只读取账户，凭据刷新交给 Codex；退出时仅结束本应用启动的查询子进程。
@@ -93,6 +102,7 @@ export async function readAccount(
     let buffer = '',
       initialized = false,
       finished = false;
+    let quotaRequestId = 3;
     const replies = {};
     // 序列化请求并处理退出过程中的 EPIPE。
     const send = (message) => {
@@ -165,7 +175,14 @@ export async function readAccount(
             params: { excludeResetCreditDetails: !details },
           });
         }
-        if ([2, 3].includes(m.id)) replies[m.id] = m;
+        if (m.id === 2) replies[2] = m;
+        if (m.id === quotaRequestId) {
+          // 旧版 app-server 只接受空参数；收到参数错误时换新请求编号重试一次。
+          if (quotaRequestId === 3 && [-32600, -32602].includes(m.error?.code)) {
+            quotaRequestId = 4;
+            send({ id: quotaRequestId, method: 'account/rateLimits/read', params: null });
+          } else replies[3] = m;
+        }
         if (replies[2] && replies[3]) {
           finish();
           return;

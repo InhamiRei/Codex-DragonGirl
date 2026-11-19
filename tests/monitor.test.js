@@ -65,6 +65,55 @@ test('原生几何和层级立即同步，实例与权限变化仍正常发布',
   assert.equal(publications, 3);
 });
 
+// 模拟慢目录和乱序返回，已完成的几何仍会连续发布，迟到快照不能把角色拉回去。
+test('慢目录解析不会让连续原生快照饿死或让位置回退', async (t) => {
+  const monitor = new Monitor(os.tmpdir(), { testMode: true });
+  const bridge = monitor.native = {};
+  const lookups = [gate(), gate(), gate(), gate()];
+  const orders = [];
+  monitor.publish = () => {};
+  monitor.on('windows', ({ windowOrder }) => orders.push(...windowOrder));
+  t.mock.method(fs, 'realpath', (home) => lookups[home - 1].promise);
+  // 新快照进队后，让旧快照先结束，再模拟另一轮新快照反超旧快照。
+  const send = (id) => monitor.receiveNative({ processes: [{ pid: id, home: String(id) }], windowOrder: [id] }, bridge);
+  const first = send(1), second = send(2);
+  lookups[0].resolve('/fixture');
+  await first;
+  assert.deepEqual(orders, [1]);
+  lookups[1].resolve('/fixture');
+  await second;
+  const third = send(3), fourth = send(4);
+  lookups[3].resolve('/fixture');
+  await fourth;
+  lookups[2].resolve('/fixture');
+  await third;
+  assert.deepEqual(orders, [1, 2, 4]);
+  assert.equal(monitor.processes[0].pid, 4);
+});
+
+// 同一慢目录在多份心跳中只查询一次，目录从不可用恢复后仍按真实路径识别。
+test('原生快照复用正在进行的目录查询，失败后允许重查', async (t) => {
+  const monitor = new Monitor(os.tmpdir(), { testMode: true });
+  const bridge = monitor.native = {};
+  const home = path.join(os.tmpdir(), 'codex-link');
+  const canonical = path.join(os.tmpdir(), 'codex-home');
+  // 模拟第一次查询迟到并失败，下一次查询时目录已恢复。
+  let fail;
+  const slow = new Promise((_, reject) => { fail = reject; });
+  const realpath = t.mock.method(fs, 'realpath', () => realpath.mock.callCount() === 0 ? slow : Promise.resolve(canonical));
+  monitor.publish = () => {};
+  const send = (x) => monitor.receiveNative({ processes: [{ pid: 1, home, windows: [{ x }] }] }, bridge);
+  const pending = [send(100), send(200), send(300)];
+  assert.equal(realpath.mock.callCount(), 1);
+  fail(new Error('测试目录暂不可用'));
+  await Promise.all(pending);
+  assert.equal(monitor.processes[0].home, home);
+  assert.equal(monitor.processes[0].windows[0].x, 300);
+  await send(400);
+  assert.equal(realpath.mock.callCount(), 2);
+  assert.equal(monitor.processes[0].home, canonical);
+});
+
 // 手动点击复用进行中的详细查询，只补读未覆盖的账号，并让账本独立推进。
 test('手动刷新复用正在进行的账户查询，账本独立扫描并保留限流', async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-refresh-'));
