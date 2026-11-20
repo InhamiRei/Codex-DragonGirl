@@ -1,6 +1,8 @@
 import { BUILTIN_PRICES } from '../shared/pricing.js';
 import { createHash } from 'node:crypto';
 import { quotaFromEvent } from './quota.js';
+// 账本任务状态与实时提醒识别同一组日志结果。
+export const TASK_END_EVENTS = Object.freeze(['task_complete', 'turn_aborted', 'error', 'task_failed']);
 const FIELDS = [
   'input_tokens',
   'cached_input_tokens',
@@ -80,7 +82,7 @@ export function parseUsageEvent(event, state, homeId) {
     if (!inherited) state.status = 'working';
     return {};
   }
-  if (['task_complete', 'turn_aborted', 'error', 'task_failed'].includes(p.type)) {
+  if (TASK_END_EVENTS.includes(p.type)) {
     if (inherited) return {};
     state.status =
       p.type === 'task_complete' ? 'complete' : p.type === 'turn_aborted' ? 'cancelled' : 'error';

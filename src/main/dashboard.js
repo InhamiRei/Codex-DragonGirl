@@ -1,5 +1,5 @@
 import { verifyAudioLibrary, downloadAudioLibrary } from '../core/audio-library-store.js';
-import { BrowserWindow, ipcMain, dialog, app, Notification, nativeImage, screen } from 'electron';
+import { BrowserWindow, ipcMain, dialog, app, Notification, nativeImage, screen, powerMonitor } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,8 +72,12 @@ export class Dashboard {
       void this.updatePets().catch((error) => console.error('同步角色失败：', error.message));
     });
     monitor.on('windows', () => this.follow());
+    // 休眠后的任务日志补查独立于账本，退出时移除监听。
+    this.onResume = () => monitor.reconcileTaskLogs();
+    powerMonitor.on('resume', this.onResume);
     // 先把提醒路由到对应实例，再用该角色的同一句台词填充气泡和系统通知。
     monitor.on('notice', (notice) => {
+      if (this.stopping) return;
       const pet =
         [this.primary, ...this.pets.values()].find((c) => c.instanceId === notice.home) || this.primary;
       const text = notice.dialogueKind ? pet.nextDialogue(notice.dialogueKind) : notice.text;
@@ -577,6 +581,7 @@ export class Dashboard {
   // 退出前关闭所有附属角色，取消后台窗口资源。
   async stop() {
     this.stopping = true;
+    powerMonitor.removeListener('resume', this.onResume);
     await this.petUpdate?.catch(() => {});
     await this.tests.stop().catch((error) => console.error('结束账号测试失败：', error.message));
     for (const pet of this.pets.values())

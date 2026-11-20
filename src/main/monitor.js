@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { spawn } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,8 @@ const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const QUOTA_FRESH_MS = 120000;
 // 缺少本地程序时只重查安装状态，避免套用远端请求的分钟级退避。
 const CLI_RETRY_MS = 5000;
+// 现有原声最长约 1.66 秒，队列留出完整播放和阅读气泡的时间。
+const TASK_NOTICE_GAP_MS = 1750;
 
 // 多实例采集调度器：原生窗口、官方额度、历史索引彼此独立，任一路失败不阻塞其他数据。
 export class Monitor extends EventEmitter {
@@ -39,11 +42,16 @@ export class Monitor extends EventEmitter {
     this.progress = { done: 0, total: 0 };
     this.alerts = new AlertTracker();
     this.activeTasks = new Map();
+    this.seenTaskTurns = new Set();
+    this.mainTaskNotices = [];
+    this.subagentTaskNotices = [];
+    this.taskNoticeAvailableAt = 0;
     this.indexedAt = null;
     this.stopped = false;
   }
   // 加载本应用缓存后立即发现实例，历史索引在 Worker 中执行。
   async start() {
+    this.taskStartedAt = Date.now();
     this.settings = await this.settingsStore.load();
     if (this.stopped) return;
     try {
@@ -206,13 +214,56 @@ export class Monitor extends EventEmitter {
     this.instances = next;
     if (changed || !this.configured) {
       this.configured = true;
-      this.worker.postMessage({
+      if (this.taskWorker) this.configureTaskWorker();
+      else if (!this.taskWorkerRetry) this.startTaskWorker();
+      if (!this.workerUnavailable) this.worker.postMessage({
         type: 'configure',
         instances: next.map(({ id, home }) => ({ id, home })),
         settings: this.settings,
       });
     }
     this.publish();
+  }
+  // 独立的只读 Worker 与所有实例共用，崩溃重启仍沿用本次应用启动时间和主进程去重记录。
+  startTaskWorker() {
+    if (this.stopped || !this.instances.length) return;
+    let worker;
+    try {
+      worker = new Worker(new URL('../workers/task-worker.js', import.meta.url), {
+        workerData: { startedAt: this.taskStartedAt },
+      });
+    } catch {
+      this.retryTaskWorker();
+      return;
+    }
+    this.taskWorker = worker;
+    worker.on('message', (message) => {
+      if (this.taskWorker === worker && message.type === 'tasks') this.receiveTaskEvents(message.tasks);
+    });
+    // 错误随后会触发退出，由退出处理统一恢复，避免重复启动。
+    worker.on('error', () => {});
+    worker.on('exit', () => {
+      if (this.taskWorker !== worker || this.stopped) return;
+      this.taskWorker = null;
+      this.retryTaskWorker();
+    });
+    this.configureTaskWorker();
+  }
+  // 创建失败或意外退出都只恢复提醒，不中断实例发现和用量索引。
+  retryTaskWorker() {
+    this.taskWorkerRetry = setTimeout(() => {
+      this.taskWorkerRetry = null;
+      this.startTaskWorker();
+    }, 5000);
+  }
+  // 提醒只接收目录标识和间隔，切换子代理开关在派送端生效。
+  configureTaskWorker() {
+    this.taskWorker?.postMessage({ type: 'configure', interval: this.settings.taskCheckSeconds * 1000,
+      instances: this.instances.map(({ id, home }) => ({ id, home })) });
+  }
+  // 系统恢复后核对遗漏的目录变化，随后沿用各会话的读取位置。
+  reconcileTaskLogs() {
+    if (!this.stopped) this.taskWorker?.postMessage({ type: 'reconcile' });
   }
   // 新鲜日志观察在首次长时间索引期间也独立更新。
   async refreshLogs() {
@@ -420,7 +471,7 @@ export class Monitor extends EventEmitter {
     await this.cacheQueue;
   }
 
-  // Worker 推送使用固定字段，初始扫描的历史事件不触发声音。
+  // 账本 Worker 更新进度、额度和状态，由独立的任务 Worker 派送提醒。
   workerMessage(m) {
     if (this.stopped) return;
     // 手动扫描和自动扫描失败都应解除忙碌状态，下次成功后重新发布汇总。
@@ -446,17 +497,6 @@ export class Monitor extends EventEmitter {
     if (m.type === 'thread-state') this.activeTasks.set(`${m.home}:${m.thread}`, m);
     if (m.type === 'thread-states')
       this.activeTasks = new Map(m.states.map((state) => [`${state.home}:${state.thread}`, state]));
-    if (m.type === 'task') {
-      const i = this.instances.find((i) => i.id === m.task.home);
-      if (i && m.task.source === '主任务') {
-        // 只传任务结果，等界面找到对应角色后再选择台词。
-        this.notify(i, {
-          dialogueKind: m.task.status === 'complete' ? 'complete' : m.task.status === 'cancelled' ? 'cancelled' : 'error',
-          event: m.task.status === 'error' ? 'error' : 'complete',
-          expression: m.task.status === 'complete' ? 'happy' : m.task.status === 'error' ? 'sad' : null,
-        });
-      }
-    }
     if (m.type === 'indexed') {
       this.indexedAt = m.at;
       this.dataRevision = m.revision;
@@ -508,7 +548,61 @@ export class Monitor extends EventEmitter {
     }
   }
 
-  // 静音时仍更新数据；额度和预算提醒保留原文，任务只传结果和表情。
+  // 一批结果先全部去重并入队，同一批的子代理即使先读到也排在主任务之后。
+  receiveTaskEvents(tasks) {
+    if (this.stopped) return;
+    const results = new Map();
+    for (const task of tasks) {
+      if (!this.instances.some(({ id }) => id === task.home)) continue;
+      if (task.source !== '主任务' && task.source !== '子代理') continue;
+      if (task.source === '子代理' && task.status !== 'complete') continue;
+      const key = JSON.stringify([task.home, task.thread, task.turn || task.time]);
+      if (this.seenTaskTurns.has(key)) continue;
+      const prior = results.get(key);
+      // 同批日志先记录错误又成功完成时，采用最终的成功结果。
+      if (!prior || (prior.status === 'error' && task.status === 'complete')) results.set(key, task);
+    }
+    if (!results.size) return;
+    const quiet = isQuiet(this.settings);
+    for (const [key, task] of results) {
+      // 免打扰或关闭子代理时同样消费事件，之后开启时不补播。
+      this.seenTaskTurns.add(key);
+      if (quiet) continue;
+      if (task.source === '主任务') this.mainTaskNotices.push(task);
+      else if (this.settings.subagentNotifications) this.subagentTaskNotices.push(task);
+    }
+    this.flushTaskNotices();
+  }
+  // 每次显示一条并留出声音间隔，主任务到达时可以抢在子代理之前显示。
+  flushTaskNotices() {
+    clearTimeout(this.taskNoticeTimer);
+    this.taskNoticeTimer = null;
+    if (this.stopped) return;
+    while (this.mainTaskNotices.length || this.subagentTaskNotices.length) {
+      if (isQuiet(this.settings)) {
+        this.mainTaskNotices.length = 0;
+        this.subagentTaskNotices.length = 0;
+        return;
+      }
+      const main = this.mainTaskNotices.length > 0;
+      const wait = this.taskNoticeAvailableAt - Date.now();
+      if (wait > 0 && !(main && this.lastTaskNoticeWasSubagent)) {
+        this.taskNoticeTimer = setTimeout(() => this.flushTaskNotices(), wait);
+        return;
+      }
+      const task = (main ? this.mainTaskNotices : this.subagentTaskNotices).shift();
+      const instance = this.instances.find(({ id }) => id === task.home);
+      if (!instance || (!main && !this.settings.subagentNotifications)) continue;
+      this.lastTaskNoticeWasSubagent = !main;
+      this.taskNoticeAvailableAt = Date.now() + TASK_NOTICE_GAP_MS;
+      this.notify(instance, main ? {
+        dialogueKind: task.status === 'complete' ? 'complete' : task.status === 'cancelled' ? 'cancelled' : 'error',
+        event: task.status === 'error' ? 'error' : 'complete',
+        expression: task.status === 'complete' ? 'happy' : task.status === 'error' ? 'sad' : null,
+      } : { event: 'complete', text: '子代理完成' });
+    }
+  }
+  // 静音时仍更新数据；额度、预算和子代理提醒保留原文，主任务传结果和表情。
   notify(instance, notice) {
     if (!isQuiet(this.settings))
       this.emit('notice', {
@@ -600,9 +694,16 @@ export class Monitor extends EventEmitter {
   }
   // 采集设置变化后重新配置索引；独立保存瞳色时沿用当前采集状态。
   async saveSettings(value, { refreshUsage = true } = {}) {
-    this.settings = await this.settingsStore.save(value);
+    const saved = await this.settingsStore.save(value);
+    const { taskCheckSeconds: oldInterval, subagentNotifications: oldSubagents, ...previous } = this.settings || {};
+    this.settings = saved;
     if (this.stopped) return this.settings;
-    if (refreshUsage) {
+    const { taskCheckSeconds, subagentNotifications, ...current } = saved;
+    if (taskCheckSeconds !== oldInterval) this.configureTaskWorker();
+    if (!subagentNotifications) this.subagentTaskNotices.length = 0;
+    // 单独调节提醒不会重启账本计时器，也不会触发额外的历史目录扫描。
+    const reminderChanged = taskCheckSeconds !== oldInterval || subagentNotifications !== oldSubagents;
+    if (refreshUsage && (!reminderChanged || !isDeepStrictEqual(previous, current))) {
       // 修改预算等偏好后重新评估提醒，即使日志本身没有新增也要生效。
       this.summaryRevision = null;
       clearInterval(this.scanTimer);
@@ -646,10 +747,14 @@ export class Monitor extends EventEmitter {
       this.publishTimer,
       this.nativeRetry,
       this.logTimer,
+      this.taskWorkerRetry,
+      this.taskNoticeTimer,
     ])
       clearTimeout(timer);
     for (const c of this.controllers) c.abort();
     this.native?.kill();
+    const taskStop = this.taskWorker?.terminate().catch(() => {});
+    this.taskWorker = null;
     await this.settingsStore.flush().catch((error) => console.error('退出前保存偏好失败：', error.message));
     await this.saveCache().catch(() => {});
     for (const p of this.pending.values()) p.reject(new Error('应用正在退出'));
@@ -666,5 +771,6 @@ export class Monitor extends EventEmitter {
       }
       await this.worker.terminate();
     }
+    await taskStop;
   }
 }

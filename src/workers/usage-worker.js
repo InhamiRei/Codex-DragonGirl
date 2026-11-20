@@ -61,8 +61,7 @@ async function scan() {
       for (const file of files) {
         if (stopping) break;
         try {
-          const state = await ledger.scanFile(file, instance.id, (task) =>
-            parentPort.postMessage({ type: 'task', task }), scanController.signal);
+          const state = await ledger.scanFile(file, instance.id, scanController.signal);
           if (state.quota && (!latest || state.quota.capturedAt > latest.capturedAt)) {
             latest = state.quota;
             account = state.account;

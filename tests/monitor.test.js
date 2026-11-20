@@ -297,7 +297,7 @@ test('空闲扫描不重复汇总，新增日志和偏好变化会更新数据',
   assert.ok(progress.every((m) => m.building === false && m.total === 65));
   assert.equal(messages.filter((m) => m.type === 'thread-states').length, 1);
   assert.equal(messages.filter((m) => m.type === 'thread-state').length, 0);
-  // 任务完成仍更新界面和提醒，单纯的任务记录不会触发全量用量汇总。
+  // 任务状态随账本增量更新，单纯的任务记录不会触发全量用量汇总。
   await fs.appendFile(path.join(folder, '64.jsonl'), JSON.stringify({ type: 'event_msg', timestamp: stamp,
     payload: { type: 'task_complete', turn_id: 'turn' } }) + '\n');
   await monitor.request('scan');

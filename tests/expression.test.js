@@ -88,17 +88,21 @@ test('虹膜星光拥有持续变化且有界的独立轨迹', () => {
 });
 
 // 主任务成功和失败各自触发表情，取消、子任务和未知状态不能冒充失败。
-test('主任务成功开心、失败伤心，取消与子任务不触发表情', () => {
+test('主任务成功开心、失败伤心，取消与子任务不触发表情', (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
   const monitor = new Monitor(os.tmpdir(), { testMode: true });
   monitor.settings = normalizeSettings({ soundEnabled: false, notifications: false });
   monitor.instances = [{ id: 'test-home', name: '测试实例' }];
   monitor.publish = () => {};
   const notices = [];
   monitor.on('notice', (notice) => notices.push(notice));
-  for (const status of ['complete', 'cancelled', 'error', 'unknown'])
-    monitor.workerMessage({ type: 'task', task: { home: 'test-home', source: '主任务', status } });
-  for (const status of ['complete', 'error'])
-    monitor.workerMessage({ type: 'task', task: { home: 'test-home', source: '子任务', status } });
+  const tasks = ['complete', 'cancelled', 'error', 'unknown'].map((status) =>
+    ({ home: 'test-home', thread: 'parent', turn: status, source: '主任务', status }));
+  tasks.push(...['complete', 'error'].map((status) =>
+    ({ home: 'test-home', thread: 'child', turn: status, source: '子代理', status })));
+  monitor.receiveTaskEvents(tasks);
+  // 分别推进每次排队的提示，测试无需等待原声播放时长。
+  for (let index = 0; index < 4; index++) t.mock.timers.tick(2000);
   assert.deepEqual(notices.map((notice) => notice.expression), ['happy', null, 'sad', null]);
   assert.deepEqual(notices.map((notice) => notice.event), ['complete', 'complete', 'error', 'complete']);
   assert.deepEqual(notices.map((notice) => notice.dialogueKind), ['complete', 'cancelled', 'error', 'error']);

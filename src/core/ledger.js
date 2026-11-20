@@ -71,7 +71,7 @@ export class Ledger {
     this.db.prepare('DELETE FROM files WHERE path=?').run(file);
   }
   // 增量读取完整行；最后半行不提交偏移，下次追加后再解析。
-  async scanFile(file, homeId, onTask = () => {}, signal) {
+  async scanFile(file, homeId, signal) {
     const stat = await fsp.stat(file);
     const legacyInode = `${stat.dev}:${stat.ino}`;
     // macOS 重启后设备号可能变化，文件编号与创建时间仍能识别原文件。
@@ -156,8 +156,6 @@ export class Ledger {
             this.usageChanges += result.changes;
             this.origin.run(file, r.key);
           }
-          // 任务状态随文件检查点恢复，实时提醒直接从解析事件发出。
-          if (saved && parsed.task?.time > Date.now() - 120000) onTask({ ...parsed.task, home: homeId });
           if (++records % 1500 === 0) {
             this.db.exec('COMMIT');
             this.db.exec('BEGIN');

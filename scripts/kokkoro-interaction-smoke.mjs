@@ -47,11 +47,13 @@ async function clickMenu(label, submenu) {
   }, { label, submenu });
 }
 
-// 构造统计进程的主任务通知，不经过模拟的表情或台词回调。
+// 将任务结果送入真实提醒队列，等待它经实例路由更新角色气泡。
 async function task(status, source = '主任务') {
-  return application.evaluate((_, { status, source }) => {
+  return application.evaluate(async (_, { status, source }) => {
     const { monitor, companion } = globalThis.__dragonGirlApp;
-    monitor.workerMessage({ type: 'task', task: { home: monitor.instances[0].id, source, status } });
+    const displayed = source === '主任务' ? new Promise((resolve) => monitor.once('notice', resolve)) : null;
+    monitor.receiveTaskEvents([{ home: monitor.instances[0].id, thread: `smoke-${source}`, turn: status, source, status }]);
+    await displayed;
     return companion.bubbleModel.text;
   }, { status, source });
 }
@@ -273,7 +275,7 @@ try {
   await settings({ expressionsEnabled: false });
   await until(() => page.locator('.kokkoro-face').isHidden(), '关闭动态表情后旧帧仍在');
   assert.equal(await task('cancelled'), dialogueLine('cancelled', 0, 'kokkoro'));
-  assert.equal(await task('error', '子任务'), dialogueLine('cancelled', 0, 'kokkoro'));
+  assert.equal(await task('error', '子代理'), dialogueLine('cancelled', 0, 'kokkoro'));
 
   // 减少动态效果时保留静态动作反馈，外部光标和眨眼不会重新唤醒动画。
   await settings({ expressionsEnabled: true, blinkEnabled: true, eyeTracking: true });

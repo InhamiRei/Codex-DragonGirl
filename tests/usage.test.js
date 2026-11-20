@@ -610,7 +610,7 @@ test('中断日志读取会关闭流并允许后续重新扫描', async (t) => {
   const { dir, ledger } = await fixture(t);
   const file = path.join(dir, 'aborted.jsonl');
   await fs.writeFile(file, [event('session_meta', { id: 'abort' }), count(100, 2)].map(JSON.stringify).join('\n') + '\n');
-  await assert.rejects(ledger.scanFile(file, 'fixture', () => {}, AbortSignal.abort()), /aborted/i);
+  await assert.rejects(ledger.scanFile(file, 'fixture', AbortSignal.abort()), /aborted/i);
   assert.equal(ledger.report().total, 0);
   await ledger.scanFile(file, 'fixture');
   assert.equal(ledger.report().total, 100);

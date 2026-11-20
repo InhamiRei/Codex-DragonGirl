@@ -936,7 +936,7 @@ try {
     c.state.speechEnabled = true;
     const m = globalThis.__dragonGirlApp.monitor;
     const completeIndex = c.dialogueCounts.get('dragon:complete') ?? 0;
-    m.workerMessage({ type: 'task', task: { home: c.instanceId, source: '主任务', status: 'complete' } });
+    m.receiveTaskEvents([{ home: c.instanceId, thread: 'smoke-dragon', turn: 'complete', source: '主任务', status: 'complete' }]);
     const complete = c.bubbleModel.text;
     c.setAppearance({ ...c.appearance, status: 'complete' });
     return { first, second, visible, afterUpdate, completeIndex, complete, afterComplete: c.bubbleModel.text };
@@ -948,11 +948,14 @@ try {
   assert.equal(speech.afterComplete, speech.complete, '完成提示被后台状态覆盖');
   await until(() => character.locator('#character').getAttribute('data-expression').then((value) => value === 'happy'), '主任务完成没有通过监控器触发开心');
   assert.deepEqual(await character.evaluate(() => window.__completionExpressions), ['happy']);
-  // 真正失败必须沿监控器、实例路由和表情订阅完整到达角色，取消和子任务保持独立。
-  await application.evaluate(() => {
+  // 新增失败日志必须经独立 Worker、实例路由和表情订阅完整到达角色。
+  const monitoredHome = await application.evaluate(() => {
     const { monitor, companion } = globalThis.__dragonGirlApp;
-    monitor.workerMessage({ type: 'task', task: { home: companion.instanceId, source: '主任务', status: 'error' } });
+    return monitor.instances.find(({ id }) => id === companion.instanceId).home;
   });
+  await fs.appendFile(path.join(monitoredHome, 'sessions', 'one.jsonl'), JSON.stringify({
+    type: 'event_msg', timestamp: new Date().toISOString(), payload: { type: 'task_failed', turn_id: 'smoke-failure' },
+  }) + '\n');
   await until(() => character.locator('#character').getAttribute('data-expression').then((value) => value === 'sad'), '主任务失败没有通过监控器触发伤心');
   assert.deepEqual(await character.evaluate(() => window.__completionExpressions), ['happy', 'sad']);
   await bubble.screenshot({
@@ -978,10 +981,10 @@ try {
   for (const [status, index] of [['complete', 0], ['complete', 1], ['cancelled', 0], ['error', 0]]) {
     const expected = dialogueLine(status, index, 'maro');
     assert.notEqual(expected, dialogueLine(status, index), `麻吕的 ${status} 仍在复用龙娘的台词`);
-    await application.evaluate((_, status) => {
+    await application.evaluate((_, { status, index }) => {
       const { monitor, companion } = globalThis.__dragonGirlApp;
-      monitor.workerMessage({ type: 'task', task: { home: companion.instanceId, source: '主任务', status } });
-    }, status);
+      monitor.receiveTaskEvents([{ home: companion.instanceId, thread: 'smoke-maro', turn: `${status}-${index}`, source: '主任务', status }]);
+    }, { status, index });
     await until(() => bubble.locator('#message').textContent().then((text) => text === expected), `麻吕未显示 ${status} 的第 ${index + 1} 句台词`);
   }
   await application.evaluate(async () => {
@@ -1013,6 +1016,18 @@ try {
   });
   await page.keyboard.press('Escape');
   await page.locator('[data-settings-tab="sound"]').click();
+  // 旧版配置读取新默认值，保存后通过真实 IPC 更新独立检查间隔和子代理开关。
+  const reminderInterval = page.locator('#task-check-seconds');
+  const subagentSwitch = page.locator('#subagent-notifications');
+  assert.equal(await reminderInterval.inputValue(), '2');
+  assert.equal(await subagentSwitch.isChecked(), false);
+  await reminderInterval.fill('6');
+  await subagentSwitch.check();
+  await page.locator('#save-settings').click();
+  await until(() => application.evaluate(() => {
+    const { taskCheckSeconds, subagentNotifications } = globalThis.__dragonGirlApp.monitor.settings;
+    return taskCheckSeconds === 6 && subagentNotifications;
+  }), '任务提醒设置未保存');
   await page.screenshot({
     animations: 'disabled',
     path: path.join(root, '.artifacts/settings-sound.png'),

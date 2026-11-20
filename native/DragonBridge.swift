@@ -166,15 +166,7 @@ func discoverProcesses() {
 }
 
 // Codex 把画中画的内容和控制放进两块同尺寸的普通层面板，排在聊天窗口上方。
-private func visibleCodexWindows(_ windows: [[String: Any]], pid: pid_t) -> [CodexWindowCandidate] {
-    let candidates = windows.compactMap { window -> CodexWindowCandidate? in
-        guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
-              let (id, frame) = normalWindowGeometry(window) else { return nil }
-        // 系统提供标题时，只比对 Codex 原生预览使用的两个固定名称。
-        let title = window[kCGWindowName as String] as? String ?? ""
-        return CodexWindowCandidate(id: id, frame: frame, hasTitle: !title.isEmpty,
-                                    isPreview: title == "Computer Use" || title == "Computer Use Controls")
-    }
+private func visibleCodexWindows(_ candidates: [CodexWindowCandidate]) -> [CodexWindowCandidate] {
     let hosts = candidates.filter(\.canHost)
     var excluded = Set(candidates.filter(\.isPreview).map(\.id))
     // 系统省略标题时，用相邻同框面板和后方更大的宿主识别预览，保留普通窗口的原有顺序。
@@ -194,20 +186,37 @@ private func visibleCodexWindows(_ windows: [[String: Any]], pid: pid_t) -> [Cod
     return candidates.filter { !excluded.contains($0.id) }
 }
 
+// 普通窗口和各实例的跟随候选共用一次坐标解析，保留 Quartz 返回的前后顺序。
+private func indexNormalWindows(_ windows: [[String: Any]]) -> (geometry: [[String: Any]], codex: [pid_t: [CodexWindowCandidate]]) {
+    var geometry: [[String: Any]] = []
+    var codex: [pid_t: [CodexWindowCandidate]] = [:]
+    for window in windows {
+        guard let (id, frame) = normalWindowGeometry(window) else { continue }
+        geometry.append(["id": id, "x": frame.minX, "y": frame.minY, "width": frame.width, "height": frame.height])
+        guard let pid = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+              cachedProcesses[pid] != nil else { continue }
+        // 系统提供标题时，只比对 Codex 原生预览使用的两个固定名称。
+        let title = window[kCGWindowName as String] as? String ?? ""
+        codex[pid, default: []].append(CodexWindowCandidate(id: id, frame: frame, hasTitle: !title.isEmpty,
+                                                           isPreview: title == "Computer Use" || title == "Computer Use Controls"))
+    }
+    return (geometry, codex)
+}
+
 // 只发送变化后的窗口编号、层级与必要几何，不读取其他应用的标题或内容。
 func emitSnapshot() {
     let now = ProcessInfo.processInfo.systemUptime
     lastSnapshotAt = now
     if Date().timeIntervalSince(lastDiscovery) > 3 { discoverProcesses(); lastDiscovery = Date() }
     let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-    let normal = windows.compactMap(normalWindowGeometry)
+    let normal = indexNormalWindows(windows)
     // 一份快照中所有实例共用一次按需查询，正常的辅助功能路径不扫描离屏窗口。
     lazy var filePanels = quartzFilePanelIDs()
     let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
     var hostFrames: [Int: CGRect] = [:]
     let processes: [[String: Any]] = cachedProcesses.values.sorted { $0.pid < $1.pid }.map { row in
         // 屏幕层级保留预览，跟随与模态判断使用筛选后的宿主列表。
-        let candidates = visibleCodexWindows(windows, pid: row.pid)
+        let candidates = visibleCodexWindows(normal.codex[row.pid] ?? [])
         let visible: [[String: Any]] = candidates.filter(\.canHost).map { window in
             let id = window.id, rect = window.frame
             hostFrames[id] = rect
@@ -226,10 +235,7 @@ func emitSnapshot() {
         return window[kCGWindowNumber as String] as? Int
     }
     // 未被普通窗口遮挡的宿主可使用浮动层保持连续显示，窗口几何同时排除其他显示器的无关窗口。
-    let normalWindows = normal.map { id, rect -> [String: Any] in
-        ["id": id, "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
-    }
-    let snapshot: [String: Any] = ["processes": processes, "windowOrder": windowOrder, "normalWindows": normalWindows, "screenPermission": CGPreflightScreenCaptureAccess()]
+    let snapshot: [String: Any] = ["processes": processes, "windowOrder": windowOrder, "normalWindows": normal.geometry, "screenPermission": CGPreflightScreenCaptureAccess()]
     guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]), let output = String(data: data, encoding: .utf8), output != lastOutput else { return }
     lastOutput = output
     FileHandle.standardOutput.write(data + Data([10]))

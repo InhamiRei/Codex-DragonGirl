@@ -580,6 +580,26 @@
                   </div>
                   <div class="setting-row">
                     <div class="setting-copy">
+                      <label for="task-check-seconds">任务提醒检查间隔</label>
+                      <p>可设为 2–60 秒，独立于用量统计。</p>
+                    </div>
+                    <div class="setting-control input-unit">
+                      <input id="task-check-seconds" name="taskCheckSeconds" type="number" min="2" max="60" step="any" /><span
+                        >秒</span
+                      >
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <label for="subagent-notifications">子代理完成提醒</label>
+                      <p>逐个提示已完成的子代理，主任务优先。</p>
+                    </div>
+                    <div class="setting-control">
+                      <input id="subagent-notifications" name="subagentNotifications" type="checkbox" class="switch" role="switch" />
+                    </div>
+                  </div>
+                  <div class="setting-row">
+                    <div class="setting-copy">
                       <span class="setting-label">免打扰时段</span>
                       <p>此时段内保持安静，留空表示关闭。</p>
                     </div>
