@@ -1,5 +1,6 @@
 import { EYE_ARTWORK } from '../shared/gaze.js';
 import { OMURICE_BOTTLE_EXIT } from '../shared/expression.js';
+import { parseDragonEyeColor } from '../shared/dragon-gear.js';
 import { DragonOmurice } from './dragon-omurice.js';
 import { tintedDragonPortrait } from './dragon-portrait.js';
 
@@ -142,7 +143,8 @@ export class DragonFaces {
     eyeContext.clearRect(x, y, faceWidth, faceHeight);
     if (name === 'omurice') this.paintOmuriceEyes(amount);
     else {
-      this.paintEyeBase(ATLAS_ROWS[name], amount, image.dataset?.tone ?? null);
+      // 只用有效的自选瞳色调色，默认紫瞳的显示标记保留贴图原色。
+      this.paintEyeBase(ATLAS_ROWS[name], amount, parseDragonEyeColor(image.dataset?.tone));
       if (name === 'heart') this.paintHeart(time, amount);
       if (name === 'spiral-eyes') this.paintSpirals(time, amount);
     }

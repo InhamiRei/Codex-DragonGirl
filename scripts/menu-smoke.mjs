@@ -213,6 +213,17 @@ async function verifyDragonEyeRender(name) {
   if (name !== 'white-eyes') {
     // 越过淡入再对比，避免静止贴图只靠透明度变化通过验证。
     await page.waitForTimeout(300);
+    if (name === 'heart') {
+      const iris = await page.locator('#dragon-expression').evaluate((canvas, artwork) => {
+        const context = new OffscreenCanvas(canvas.width, canvas.height).getContext('2d', { willReadFrequently: true });
+        context.drawImage(canvas, 0, 0);
+        // 取两边粉心外侧的虹膜，避开跳动的心形、眼线和高光。
+        return [[430, 735], [902, 768]].map(([x, y]) => [...context.getImageData(
+          Math.floor(x * canvas.width / artwork.width), Math.floor(y * canvas.height / artwork.height), 1, 1).data]);
+      }, EYE_ARTWORK);
+      assert.ok(iris.every(([r, g, b]) => r > 100 && b > r + 20 && r > g + 10),
+        '爱心眼没有保留默认的紫色虹膜：' + JSON.stringify(iris));
+    }
     const frame = () => page.locator('#dragon-expression').evaluate((canvas) => {
       const x = Math.round(canvas.width * .27);
       const y = Math.round(canvas.height * .55);
