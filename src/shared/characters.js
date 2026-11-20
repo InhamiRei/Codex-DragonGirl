@@ -4,10 +4,16 @@ const ORIGIN = 'dragon://app/';
 
 // 内置角色以稳定编号区分；自定义图片仍独立保存，不覆盖任何内置原画。
 export const CHARACTERS = Object.freeze([
-  Object.freeze({ id: 'dragon', name: '龙娘', image: dragonHairstyle().image }),
-  Object.freeze({ id: 'maro', name: '麻吕', image: 'assets/characters/maro/idle.png' }),
+  Object.freeze({
+    id: 'dragon', name: '龙娘', image: dragonHairstyle().image, avatar: 'assets/characters/avatars/dragon.webp',
+  }),
+  Object.freeze({
+    id: 'maro', name: '麻吕', image: 'assets/characters/maro/idle.png', avatar: 'assets/characters/avatars/maro.webp',
+  }),
   // 可可萝的眼区与表情沿用这张透明半身图的坐标。
-  Object.freeze({ id: 'kokkoro', name: '可可萝', image: 'assets/characters/kokkoro/idle.png' }),
+  Object.freeze({
+    id: 'kokkoro', name: '可可萝', image: 'assets/characters/kokkoro/idle.png', avatar: 'assets/characters/avatars/kokkoro.webp',
+  }),
 ]);
 export const DEFAULT_CHARACTER_ASSET = ORIGIN + CHARACTERS[0].image;
 export const MARO_ASSET = ORIGIN + CHARACTERS[1].image;

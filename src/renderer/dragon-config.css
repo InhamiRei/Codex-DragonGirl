@@ -1,33 +1,47 @@
 .companion-chooser {
-  display: flex;
-  width: fit-content;
-  max-width: 100%;
-  gap: 4px;
-  padding: 4px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: min(100%, 314px);
+  gap: 7px;
   margin: 0 auto;
-  border: 1px solid #ded2ed;
-  border-radius: 12px;
-  background: #efebf6;
 }
 .companion-chooser button {
-  min-width: 76px;
-  padding: 5px 12px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 6px;
+  border: 1px solid #e1dce8;
+  border-radius: 999px;
+  background: #fcfaff;
   color: #544761;
   font-size: 13px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
 }
+.companion-chooser img {
+  display: block;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  padding: 1px;
+  border-radius: 50%;
+  background: #f4f5f7;
+  object-fit: contain;
+}
 .companion-chooser button:hover {
-  background: #e7dcf3;
+  border-color: #d0c7db;
+  background: #f2eff6;
 }
 .companion-chooser button[aria-pressed='true'] {
-  border-color: #d7c4ec;
-  background: #fcfaff;
-  color: #503378;
-  box-shadow: 0 1px 4px #7153a01a;
+  box-shadow: 0 2px 6px var(--gear-highlight-shadow, #7750ae29);
+  font-weight: 700;
+}
+.companion-chooser button[aria-pressed='true'] img {
+  box-shadow: 0 0 0 1px var(--gear-highlight-border, #af94d6);
 }
 #dragon-config[data-character='maro'] {
   --rail: #d69570;
@@ -110,13 +124,16 @@
 .dragon-slot-link circle {
   fill: #fcf9ff;
 }
-.dragon-slot:hover,
-.dragon-slot[aria-expanded='true'] {
+.companion-chooser button[aria-pressed='true'],
+.dragon-slot:is(:hover, [aria-expanded='true']) {
   border-color: var(--gear-highlight-border, #af94d6);
   color: var(--gear-highlight-text, #503378);
   background: var(--gear-highlight-fill, #eee5f9);
+}
+.dragon-slot:is(:hover, [aria-expanded='true']) {
   box-shadow: 0 5px 16px var(--gear-highlight-shadow, #7750ae29);
 }
+.companion-chooser button[aria-pressed='true']:focus-visible,
 .dragon-slot:focus-visible {
   outline-color: var(--gear-highlight-border, #b6a5df66);
 }

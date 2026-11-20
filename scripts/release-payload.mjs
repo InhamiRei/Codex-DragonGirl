@@ -47,9 +47,9 @@ async function listFiles(root, directory, pattern) {
 // 构建和验收共享一份收录规则，macOS 和 Windows 仅在原生组件后缀上有差别。
 async function releaseFiles(root, nativeExtension) {
   const folders = await Promise.all(runtimeFolders.map(([folder, pattern]) => listFiles(root, folder, pattern)));
-  // 安装包必须包含完整立绘、分层发型素材以及配置页使用的缩略图。
+  // 安装包必须包含完整立绘、角色头像、分层发型素材以及配置页使用的部件缩略图。
   const gearArtwork = new Set([
-    ...CHARACTERS.map(({ image }) => image),
+    ...CHARACTERS.flatMap(({ image, avatar }) => [image, avatar]),
     DRAGON_FOREGROUND,
     ...DRAGON_HAIRSTYLES.flatMap(({ image, artwork }) => [image, artwork]),
     ...DRAGON_GEAR.flatMap(({ choices }) => choices.map(({ icon }) => icon)),

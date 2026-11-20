@@ -70,7 +70,7 @@ function addGearLink(tile) {
 
 // 共用四角部件布局，选择内置角色后同步桌宠和对应的立绘。
 export class CompanionConfigView {
-  // 先创建角色按钮，首次打开配置页时才载入立绘和部件缩略图。
+  // 先创建角色按钮，打开配置页时才载入头像、立绘和部件缩略图。
   constructor(root, { selectCharacter, saveGear, toast }) {
     this.root = root;
     this.selectCharacter = selectCharacter;
@@ -83,10 +83,17 @@ export class CompanionConfigView {
     this.portrait = root.querySelector('#dragon-config-portrait');
     this.slots = new Map();
     this.characterButtons = new Map();
-    for (const { id, name } of CHARACTERS) {
+    for (const { id, name, avatar } of CHARACTERS) {
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = name;
+      // 头像使用专用的小图，按钮直接用角色名字作为可访问名称。
+      const image = document.createElement('img');
+      image.alt = '';
+      image.width = image.height = 28;
+      image.decoding = 'async';
+      image.loading = 'lazy';
+      image.src = ASSET_ORIGIN + avatar;
+      button.append(image, name);
       // 选中状态由已保存的角色决定，点击时清除自定义原画覆盖。
       button.addEventListener('click', () => {
         if (button.getAttribute('aria-pressed') !== 'true') void this.commit(() => this.selectCharacter(id));
@@ -106,7 +113,7 @@ export class CompanionConfigView {
   // 角色改变时重建四张部件卡，立绘和连线都以该角色的原生画幅定位。
   renderCharacter(character) {
     this.character = character;
-    // 以当前预览角色为准，为部件卡、连线和展开项提供同一套配色。
+    // 以当前预览角色为准，为头像小卡、部件卡和连线提供同一套配色。
     this.root.dataset.character = character.id;
     this.showSlot(null);
     this.slots.clear();

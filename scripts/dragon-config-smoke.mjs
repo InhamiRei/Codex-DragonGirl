@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
-import { DEFAULT_CHARACTER_ASSET, KOKKORO_ASSET, MARO_ASSET } from '../src/shared/characters.js';
+import { CHARACTERS, DEFAULT_CHARACTER_ASSET, KOKKORO_ASSET, MARO_ASSET } from '../src/shared/characters.js';
 import { DRAGON_HAIRSTYLES } from '../src/shared/dragon-gear.js';
 import { prepareHairstyleActions, verifyHairstyleActions } from './dragon-hairstyle-actions.mjs';
 import {
@@ -119,6 +119,19 @@ async function openGearOptions(page, id, ...names) {
   assert.deepEqual(await options.locator('.dragon-gear-option').allTextContents(), names);
   assert.equal(await page.locator('.dragon-slot[aria-expanded="true"]').count(), 1);
   return options;
+}
+
+// 对比选中的头像小卡和展开的部件卡，确认底色、边框及文字颜色来自同一角色配色。
+async function waitForChooserTheme(page, fill) {
+  await page.waitForFunction((expected) => {
+    const selected = document.querySelector('#companion-chooser button[aria-pressed="true"]');
+    const expanded = document.querySelector('.dragon-slot[aria-expanded="true"]');
+    if (!selected || !expanded) return false;
+    const avatar = getComputedStyle(selected);
+    const part = getComputedStyle(expanded);
+    return avatar.backgroundColor === expected && avatar.backgroundColor === part.backgroundColor
+      && avatar.borderColor === part.borderColor && avatar.color === part.color;
+  }, fill);
 }
 
 // 以原图坐标检查四条线的起点和终点，窗口缩放后也要指向同一部件。
@@ -306,6 +319,13 @@ try {
   assert.equal(await dashboard.locator('#title').textContent(), '陪伴配置');
   const chooser = dashboard.getByRole('group', { name: '切换桌面角色' });
   assert.deepEqual(await chooser.getByRole('button').allTextContents(), ['龙娘', '麻吕', '可可萝']);
+  // 逐一解码安装包中的小头像，用包含留白的外框尺寸核对按钮布局。
+  assert.deepEqual(await chooser.locator('button > img').evaluateAll((images) =>
+    Promise.all(images.map(async (image) => {
+      await image.decode();
+      const { width, height } = image.getBoundingClientRect();
+      return [image.src, image.alt, image.naturalWidth, width, height];
+    }))), CHARACTERS.map(({ avatar }) => ['dragon://app/' + avatar, '', 112, 28, 28]));
   assert.equal(await chooser.getByRole('button', { name: '龙娘', exact: true }).getAttribute('aria-pressed'), 'true');
   assert.deepEqual(await dashboard.locator('#dragon-equipment-left .dragon-slot').allTextContents(), ['龙角', '瞳孔']);
   assert.deepEqual(await dashboard.locator('#dragon-equipment-right .dragon-slot').allTextContents(), ['发型', '服饰']);
@@ -315,6 +335,7 @@ try {
     .every((image) => image.complete && image.naturalWidth === 192 && image.naturalHeight === 192));
   await openGearOptions(dashboard, 'clothes', 'GPT白衣');
   await openGearOptions(dashboard, 'horns', 'GPT龙角');
+  await waitForChooserTheme(dashboard, 'rgb(238, 229, 249)');
   const preview = dashboard.locator('#dragon-config-portrait');
   const options = await openGearOptions(dashboard, 'eyes', 'GPT紫瞳', '自选瞳色');
   const preset = options.getByRole('button', { name: 'GPT紫瞳', exact: true });
@@ -491,6 +512,7 @@ try {
   for (const companion of originalCompanions) {
     await verifyOriginalCompanion(dashboard, pet, companion);
     await openGearOptions(dashboard, 'clothes', '原版服饰');
+    await waitForChooserTheme(dashboard, companionColors[companion.id].fill);
     await dashboard.locator('#content-scroll').evaluate((element) => { element.scrollTop = 0; });
     await dashboard.screenshot({ path: path.join(artifacts, 'companion-config-' + companion.id + '.png'), animations: 'disabled' });
   }
