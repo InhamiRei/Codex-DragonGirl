@@ -260,10 +260,10 @@ export class Dashboard {
     }
     this.follow();
   }
-  // 从角色菜单保存单个外观字段，保留最新位置、账户和其他偏好。
+  // 菜单和陪伴配置使用相同的角色设置，切换时保留位置和其他偏好。
   async selectCharacter(id) {
     if (!CHARACTERS.some((character) => character.id === id)) return false;
-    await this.monitor.saveSettings((current) => ({ ...current, characterId: id, characterAsset: '' }));
+    await this.monitor.saveSettings((current) => ({ ...current, characterId: id, characterAsset: '' }), { refreshUsage: false });
     await this.updatePets();
     return true;
   }
@@ -441,6 +441,11 @@ export class Dashboard {
     if (command === 'default-settings') return normalizeSettings();
     if (command === 'startup-status') return this.startup?.snapshot() || { message: '' };
     if (command === 'normalize-settings') return normalizeSettings(value);
+    // 配置页与原生角色菜单共用切换入口，预览以实际保存的角色为准。
+    if (command === 'select-character') {
+      if (!(await this.selectCharacter(value))) throw new Error('找不到要切换的内置角色');
+      return this.monitor.settings;
+    }
     if (command === 'dragon-equipment') return this.selectDragonGear(value ?? undefined);
     // 界面版本来自当前运行的应用元数据，发行升级后无需再手动修改页面文案。
     if (command === 'snapshot') return { ...this.monitor.snapshot(), appearance: this.primary.state, appVersion: app.getVersion() };

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
-import { DEFAULT_CHARACTER_ASSET, MARO_ASSET } from '../src/shared/characters.js';
+import { DEFAULT_CHARACTER_ASSET, KOKKORO_ASSET, MARO_ASSET } from '../src/shared/characters.js';
 import { DRAGON_HAIRSTYLES } from '../src/shared/dragon-gear.js';
 import { prepareHairstyleActions, verifyHairstyleActions } from './dragon-hairstyle-actions.mjs';
 import {
@@ -17,6 +17,15 @@ const hairstyleNames = DRAGON_HAIRSTYLES.map(({ name }) => name);
 // 散发与单马尾已有独立的初始切换和保存检查，其余款式共用逐款验收。
 const additionalHairstyles = DRAGON_HAIRSTYLES.filter(({ id }) => id !== 'loose' && id !== 'ponytail');
 const ponytailAsset = 'dragon://app/assets/characters/codex-dragon-girl-ponytail.png';
+// 固定部件应各有原版缩略图，连线和预览尺寸按两个角色的原图验证。
+const originalCompanions = [
+  { id: 'maro', name: '麻吕', asset: MARO_ASSET, size: [1254, 1254], parts: {
+    tuft: ['翘发', [278, 152]], eyes: ['瞳孔', [440, 620]], hair: ['发型', [843, 272]], clothes: ['服饰', [686, 932]],
+  } },
+  { id: 'kokkoro', name: '可可萝', asset: KOKKORO_ASSET, size: [1299, 1211], parts: {
+    hat: ['兔帽', [309, 275]], eyes: ['瞳孔', [393, 734]], accessory: ['发饰', [1012, 680]], clothes: ['服饰', [641, 1174]],
+  } },
+];
 const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-dragon-config-'));
 const data = path.join(temporary, 'data');
@@ -108,15 +117,16 @@ async function openGearOptions(page, id, ...names) {
 }
 
 // 以原图坐标检查四条线的起点和终点，窗口缩放后也要指向同一部件。
-async function waitForGearLinks(page) {
-  await page.waitForFunction(() => {
+async function waitForGearLinks(page, targets = { horns: [385, 235], eyes: [420, 746], hair: [1001, 444], clothes: [780, 1130] }) {
+  await page.waitForFunction((anchors) => {
     const preview = document.querySelector('#dragon-config-portrait');
     const portrait = preview.getBoundingClientRect();
     const scale = portrait.width / preview.width;
-    const targets = { horns: [385, 235], eyes: [420, 746], hair: [1001, 444], clothes: [780, 1130] };
     const cards = [...document.querySelectorAll('.dragon-slot')];
     return cards.length === 4 && cards.every((card) => {
-      const [x, y] = targets[card.dataset.slot];
+      const target = anchors[card.dataset.slot];
+      if (!target) return false;
+      const [x, y] = target;
       const box = card.getBoundingClientRect();
       const link = card.querySelector('.dragon-slot-link');
       const origin = link.getBoundingClientRect();
@@ -127,7 +137,36 @@ async function waitForGearLinks(page) {
         && Math.abs(tip.left + tip.width / 2 - (portrait.left + x * scale)) < 1
         && Math.abs(tip.top + tip.height / 2 - (portrait.top + y * scale)) < 1;
     });
-  });
+  }, targets);
+}
+
+// 从陪伴配置切换桌宠，核对原画、菜单和每张部件卡的单项展开。
+async function verifyOriginalCompanion(page, pet, { id, name, asset, size, parts }) {
+  const chooser = page.getByRole('group', { name: '切换桌面角色' });
+  const selected = chooser.getByRole('button', { name, exact: true });
+  await selected.click();
+  const preview = page.locator('#dragon-config-portrait[data-asset="' + asset + '"]');
+  await preview.waitFor({ state: 'visible' });
+  await waitForPortrait(pet, asset, size[0]);
+  assert.deepEqual(await preview.evaluate((canvas) => [canvas.width, canvas.height]), size);
+  assert.equal(await preview.getAttribute('aria-label'), name + '外观预览');
+  assert.deepEqual(await portraitDigest(preview), await portraitDigest(pet.locator('#portrait')));
+  assert.equal(await selected.getAttribute('aria-pressed'), 'true');
+  assert.equal(await chooser.locator('button[aria-pressed="true"]').count(), 1);
+  assert.equal(await page.locator('#character-id').inputValue(), id);
+  assert.deepEqual(await page.locator('.dragon-slot').allTextContents(), Object.values(parts).map(([label]) => label));
+  await waitForGearLinks(page, Object.fromEntries(Object.entries(parts).map(([slot, [, target]]) => [slot, target])));
+  const checked = await application.evaluate(() => globalThis.__dragonGirlTest.characterMenuItems()
+    .find(({ checked }) => checked)?.label);
+  assert.equal(checked, name);
+  assert.equal(await page.locator('#dragon-gear-options').isHidden(), true);
+  for (const [slot, [label]] of Object.entries(parts)) {
+    const options = await openGearOptions(page, slot, '原版' + label);
+    assert.equal(await options.locator('div.dragon-gear-option[data-selected]').count(), 1);
+    assert.equal(await options.locator('button, input, select').count(), 0);
+    await page.locator('.dragon-slot[data-slot="' + slot + '"]').click();
+    assert.equal(await options.isHidden(), true);
+  }
 }
 
 // 额度、用量等重复推送不能重写已经显示的配置控件。
@@ -227,9 +266,12 @@ try {
     const brand = await dashboard.locator('.brand-copy').textContent();
     assert.equal(brand.replace(/\s/g, ''), 'GPT龙娘v' + version);
   }
-  const config = dashboard.getByRole('button', { name: '龙娘配置', exact: true });
+  const config = dashboard.getByRole('button', { name: '陪伴配置', exact: true });
   await config.click();
-  assert.equal(await dashboard.locator('#subtitle').textContent(), '个性化你的龙娘');
+  assert.equal(await dashboard.locator('#title').textContent(), '陪伴配置');
+  const chooser = dashboard.getByRole('group', { name: '切换桌面角色' });
+  assert.deepEqual(await chooser.getByRole('button').allTextContents(), ['龙娘', '麻吕', '可可萝']);
+  assert.equal(await chooser.getByRole('button', { name: '龙娘', exact: true }).getAttribute('aria-pressed'), 'true');
   assert.deepEqual(await dashboard.locator('#dragon-equipment-left .dragon-slot').allTextContents(), ['龙角', '瞳孔']);
   assert.deepEqual(await dashboard.locator('#dragon-equipment-right .dragon-slot').allTextContents(), ['发型', '服饰']);
   assert.equal(await dashboard.locator('button.dragon-slot').count(), 4);
@@ -400,23 +442,34 @@ try {
   assert.equal(preferences.dragonHairstyleId, 'ponytail');
   assert.equal(preferences.dragonEyeColor, custom);
 
-  // 合掌只覆盖眼区和手部，切到麻吕后仍记住所选发型与瞳色。
+  // 合掌只覆盖眼区和手部，切换桌宠后仍记住所选发型与瞳色。
   await application.evaluate(() => globalThis.__dragonGirlTest.showExpression('prayer', { preview: true }));
   await pet.locator('#prayer-portrait').waitFor({ state: 'visible' });
   assert.equal(await pet.locator('#prayer-hands').isVisible(), true);
   assert.equal(await pet.locator('#prayer-half').evaluate((canvas) => canvas.getContext('2d')
     .getImageData(100, 858, 1, 1).data[3]), 0);
-  await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.selectCharacter('maro'));
-  await waitForPortrait(pet, MARO_ASSET, 1254);
-  // 使用麻吕时可以继续试选龙娘发型，切回龙娘后才同步桌宠。
-  assert.equal(await dashboard.locator('#dragon-config-inactive').count(), 0);
-  await loose.click();
-  await dashboard.locator('#dragon-config-portrait[data-hairstyle="loose"]').waitFor({ state: 'visible' });
-  await waitForPortrait(pet, MARO_ASSET, 1254);
-  await ponytail.click();
+  // 普通偏好草稿保留未保存的改动，随后保存也不会切回旧角色。
+  const settingsNav = dashboard.getByRole('button', { name: '偏好设置', exact: true });
+  await settingsNav.click();
+  await dashboard.locator('#natural-blink').setChecked(true);
+  await config.click();
+  for (const companion of originalCompanions) {
+    await verifyOriginalCompanion(dashboard, pet, companion);
+    await openGearOptions(dashboard, 'clothes', '原版服饰');
+    await dashboard.locator('#content-scroll').evaluate((element) => { element.scrollTop = 0; });
+    await dashboard.screenshot({ path: path.join(artifacts, 'companion-config-' + companion.id + '.png'), animations: 'disabled' });
+  }
+  await verifyStableGear(dashboard);
+  await settingsNav.click();
+  assert.equal(await dashboard.locator('#natural-blink').isChecked(), true);
+  await dashboard.locator('#save-settings').click();
+  await dashboard.locator('#dirty-hint[data-dirty="false"]').waitFor({ state: 'visible' });
+  const savedCompanion = JSON.parse(await fs.readFile(settingsFile, 'utf8'));
+  assert.equal(savedCompanion.characterId, 'kokkoro');
+  assert.equal(savedCompanion.blinkEnabled, true);
+  await config.click();
+  await chooser.getByRole('button', { name: '龙娘', exact: true }).click();
   await ponytailPreview.waitFor({ state: 'visible' });
-  await idleOptions.waitFor({ state: 'visible' });
-  await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.selectCharacter('dragon'));
   await waitForPortrait(pet, ponytailAsset);
   await pet.locator(tinted).waitFor({ state: 'visible' });
   await application.close();
@@ -430,7 +483,7 @@ try {
   ({ dashboard, pet } = await boot());
   await waitForPortrait(pet, ponytailAsset);
   await pet.locator(tinted).waitFor({ state: 'visible' });
-  await dashboard.getByRole('button', { name: '龙娘配置', exact: true }).click();
+  await dashboard.getByRole('button', { name: '陪伴配置', exact: true }).click();
   await dashboard.locator(customPreview).waitFor({ state: 'visible' });
   await openGearOptions(dashboard, 'hair', ...hairstyleNames);
   assert.equal(await dashboard.getByRole('button', { name: '单马尾', exact: true }).getAttribute('aria-pressed'), 'true');
@@ -453,7 +506,7 @@ try {
         ...fixture, dragonHairstyleId: id === 'loose' ? 'ponytail' : 'loose',
       }));
       ({ dashboard, pet } = await boot());
-      await dashboard.getByRole('button', { name: '龙娘配置', exact: true }).click();
+      await dashboard.getByRole('button', { name: '陪伴配置', exact: true }).click();
       const hairstyleOptions = await openGearOptions(dashboard, 'hair', ...hairstyleNames);
       await prepareHairstyleActions(application, pet);
       await hairstyleOptions.getByRole('button', { name, exact: true }).click();
@@ -479,7 +532,7 @@ try {
   }
   await fs.writeFile(path.join(hairstyleArtifacts, 'report.json'), JSON.stringify(verified, null, 2));
   assert.deepEqual(errors, []);
-  console.log('龙娘配置验证通过：v' + version + '、四角连线、发型缩略图、立绘同步、重启恢复、独立选色与合掌。');
+  console.log('陪伴配置验证通过：v' + version + '，三角色切换、原版部件、龙娘换装与瞳色、重启恢复及全部发型的动作。');
 } finally {
   if (application) await application.close().catch(() => {});
   await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });

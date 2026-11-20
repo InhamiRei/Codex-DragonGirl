@@ -6,7 +6,8 @@ import { DragonMotion } from './dragon-motion.js';
 import { DragonFaces } from './dragon-expressions.js';
 import { FlipMotion } from '../shared/facing.js';
 import { CharacterSprites } from './character-sprites.js';
-import { characterByAsset, isCharacterMenuPoint, isDragonAsset } from '../shared/characters.js';
+import { KokkoroFace } from './kokkoro-face.js';
+import { KOKKORO_ASSET, characterByAsset, isCharacterMenuPoint, isDragonAsset } from '../shared/characters.js';
 import { EYE_ARTWORK } from '../shared/gaze.js';
 import { isDragonFace } from '../shared/expression.js';
 import { dragonEyeTone } from '../shared/dragon-gear.js';
@@ -64,6 +65,8 @@ const sprites = new CharacterSprites(character, portraitSlot, (next) => {
   mask = next || baseMask;
   updateInteractive();
 });
+// 可可萝沿用 B 版的透明命中图，只在脸部加眼区和动作图层。
+const kokkoro = new KokkoroFace(character, paintCharacter);
 
 // 从原图读取一次透明度，不按白色抠图，因此白发、衣服和眼睛高光都能正常响应。
 function buildAlphaMask(image) {
@@ -102,6 +105,7 @@ function routeCursor(point) {
   if (point) {
     eyes.follow(point);
     sprites.follow(point);
+    kokkoro.follow(point);
   }
   updateInteractive();
 }
@@ -260,6 +264,7 @@ function configureEyes() {
   if (paintedAsset === layout.asset) eyes.configure(portraitArtwork, layout, gazePose, reducedMotion.matches, pressed);
   else eyes.reset();
   sprites.configure(layout, reducedMotion.matches, pressed, gazePose);
+  kokkoro.configure(decodedPortrait, layout, gazePose, reducedMotion.matches, pressed);
 }
 
 // 发型随立绘地址一起参与缓存，瞳色单独参与绘制。
@@ -373,11 +378,15 @@ function applyLayout(model) {
 function paintCharacter() {
   if (!layout) return;
   dragonFaces.updateMotion(portraitArtwork, dragonMotion, layout.rect);
+  // 可可萝的头身轻摆、眼区与透明点击区域共用同一变换。
+  const sway = kokkoro.pose;
   renderedPose = {
     ...pose, ...bodyPose,
-    translateY: bodyPose.translateY - layout.rect.height * dragonMotion.breath,
-    angle: pose.angle + bodyPose.angle,
+    translateX: bodyPose.translateX + sway.translateX,
+    translateY: bodyPose.translateY + sway.translateY - layout.rect.height * dragonMotion.breath,
+    angle: pose.angle + bodyPose.angle + sway.angle,
     scaleX: pose.scaleX * flip.value,
+    scaleY: pose.scaleY * sway.scaleY,
   };
   const flipping = String(!flip.settled);
   if (character.dataset.flipping !== flipping) character.dataset.flipping = flipping;
@@ -497,6 +506,11 @@ async function showExpression(message) {
   const request = ++expressionRequest;
   if (layout.praying) return;
   const name = typeof message === 'string' ? message : message?.name;
+  // 可可萝只走自己的动作控制器，加载期间的最新动作由该控制器接续。
+  if (layout.asset === KOKKORO_ASSET) {
+    kokkoro.play(name);
+    return;
+  }
   if (name === 'prayer') {
     showPrayer();
     return;
@@ -577,6 +591,7 @@ async function start() {
     dragonMotion.reset();
     eyes.reset();
     sprites.destroy();
+    kokkoro.destroy();
   });
   bridge.ready();
 }

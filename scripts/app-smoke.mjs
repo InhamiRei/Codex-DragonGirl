@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL('../', import.meta.url)),
   temp = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-app-')),
   user = path.join(temp, 'user'),
   data = path.join(temp, 'data');
-// 主导航顺序是界面契约，龙娘配置紧接在偏好设置之后。
+// 主导航顺序是界面契约，陪伴配置紧接在偏好设置之后。
 const dashboardTabs = ['overview', 'usage', 'account-tests', 'settings', 'dragon-config'];
 // 不预装用户音效，首次启动必须直接使用安装包中的九段原声。
 await fs.mkdir(data, { recursive: true });

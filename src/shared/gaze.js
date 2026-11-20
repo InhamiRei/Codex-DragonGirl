@@ -1,5 +1,5 @@
 import { imagePoint } from './hit-test.js';
-import { DEFAULT_CHARACTER_ASSET, MARO_ASSET, isDragonAsset } from './characters.js';
+import { DEFAULT_CHARACTER_ASSET, KOKKORO_ASSET, MARO_ASSET, isDragonAsset } from './characters.js';
 
 export { DEFAULT_CHARACTER_ASSET };
 // 眼区坐标以龙娘原画标定，自定义图片不使用这组坐标。
@@ -37,7 +37,8 @@ export const EYE_ARTWORK = Object.freeze({
 
 // 主进程和界面共用启用条件，关闭开关或导入图片后停止屏幕外的视线消息。
 export function eyeTrackingEnabled(asset = DEFAULT_CHARACTER_ASSET, settings = {}) {
-  return (isDragonAsset(asset) || asset === MARO_ASSET) && settings.eyeTracking !== false;
+  return (isDragonAsset(asset) || asset === MARO_ASSET || asset === KOKKORO_ASSET)
+    && settings.eyeTracking !== false;
 }
 
 // 逆转角色的翻转、按压和旋转，以双眼中点计算同向视线，避免近距离变成对眼。

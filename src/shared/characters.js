@@ -6,9 +6,12 @@ const ORIGIN = 'dragon://app/';
 export const CHARACTERS = Object.freeze([
   Object.freeze({ id: 'dragon', name: '龙娘', image: dragonHairstyle().image }),
   Object.freeze({ id: 'maro', name: '麻吕', image: 'assets/characters/maro/idle.png' }),
+  // 可可萝的眼区与表情沿用这张透明半身图的坐标。
+  Object.freeze({ id: 'kokkoro', name: '可可萝', image: 'assets/characters/kokkoro/idle.png' }),
 ]);
 export const DEFAULT_CHARACTER_ASSET = ORIGIN + CHARACTERS[0].image;
 export const MARO_ASSET = ORIGIN + CHARACTERS[1].image;
+export const KOKKORO_ASSET = ORIGIN + CHARACTERS[2].image;
 // 内置发型沿用原画坐标，共用眼区、表情和发饰点击区域。
 const DRAGON_ASSETS = new Set(DRAGON_HAIRSTYLES.map(({ image }) => ORIGIN + image));
 export const HAIR_FRAMES = 30;
@@ -52,7 +55,7 @@ export function isDragonAsset(asset) {
 // 导入图片不会借用内置角色的动画。
 export function characterByAsset(asset = DEFAULT_CHARACTER_ASSET) {
   if (isDragonAsset(asset)) return CHARACTERS[0];
-  return asset === MARO_ASSET ? CHARACTERS[1] : null;
+  return CHARACTERS.find(({ image }) => ORIGIN + image === asset) ?? null;
 }
 
 // 以绝对经过时间选帧，卡顿或后台恢复不会积累过期动作。

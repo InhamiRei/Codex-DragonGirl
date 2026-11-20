@@ -54,6 +54,13 @@ export function companionAppearance(settings, assetDirectory, status = 'idle') {
   };
 }
 
+// 动作菜单根据角色已有的表情与动作素材提供预览。
+const CHARACTER_ACTIONS = {
+  dragon: [['发光', 'happy'], ['哭泣', 'sad'], ['祈祷', 'prayer'], ...DRAGON_FACE_EXPRESSIONS],
+  maro: [['完成', 'happy'], ['失败', 'sad'], ['捋头发', 'hair']],
+  kokkoro: [['完成', 'happy'], ['失败', 'sad']],
+};
+
 // 桌面层只负责窗口、手势与持久化，角色绘制和气泡内容各自独立。
 export class Companion {
   static registry = new Set();
@@ -744,6 +751,7 @@ export class Companion {
   // 原生菜单让透明挂件不必常驻额外按钮，角色本体和设置入口保持分离。
   buildMenu() {
     const characterId = characterByAsset(this.appearance.asset)?.id;
+    const actions = CHARACTER_ACTIONS[characterId] ?? [];
     return Menu.buildFromTemplate([
       { label: this.instanceName || '龙娘', enabled: false },
       ...(this.delegate
@@ -765,14 +773,11 @@ export class Companion {
         label: '说句话',
         click: () => this.speak(),
       },
-      // 手动预览走统一表情事件并自动恢复；托盘操作先叫出角色，自定义图片和关闭动态表情时禁用。
+      // 角色有可用动作且动态表情开启时，才启用手动预览。
       {
         label: '动作',
-        enabled: !!characterId
-          && this.appearance.settings?.expressionsEnabled !== false,
-        submenu: (characterId === 'maro'
-          ? [['完成', 'happy'], ['失败', 'sad'], ['捋头发', 'hair']]
-          : [['发光', 'happy'], ['哭泣', 'sad'], ['祈祷', 'prayer'], ...DRAGON_FACE_EXPRESSIONS]).map(([label, name]) => ({
+        enabled: actions.length > 0 && this.appearance.settings?.expressionsEnabled !== false,
+        submenu: actions.map(([label, name]) => ({
           label,
           enabled: name !== 'hair' || this.appearance.settings?.motion !== false,
           click: () => {

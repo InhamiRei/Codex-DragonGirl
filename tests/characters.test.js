@@ -8,6 +8,8 @@ import { CHARACTERS, MARO_ASSET, MARO_HAIR_ASSETS, MARO_FRAME_SIZE, characterByI
   isCharacterMenuPoint } from '../src/shared/characters.js';
 import { SettingsStore, normalizeSettings } from '../src/core/settings.js';
 import { imagePoint } from '../src/shared/hit-test.js';
+import { dialogueLine } from '../src/shared/dialogue.js';
+import { KOKKORO_DIALOGUE } from '../src/shared/kokkoro-dialogue.js';
 
 // 防止打包时误换成旧的低清网格或缺帧；首尾必须与用户确认的待机原图完全一致。
 test('三十帧均为 1254 像素且循环首尾复用待机原图', async () => {
@@ -37,11 +39,13 @@ test('三十帧均为 1254 像素且循环首尾复用待机原图', async () =>
 test('内置角色选择兼容旧配置并拒绝任意路径', () => {
   assert.equal(normalizeSettings().characterId, 'dragon');
   assert.equal(normalizeSettings({ characterId: 'maro' }).characterId, 'maro');
+  assert.equal(normalizeSettings({ characterId: 'kokkoro' }).characterId, 'kokkoro');
   assert.equal(normalizeSettings({ characterId: '../../auth.json' }).characterId, 'dragon');
   assert.equal(characterById('maro').name, '麻吕');
   assert.equal(characterByAsset(MARO_ASSET).id, 'maro');
+  assert.equal(characterByAsset('dragon://app/assets/characters/kokkoro/idle.png').name, '可可萝');
   assert.equal(characterByAsset('dragon://app/user-assets/123.png'), null);
-  assert.equal(CHARACTERS.length, 2);
+  assert.deepEqual(CHARACTERS.map(({ id }) => id), ['dragon', 'maro', 'kokkoro']);
 });
 
 // 切换角色通过局部保存保留位置和音量，重启后仍读取到所选角色。
@@ -50,13 +54,27 @@ test('角色选择持久化而不覆盖其他用户偏好', async () => {
   try {
     const store = new SettingsStore(directory);
     await store.save({ volume: 0.17, followOffsets: { '/tmp/codex': { x: 0.2, y: 0.7 } } });
-    await store.save((current) => ({ ...current, characterId: 'maro', characterAsset: '' }));
-    const saved = await new SettingsStore(directory).load();
-    assert.equal(saved.characterId, 'maro');
-    assert.equal(saved.volume, 0.17);
-    assert.deepEqual(saved.followOffsets['/tmp/codex'], { x: 0.2, y: 0.7 });
+    for (const characterId of ['maro', 'kokkoro', 'dragon']) {
+      await store.save((current) => ({ ...current, characterId, characterAsset: '' }));
+      const saved = await new SettingsStore(directory).load();
+      assert.equal(saved.characterId, characterId);
+      assert.equal(saved.volume, 0.17);
+      assert.deepEqual(saved.followOffsets['/tmp/codex'], { x: 0.2, y: 0.7 });
+    }
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+// 可可萝的四类台词独立轮换，避免显示其他角色的气泡。
+test('可可萝使用独立的日常、完成、失败和取消台词', () => {
+  assert.equal(KOKKORO_DIALOGUE.chat.length, 24);
+  assert.equal(KOKKORO_DIALOGUE.complete.length + KOKKORO_DIALOGUE.error.length + KOKKORO_DIALOGUE.cancelled.length, 10);
+  for (const [kind, lines] of Object.entries(KOKKORO_DIALOGUE)) {
+    assert.equal(dialogueLine(kind, lines.length, 'kokkoro'), lines[0]);
+    assert.notEqual(lines[0], dialogueLine(kind, 0, 'dragon'));
+    assert.notEqual(lines[0], dialogueLine(kind, 0, 'maro'));
+    assert.equal(new Set(lines).size, lines.length);
   }
 });
 

@@ -4,8 +4,9 @@ import { planLabel, instanceLabel, originLabel, quotaAvailableWindows } from '..
 import { SoundEngine } from './audio.js';
 import { dayKey, midnight, nextDay } from '../shared/time.js';
 import { activityCalendar, activityLevel } from '../shared/activity.js';
+import { CHARACTERS } from '../shared/characters.js';
 import { AccountTestsView } from './account-tests.js';
-import { DragonConfigView } from './dragon-config.js';
+import { CompanionConfigView } from './companion-config.js';
 const bridge = window.dragonGirl,
   sound = new SoundEngine();
 let state,
@@ -26,7 +27,7 @@ let state,
   tooltipTarget;
 const THREAD_PAGE_SIZE = 20;
 const accountCards = new Map();
-let accountTests, dragonConfig;
+let accountTests, companionConfig;
 let indexedReport, threadChildren;
 const $ = (selector) => document.querySelector(selector);
 const names = {
@@ -132,7 +133,7 @@ function switchTab(tab) {
     usage: ['用量账本', '按日期、实例和模型查看本机记录。'],
     'account-tests': ['账号测智', '统一题目和参数，对比各个账号的回答。'],
     settings: ['偏好设置', '调整显示、声音与统计偏好。'],
-    'dragon-config': ['龙娘配置', '个性化你的龙娘'],
+    'dragon-config': ['陪伴配置', '切换桌面角色并查看外观'],
   };
   if (!titles[tab]) return;
   closeSelects();
@@ -150,13 +151,13 @@ function switchTab(tab) {
   $('#title').textContent = titles[tab][0];
   $('#subtitle').textContent = titles[tab][1];
   $('#toggle-filter').hidden = tab !== 'usage';
-  const configuringDragon = tab === 'dragon-config';
-  $('.header-actions').hidden = configuringDragon;
-  $('.page-footer').hidden = configuringDragon;
-  $('#index-state').hidden = configuringDragon || !$('#index-state').textContent;
+  const configuringCompanion = tab === 'dragon-config';
+  $('.header-actions').hidden = configuringCompanion;
+  $('.page-footer').hidden = configuringCompanion;
+  $('#index-state').hidden = configuringCompanion || !$('#index-state').textContent;
   if (tab === 'usage') void loadReport();
   if (tab === 'account-tests') void accountTests.open().catch(() => {});
-  if (configuringDragon) dragonConfig.open(state.settings);
+  if (configuringCompanion) companionConfig.open(state.settings);
   if (tab === 'settings') {
     if (!draft) fillSettings(state.settings);
     switchSettingsTab(activeSettingsTab);
@@ -564,13 +565,25 @@ function updateSelect(selector, values, first) {
   }
   syncSelects(select.parentElement);
 }
-// 桌面后台推送不会覆盖用户正在编辑的表单。
+// 外部切换仅更新仍与原保存值一致的角色字段，保留用户显式编辑的草稿。
+function syncCharacterDraft(previous, current) {
+  if (!draft || replaceSettings || !previous || !current) return;
+  if (previous.characterId === current.characterId && previous.characterAsset === current.characterAsset) return;
+  const field = $('#character-id');
+  if (field.value !== previous.characterId || draft.characterAsset !== previous.characterAsset) return;
+  draft.characterId = field.value = current.characterId;
+  draft.characterAsset = current.characterAsset;
+  syncSelects(field.parentElement);
+}
+
+// 桌面后台推送同步已保存的角色，表单中正在编辑的设置继续保留。
 function receive(next) {
+  syncCharacterDraft(state?.settings, next.settings);
   state = { ...state, ...next };
   renderOverview();
   renderRefresh();
   accountTests?.updateAccounts();
-  if (activeTab === 'dragon-config') dragonConfig.update(state.settings);
+  if (activeTab === 'dragon-config') companionConfig.update(state.settings);
   updateSelect(
     '#filter-home',
     state.instances.map((i) => [i.id, instanceLabel(i, state.settings)]),
@@ -956,14 +969,23 @@ function action(id, callback) {
 }
 // 初始化事件只注册一次，后续实时推送不重建导航监听。
 async function start() {
+  // 偏好设置和角色切换菜单共用同一份内置角色列表。
+  $('#character-id').replaceChildren(...CHARACTERS.map(({ id, name }) => new Option(name, id)));
   enhanceSelects();
   state = await call('snapshot');
   // 共享侧栏读取实际运行版本，使五个页面上的显示一致。
   $('#app-version').textContent = `v${state.appVersion}`;
   accountTests = new AccountTestsView({ call, toast, getState: () => state });
-  dragonConfig = new DragonConfigView($('#dragon-config'), {
+  companionConfig = new CompanionConfigView($('#dragon-config'), {
+    // 角色切换只同步偏好草稿中未修改的角色字段。
+    selectCharacter: async (id) => {
+      const settings = await call('select-character', id);
+      syncCharacterDraft(state.settings, settings);
+      state.settings = settings;
+      return settings;
+    },
     // 换装独立保存，偏好页里还没提交的表单草稿不随之重置。
-    save: async (selection) => {
+    saveGear: async (selection) => {
       state.settings = await call('dragon-equipment', selection);
       return state.settings;
     },

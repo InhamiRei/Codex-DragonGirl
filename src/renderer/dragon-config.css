@@ -1,3 +1,34 @@
+.companion-chooser {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  gap: 4px;
+  padding: 4px;
+  margin: 0 auto;
+  border: 1px solid #ded2ed;
+  border-radius: 12px;
+  background: #efebf6;
+}
+.companion-chooser button {
+  min-width: 76px;
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #544761;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.companion-chooser button:hover {
+  background: #e7dcf3;
+}
+.companion-chooser button[aria-pressed='true'] {
+  border-color: #d7c4ec;
+  background: #fcfaff;
+  color: #503378;
+  box-shadow: 0 1px 4px #7153a01a;
+}
 .dragon-wardrobe {
   --rail: #bda8d8;
   --rail-active: #9870ce;
@@ -86,6 +117,17 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+.dragon-gear-crop {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  overflow: hidden;
+  border-radius: 5px;
+}
+.dragon-gear-crop img {
+  position: absolute;
+  max-width: none;
 }
 .dragon-preview {
   width: 100%;

@@ -46,7 +46,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M7.5 8.5C5.5 8 5 5.5 5 3c2.5 1 4.5 2.8 5 4.2M16.5 8.5C18.5 8 19 5.5 19 3c-2.5 1-4.5 2.8-5 4.2" />
             <path d="M12 7c-4 0-7 3-7 6.5 0 4 3.4 6.5 7 6.5s7-2.5 7-6.5C19 10 16 7 12 7zM9 13v1m6-1v1" />
-          </svg><span>龙娘配置</span>
+          </svg><span>陪伴配置</span>
         </button>
       </nav>
     </aside>
@@ -426,7 +426,7 @@
                   <div class="setting-row">
                     <div class="setting-copy">
                       <label for="eye-tracking">眼睛跟随</label>
-                      <p>龙娘和麻吕的眼睛会跟随鼠标；龙娘的身体会轻轻配合，自定义图片保持原样。</p>
+                      <p>内置角色的眼睛会跟随鼠标，龙娘的身体也会轻轻配合。</p>
                     </div>
                     <div class="setting-control">
                       <input
@@ -441,7 +441,7 @@
                   <div class="setting-row">
                     <div class="setting-copy">
                       <label for="natural-blink">自然眨眼</label>
-                      <p>默认角色不定时轻眨双眼，快速闭合后自然睁开。</p>
+                      <p>内置角色不定时轻眨双眼，快速闭合后自然睁开。</p>
                     </div>
                     <div class="setting-control">
                       <input
@@ -456,7 +456,7 @@
                   <div class="setting-row">
                     <div class="setting-copy">
                       <label for="dynamic-expressions">动态表情</label>
-                      <p>轻点或主任务完成时开心闪亮约两秒；主任务失败时含泪低垂，约六秒后恢复。</p>
+                      <p>轻点角色或主任务完成时显示开心表情，主任务失败时显示失败表情。</p>
                     </div>
                     <div class="setting-control">
                       <input
@@ -488,10 +488,7 @@
                       <p>龙娘可点击发饰切换；也可使用右键菜单。</p>
                     </div>
                     <div class="setting-control">
-                      <select id="character-id" name="characterId">
-                        <option value="dragon">龙娘</option>
-                        <option value="maro">麻吕</option>
-                      </select>
+                      <select id="character-id" name="characterId"></select>
                     </div>
                   </div>
                   <div class="setting-row">
@@ -918,7 +915,8 @@
             </form>
           </section>
           <section id="dragon-config" class="view" aria-labelledby="title" hidden>
-            <!-- 两组卡片围绕原版立绘，瞳色选项在下方展开。 -->
+            <div class="companion-chooser" id="companion-chooser" role="group" aria-label="切换桌面角色"></div>
+            <!-- 两组部件卡围绕当前立绘，选项在下方展开。 -->
             <div class="dragon-wardrobe">
               <div class="dragon-equipment" id="dragon-equipment-left" role="group" aria-label="左侧装备"></div>
               <figure class="dragon-preview">
