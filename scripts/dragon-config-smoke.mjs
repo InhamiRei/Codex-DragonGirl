@@ -161,9 +161,26 @@ async function verifyOriginalCompanion(page, pet, { id, name, asset, size, parts
   assert.equal(checked, name);
   assert.equal(await page.locator('#dragon-gear-options').isHidden(), true);
   for (const [slot, [label]] of Object.entries(parts)) {
+    // 核对卡片读取独立的方形缩略图，画布四角保留透明。
+    const icon = page.locator('.dragon-slot[data-slot="' + slot + '"] img');
+    const source = 'dragon://app/assets/characters/' + id + '/gear/' + slot + '.webp';
+    assert.equal(await icon.evaluate(async (image, source) => {
+      await image.decode();
+      if (image.src !== source || image.naturalWidth !== 192 || image.naturalHeight !== 192) return false;
+      const canvas = new OffscreenCanvas(192, 192);
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      context.drawImage(image, 0, 0);
+      return [[0, 0], [191, 0], [0, 191], [191, 191]].every(([x, y]) =>
+        context.getImageData(x, y, 1, 1).data[3] === 0);
+    }, source), true, name + '的' + label + '缺少独立透明缩略图');
     const options = await openGearOptions(page, slot, '原版' + label);
     assert.equal(await options.locator('div.dragon-gear-option[data-selected]').count(), 1);
     assert.equal(await options.locator('button, input, select').count(), 0);
+    // 展开后的原版卡加载与分类卡相同的图片。
+    assert.equal(await options.locator('img').evaluate(async (image) => {
+      await image.decode();
+      return image.src;
+    }), source);
     await page.locator('.dragon-slot[data-slot="' + slot + '"]').click();
     assert.equal(await options.isHidden(), true);
   }

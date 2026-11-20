@@ -118,17 +118,6 @@
   height: 100%;
   object-fit: contain;
 }
-.dragon-gear-crop {
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  overflow: hidden;
-  border-radius: 5px;
-}
-.dragon-gear-crop img {
-  position: absolute;
-  max-width: none;
-}
 .dragon-preview {
   width: 100%;
   aspect-ratio: 1330 / 1182;

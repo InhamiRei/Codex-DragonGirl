@@ -14,44 +14,29 @@ const GEAR_TARGETS = {
   clothes: [780, 1130],
 };
 
-// 麻吕和可可萝的部件缩略图直接取自原画，裁切框和连线终点使用原图像素。
+// 部件各有独立的透明缩略图，连线终点仍按立绘的原生像素记录。
 const ORIGINAL_GEAR = {
   maro: {
     size: [1254, 1254],
     parts: [
-      { id: 'tuft', label: '翘发', crop: [211, 86, 151, 120], target: [278, 152] },
-      { id: 'eyes', label: '瞳孔', crop: [333, 548, 170, 133], target: [440, 620] },
-      { id: 'hair', label: '发型', crop: [223, 18, 716, 543], target: [843, 272] },
-      { id: 'clothes', label: '服饰', crop: [375, 812, 402, 285], target: [686, 932] },
+      { id: 'tuft', label: '翘发', target: [278, 152] },
+      { id: 'eyes', label: '瞳孔', target: [440, 620] },
+      { id: 'hair', label: '发型', target: [843, 272] },
+      { id: 'clothes', label: '服饰', target: [686, 932] },
     ],
   },
   kokkoro: {
     size: [1299, 1211],
     parts: [
-      { id: 'hat', label: '兔帽', crop: [163, 81, 774, 422], target: [309, 275] },
-      { id: 'eyes', label: '瞳孔', crop: [268, 597, 187, 216], target: [393, 734] },
-      { id: 'accessory', label: '发饰', crop: [770, 475, 399, 369], target: [1012, 680] },
-      { id: 'clothes', label: '服饰', crop: [350, 1018, 372, 186], target: [641, 1174] },
+      { id: 'hat', label: '兔帽', target: [309, 275] },
+      { id: 'eyes', label: '瞳孔', target: [393, 734] },
+      { id: 'accessory', label: '发饰', target: [1012, 680] },
+      { id: 'clothes', label: '服饰', target: [641, 1174] },
     ],
   },
 };
 
-// 让裁切框等比缩放，卡片和下方的原版选项共用对应部位的缩略图。
-function cropGearImage(image, { crop: [x, y, width, height], size }) {
-  const frame = document.createElement('span');
-  frame.className = 'dragon-gear-crop';
-  const scale = 100 / Math.max(width, height);
-  frame.style.width = width * scale + '%';
-  frame.style.height = height * scale + '%';
-  image.style.width = 100 * size[0] / width + '%';
-  image.style.height = 100 * size[1] / height + '%';
-  image.style.left = -100 * x / width + '%';
-  image.style.top = -100 * y / height + '%';
-  frame.append(image);
-  return frame;
-}
-
-// 四张分类卡和带缩略图的装备选项共用布局。
+// 分类卡和下方装备选项共用对应部件的完整缩略图。
 function gearView(className, tagName, item, label = item.name) {
   const tile = document.createElement(tagName);
   if (tagName === 'button') tile.type = 'button';
@@ -64,7 +49,7 @@ function gearView(className, tagName, item, label = item.name) {
   image.src = ASSET_ORIGIN + item.icon;
   const name = document.createElement('span');
   name.textContent = label;
-  visual.append(item.crop ? cropGearImage(image, item) : image);
+  visual.append(image);
   tile.append(visual, name);
   return { tile, visual, image };
 }
@@ -135,9 +120,10 @@ export class CompanionConfigView {
     this.eyeTone = undefined;
     this.preview = null;
 
-    // 原版部件复用龙角的单项展示方式，不关联可写入的设置字段。
-    const gear = original ? original.parts.map(({ id, label, crop, target }) => ({
-      id, label, target, choices: [{ name: '原版' + label, icon: character.image, crop, size: original.size }],
+    // 每个固定部件只展示原版，分类卡和展开项读取同一张角色专属缩略图。
+    const gear = original ? original.parts.map((part) => ({
+      ...part,
+      choices: [{ name: '原版' + part.label, icon: `assets/characters/${character.id}/gear/${part.id}.webp` }],
     })) : DRAGON_GEAR;
     for (const [index, slot] of gear.entries()) {
       const { tile, visual, image } = gearView('dragon-slot', 'button', slot.choices[0], slot.label);
