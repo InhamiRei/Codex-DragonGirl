@@ -490,6 +490,189 @@ test('压缩归档与重复副本的用量保持一致', async (t) => {
   assert.equal(ledger.report().total, 321);
 });
 
+// 让历史包含嵌套用量、中文和转义引号，同时验证外层元数据在 payload 前后的两种排列。
+function compactedSample(headerFirst = false) {
+  const history = [{ text: '龙' + 'x'.repeat(33 * 1024 * 1024) + '\\"}][{' }, count(999, 45)];
+  const payload = { message: '', replacement_history: history };
+  const header = { timestamp: '2026-10-28T01:00:50Z', type: 'compacted', ordinal: 9 };
+  return JSON.stringify(headerFirst ? { ...header, payload } : { payload, ...header });
+}
+
+// 超长历史的外层状态和用量明细必须与完整 JSON 解析相同，明文、Zstandard 均应保存检查点。
+test('超长 compacted 后的 14 Tokens 入账，重复扫描复用检查点', async (t) => {
+  const { dir, ledger } = await fixture(t);
+  const { zstdCompressSync } = await import('node:zlib');
+  const usage = { ...event('token_usage_record', { response_id: 'after-history',
+    usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 } }, 4), ordinal: 10 };
+  const read = t.mock.method(fsSync, 'createReadStream');
+  for (const extension of ['jsonl', 'jsonl.zst']) {
+    const compressed = extension.endsWith('.zst');
+    // 同一个序号在两条继承边界的两侧，漏掉时间或序号都会导致和完整解析的状态不同。
+    const meta = event('session_meta', { id: 'large-archive', subagent_history_start_ordinal: compressed ? 10 : 8 }, 0);
+    const compacted = compactedSample(compressed);
+    const text = Buffer.from([JSON.stringify(meta), compacted, JSON.stringify(usage), ''].join('\r\n'));
+    const file = path.join(dir, 'large.' + extension);
+    const contents = compressed ? zstdCompressSync(text) : text;
+    await fs.writeFile(file, contents);
+    // 独立地完整解析原始超长 JSON，对照状态、导出明细和汇总的实际值。
+    const expected = parserState();
+    parseUsageEvent(meta, expected, extension);
+    parseUsageEvent(JSON.parse(compacted), expected, extension);
+    const row = parseUsageEvent(usage, expected, extension).usage;
+    assert.deepEqual(await ledger.scanFile(file, extension), expected);
+    assert.equal(ledger.findFile.get(file).offset, contents.length);
+    assert.deepEqual(ledger.rows({ home: extension }).map((r) => ({ ...r })), [row]);
+    assert.equal(ledger.report({ home: extension }).total, 14);
+    const opens = read.mock.callCount();
+    assert.deepEqual(await ledger.scanFile(file, extension), expected);
+    assert.equal(read.mock.callCount(), opens);
+    assert.equal(ledger.report({ home: extension }).requests, 1);
+  }
+});
+
+// 已有检查点的会话可能分多次写入大行，分别覆盖历史正文中断及外层时间戳写到一半。
+test('超过上限的半行只在补齐换行后推进偏移并恢复入账', async (t) => {
+  const { dir, ledger } = await fixture(t);
+  const file = path.join(dir, 'partial-large.jsonl');
+  const prefix = [event('session_meta', { id: 'partial-large' }, 0), count(7, 1)]
+    .map(JSON.stringify).join('\n') + '\n';
+  await fs.writeFile(file, prefix);
+  await ledger.scanFile(file, 'live');
+  const compacted = Buffer.from(compactedSample());
+  const inBody = 32 * 1024 * 1024 + 100;
+  const inTimestamp = compacted.indexOf('"timestamp":"2026-10-28T01:00:50Z"') + 18;
+  assert.ok(inBody < inTimestamp);
+  let from = 0;
+  for (const to of [inBody, inTimestamp, compacted.length]) {
+    await fs.appendFile(file, compacted.subarray(from, to));
+    await ledger.scanFile(file, 'live');
+    assert.equal(ledger.findFile.get(file).offset, Buffer.byteLength(prefix));
+    assert.equal(ledger.report().total, 7);
+    from = to;
+  }
+  const after = event('token_usage_record', { response_id: 'after-partial', usage: { total_tokens: 14 } }, 5);
+  await fs.appendFile(file, '\r\n' + JSON.stringify(after) + '\n');
+  await ledger.scanFile(file, 'live');
+  assert.equal(ledger.findFile.get(file).offset, (await fs.stat(file)).size);
+  assert.equal(ledger.report().total, 21);
+  await ledger.scanFile(file, 'live');
+  assert.equal(ledger.report().requests, 2);
+});
+
+// 以字节划定上限，即使换行正落在同一数据块，也不能被嵌套的 compacted 类型绕过。
+test('刚好 32 MiB 的普通行能读取，多一个字节的未知行保留原检查点', async (t) => {
+  const { dir, ledger } = await fixture(t);
+  const base = { payload: { type: 'compacted', text: '' }, type: 'other' };
+  const overhead = Buffer.byteLength(JSON.stringify(base));
+  const meta = JSON.stringify(event('session_meta', { id: 'boundary' }, 0)) + '\n';
+  // 让上限行末尾的 CR 成为 256 KiB 数据块的最后一个字节，LF 落在下一块。
+  const alignment = '{}'.padEnd(256 * 1024 - 2) + '\n';
+  for (const extra of [0, 1]) {
+    const file = path.join(dir, 'boundary-' + extra + '.jsonl');
+    await fs.writeFile(file, meta);
+    await ledger.scanFile(file, 'boundary-' + extra);
+    base.payload.text = 'x'.repeat(32 * 1024 * 1024 + extra - overhead);
+    await fs.appendFile(file, alignment + JSON.stringify(base) + '\r\n' + JSON.stringify(count(14, 2)) + '\n');
+    if (extra) {
+      await assert.rejects(ledger.scanFile(file, 'boundary-1'), /32 MiB/);
+      assert.equal(ledger.findFile.get(file).offset, Buffer.byteLength(meta));
+      assert.equal(ledger.report({ home: 'boundary-1' }).total, 0);
+    } else {
+      await ledger.scanFile(file, 'boundary-0');
+      assert.equal(ledger.report({ home: 'boundary-0' }).total, 14);
+    }
+  }
+});
+
+// 分块正好拆开字符串转义时，账本仍能取到外层标记，任务提醒仍能跳过整行并处理下一条。
+test('跨块转义和 CRLF 不改变超长行的真实结束位置', async () => {
+  const { readLogLines } = await import('../src/core/log-lines.js');
+  const body = Buffer.from(compactedSample(true));
+  const split = body.indexOf(92) + 1;
+  assert.ok(split > 32 * 1024 * 1024);
+  const blocks = [body.subarray(0, split), body.subarray(split), Buffer.from('\r'), Buffer.from('\n{}\n')];
+  for (const compactedMetadata of [true, false]) {
+    const [first, second] = await Array.fromAsync(readLogLines(blocks, 0, { compactedMetadata }));
+    assert.equal(first.line, undefined);
+    assert.equal(first.compacted?.type, compactedMetadata ? 'compacted' : undefined);
+    assert.equal(first.offset, body.length + 2);
+    assert.equal(second.offset, body.length + 5);
+    assert.equal(second.line.toString(), '{}');
+  }
+});
+
+// 未知但合法的 JSON 空值不能中断有继承边界的子代理日志，空的 CRLF 行与空的 LF 行等价。
+test('子代理日志在空行和 JSON null 后继续入账', async (t) => {
+  const { dir, ledger } = await fixture(t);
+  const file = path.join(dir, 'nullable-subagent.jsonl');
+  const meta = event('session_meta', { id: 'child', subagent_history_start_ordinal: 5 }, 0);
+  const usage = { ...count(14, 2), ordinal: 6 };
+  await fs.writeFile(file, [JSON.stringify(meta), '', 'null', JSON.stringify(usage), ''].join('\r\n'));
+  const state = await ledger.scanFile(file, 'child');
+  assert.equal(state.issues, 0);
+  assert.equal(ledger.report().total, 14);
+});
+
+// 在 stat 与打开数据流之间追加真实记录，检查当前偏移和文件大小始终对应同一个快照。
+test('扫描期间追加的用量留给下一轮恰好入账一次', async (t) => {
+  const { dir, ledger } = await fixture(t);
+  const file = path.join(dir, 'growing.jsonl');
+  const prefix = [event('session_meta', { id: 'growing' }, 0), count(7, 1)].map(JSON.stringify).join('\n') + '\n';
+  await fs.writeFile(file, prefix);
+  const open = fsSync.createReadStream;
+  t.mock.method(fsSync, 'createReadStream', (...args) => {
+    fsSync.appendFileSync(file, JSON.stringify(count(21, 2)) + '\n');
+    return open(...args);
+  }, { times: 1 });
+  await ledger.scanFile(file, 'growing');
+  assert.equal(ledger.report().total, 7);
+  assert.equal(ledger.findFile.get(file).offset, Buffer.byteLength(prefix));
+  assert.equal(ledger.findFile.get(file).size, Buffer.byteLength(prefix));
+  await ledger.scanFile(file, 'growing');
+  await ledger.scanFile(file, 'growing');
+  assert.equal(ledger.report().total, 21);
+  assert.equal(ledger.report().requests, 2);
+});
+
+// 还原旧版扫描时文件增长而持久化了越界偏移的情况，验证升级能自动重建该文件。
+test('旧版越过文件末尾的检查点自动恢复', async (t) => {
+  const { dir, ledger } = await fixture(t);
+  const file = path.join(dir, 'legacy-offset.jsonl');
+  await fs.writeFile(file, [event('session_meta', { id: 'legacy-offset' }), count(14, 2)].map(JSON.stringify).join('\n') + '\n');
+  await ledger.scanFile(file, 'legacy');
+  ledger.db.prepare('UPDATE files SET offset=size+100 WHERE path=?').run(file);
+  await ledger.scanFile(file, 'legacy');
+  const checkpoint = ledger.findFile.get(file);
+  assert.equal(checkpoint.offset, checkpoint.size);
+  assert.equal(ledger.report().total, 14);
+  assert.equal(ledger.report().requests, 1);
+});
+
+// 归档替换在批量提交边界后失败，也应能恢复旧检查点、明细及汇总，下一次可安全重试。
+test('替换归档中途失败仍保留旧账，修复归档后一次替换成功', async (t) => {
+  const { dir, ledger } = await fixture(t);
+  const { zstdCompressSync } = await import('node:zlib');
+  const file = path.join(dir, 'replacement.jsonl.zst');
+  const meta = JSON.stringify(event('session_meta', { id: 'replaced' }));
+  const old = [meta, JSON.stringify(count(7, 2)), ''].join('\n');
+  await fs.writeFile(file, zstdCompressSync(Buffer.from(old)));
+  await ledger.scanFile(file, 'archive');
+  const previous = ledger.findFile.get(file);
+  const previousChanges = ledger.usageChanges;
+  const replacement = [meta, JSON.stringify(count(21, 3)), ''].join('\n');
+  const unknown = JSON.stringify({ type: 'other', payload: { data: 'x'.repeat(33 * 1024 * 1024) } });
+  await fs.writeFile(file, zstdCompressSync(Buffer.from(replacement + '{}\n'.repeat(1500) + unknown + '\n')));
+  await assert.rejects(ledger.scanFile(file, 'archive'), /32 MiB/);
+  assert.deepEqual(ledger.findFile.get(file), previous);
+  assert.equal(ledger.usageChanges, previousChanges);
+  assert.equal(ledger.report().total, 7);
+  await fs.writeFile(file, zstdCompressSync(Buffer.from(replacement)));
+  await ledger.scanFile(file, 'archive');
+  await ledger.scanFile(file, 'archive');
+  assert.equal(ledger.report().requests, 1);
+  assert.equal(ledger.report().total, 21);
+});
+
 // 新格式请求明细有轮次和线程总量时具有权威性，累计快照分项不同也不再重复计数。
 test('原生请求覆盖同轮不一致的累计快照，其他旧轮次仍计数', async (t) => {
   const { dir, ledger } = await fixture(t);

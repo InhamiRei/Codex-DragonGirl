@@ -73,8 +73,9 @@ export function parseUsageEvent(event, state, homeId) {
     if (settings.service_tier) state.tier = settings.service_tier;
     return {};
   }
+  // 子代理日志中的空值没有可比较的序号，后续真实事件仍需按继承边界正常入账。
   const inherited =
-    (state.boundary !== null && Number(event.ordinal) < state.boundary) ||
+    (state.boundary !== null && Number(event?.ordinal) < state.boundary) ||
     (timestamp < state.started && !!state.parent);
   if (Number.isFinite(timestamp) && !inherited) state.lastAt = Math.max(state.lastAt || 0, timestamp);
   if (p.type === 'task_started') {

@@ -3,11 +3,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parentPort, workerData } from 'node:worker_threads';
 import { parserState, parseUsageEvent, TASK_END_EVENTS } from '../core/usage-parser.js';
+import { readLogLines } from '../core/log-lines.js';
 
 // 定期检查近期日志，目录监听跟踪旧会话的追加，低频核对补齐漏掉的系统事件。
 const RECONCILE_MS = 60000;
 const RECENT_LOG_MS = 10 * 60000;
-const MAX_LINE_BYTES = 32 * 1024 * 1024;
 const TASK_EVENTS = ['task_started', ...TASK_END_EVENTS];
 const TASK_MARKERS = TASK_EVENTS.map((type) => `"${type}"`);
 const sources = new Map();
@@ -32,26 +32,10 @@ function taskEvent(line) {
 }
 
 // 按本次检查的文件长度读取完整行，半行保留原偏移，超长行也不会无限累积内存。
-async function* logLines(file, offset, size) {
-  if (offset >= size) return;
+function logLines(file, offset, size) {
+  if (offset >= size) return [];
   const stream = createReadStream(file, { start: offset, end: size - 1, highWaterMark: 128 * 1024 });
-  let fragments = [], length = 0;
-  for await (const chunk of stream) {
-    let start = 0;
-    while (start < chunk.length) {
-      const newline = chunk.indexOf(10, start);
-      const fragment = chunk.subarray(start, newline < 0 ? chunk.length : newline);
-      length += fragment.length;
-      if (length > MAX_LINE_BYTES) fragments = [];
-      else if (fragment.length) fragments.push(fragment);
-      if (newline < 0) break;
-      offset += length + 1;
-      yield { line: fragments.length > 1 ? Buffer.concat(fragments, length) : fragments[0], offset };
-      fragments = [];
-      length = 0;
-      start = newline + 1;
-    }
-  }
+  return readLogLines(stream, offset);
 }
 
 // 恢复历史会话时按需读取首行以识别实例下的会话、子代理和继承边界。

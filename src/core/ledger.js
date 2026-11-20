@@ -2,8 +2,12 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { createZstdDecompress } from 'node:zlib';
+import { readLogLines } from './log-lines.js';
 import { parserState, parseUsageEvent, estimateCost } from './usage-parser.js';
+
+const READ_CHUNK_BYTES = 256 * 1024;
 
 // 数据库只存用量元数据；对话正文不写入表或诊断文件。
 export class Ledger {
@@ -80,90 +84,91 @@ export class Ledger {
       : legacyInode;
     const compressed = file.endsWith('.zst');
     let saved = this.findFile.get(file);
+    let replacing = false;
     if (saved) {
       const unchanged = saved.size === stat.size && saved.mtime === stat.mtimeMs;
+      // 旧版本可能读过当时 stat 的末尾，这类检查点需要按当前文件重建。
+      const validOffset = saved.offset >= 0 && saved.offset <= saved.size;
       const oldIdentity = saved.inode?.split(':');
       // 旧检查点缺少创建时间，设备号变化时只迁移元数据能确认未变的文件。
       const sameFile = saved.inode === inode || saved.inode === legacyInode ||
         (unchanged && inode !== legacyInode && oldIdentity?.length === 2 &&
           oldIdentity[1] === String(stat.ino) && stat.birthtimeMs <= saved.mtime);
-      if (sameFile && unchanged) {
+      if (sameFile && unchanged && validOffset) {
         const state = JSON.parse(saved.state);
         if (saved.inode !== inode) this.updateFileIdentity.run(inode, file);
         return state;
       }
       // 同一明文文件追加时沿用偏移，替换、截断和变化的压缩归档从头读取。
-      if (!sameFile || compressed || stat.size <= saved.size) {
-        this.resetFile(file);
+      if (!sameFile || compressed || stat.size <= saved.size || !validOffset) {
+        replacing = true;
         saved = null;
       }
     }
     const state = saved ? JSON.parse(saved.state) : parserState();
-    let offset = saved?.offset || 0,
-      pending = Buffer.alloc(0),
-      records = 0;
-    const stream = fs.createReadStream(file, {
+    let offset = saved?.offset || 0, records = 0;
+    let committedChanges = this.usageChanges;
+    // 固定本轮的文件末尾，扫描期间追加的内容留给下一轮，确保偏移与保存的文件大小一致。
+    signal?.throwIfAborted();
+    const stream = stat.size === 0 ? Readable.from([]) : fs.createReadStream(file, {
       start: compressed ? 0 : offset,
-      highWaterMark: 256 * 1024,
+      end: stat.size - 1,
+      highWaterMark: READ_CHUNK_BYTES,
       signal,
     });
-    const input = compressed ? stream.pipe(createZstdDecompress()) : stream;
+    const input = compressed ? stream.pipe(createZstdDecompress({ chunkSize: READ_CHUNK_BYTES })) : stream;
     // pipe 不会自动转发源流错误；文件被移走或无法读取时必须结束解压等待。
     if (compressed) stream.on('error', (error) => input.destroy(error));
     this.db.exec('BEGIN');
     try {
-      for await (const chunk of input) {
-        pending = Buffer.concat([pending, chunk]);
-        let start = 0,
-          index;
-        while ((index = pending.indexOf(10, start)) !== -1) {
-          const line = pending.subarray(start, index);
-          offset += index - start + 1;
-          start = index + 1;
-          if (!line.length) continue;
-          let event;
-          try {
-            event = JSON.parse(line.toString('utf8'));
-          } catch {
-            state.issues++;
-            continue;
-          }
-          const parsed = parseUsageEvent(event, state, homeId);
-          if (parsed.usage) {
-            const r = parsed.usage;
-            const result = this.insert.run(
-              ...[
-                'key',
-                'home',
-                'account',
-                'thread',
-                'parent',
-                'turn',
-                'time',
-                'model',
-                'tier',
-                'project',
-                'source',
-                'kind',
-                'input_tokens',
-                'cached_input_tokens',
-                'cache_write_input_tokens',
-                'output_tokens',
-                'reasoning_output_tokens',
-                'total_tokens',
-              ].map((k) => r[k]),
-            );
-            this.usageChanges += result.changes;
-            this.origin.run(file, r.key);
-          }
-          if (++records % 1500 === 0) {
-            this.db.exec('COMMIT');
-            this.db.exec('BEGIN');
-            await new Promise((r) => setImmediate(r));
-          }
+      // 替换旧索引与写入新检查点同属一个事务，损坏的归档或中途取消都能保留旧明细。
+      if (replacing) this.resetFile(file);
+      for await (const entry of readLogLines(input, offset, { compactedMetadata: true })) {
+        offset = entry.offset;
+        if (!entry.line?.length && !entry.compacted) continue;
+        let event;
+        try {
+          event = entry.compacted ?? JSON.parse(entry.line.toString('utf8'));
+        } catch {
+          state.issues++;
+          continue;
         }
-        pending = pending.subarray(start);
-        if (pending.length > 32 * 1024 * 1024) throw new Error('单条日志超过 32 MiB，已停止该文件扫描');
+        const parsed = parseUsageEvent(event, state, homeId);
+        if (parsed.usage) {
+          const r = parsed.usage;
+          const result = this.insert.run(
+            ...[
+              'key',
+              'home',
+              'account',
+              'thread',
+              'parent',
+              'turn',
+              'time',
+              'model',
+              'tier',
+              'project',
+              'source',
+              'kind',
+              'input_tokens',
+              'cached_input_tokens',
+              'cache_write_input_tokens',
+              'output_tokens',
+              'reasoning_output_tokens',
+              'total_tokens',
+            ].map((k) => r[k]),
+          );
+          this.usageChanges += result.changes;
+          this.origin.run(file, r.key);
+        }
+        if (++records % 1500 === 0) {
+          if (!replacing) {
+            this.db.exec('COMMIT');
+            committedChanges = this.usageChanges;
+            this.db.exec('BEGIN');
+          }
+          await new Promise((r) => setImmediate(r));
+        }
       }
       this.saveFile.run(
         file,
@@ -178,6 +183,7 @@ export class Ledger {
       return state;
     } catch (e) {
       this.db.exec('ROLLBACK');
+      this.usageChanges = committedChanges;
       throw e;
     } finally {
       // 解析失败也关闭两个流，避免损坏的归档留下文件句柄或继续读取。
