@@ -60,14 +60,21 @@ async function dragTo(x, y, flippedDuringDrag, cancel = false) {
   const start = { x: rect.x + rect.width * .5, y: rect.y + rect.height * .72 };
   const target = { x: x + rect.width * .5, y: y + rect.height * .72 };
   await page.mouse.move(start.x, start.y);
+  // 先等待透明窗口接住光标和按下 IPC，再在捕获范围内移动一点，避免注入事件早于原生手势建立。
+  await until(() => application.evaluate(() => globalThis.__dragonGirlTest.interactive.get('character')), '拖动起点未命中角色');
   await page.mouse.down();
-  await page.mouse.move(target.x - before.windows.character.x, target.y - before.windows.character.y);
-  await until(() => application.evaluate(() => globalThis.__dragonGirlTest.dragging), '未进入真实拖拽状态');
-  assert.equal((await drawing()).model.flipped, flippedDuringDrag, '拖动过程中提前切换了朝向');
-  const moved = await application.evaluate(() => globalThis.__dragonGirlTest.snapshot());
-  await page.mouse.move(target.x - moved.windows.character.x, target.y - moved.windows.character.y);
-  if (cancel) await page.evaluate(() => window.dragonGirl.cancelGesture());
-  await page.mouse.up();
+  try {
+    await until(() => application.evaluate(() => globalThis.__dragonGirlTest.gesture.active), '角色未接收真实按下事件');
+    await page.mouse.move(start.x + 1, start.y);
+    await page.mouse.move(target.x - before.windows.character.x, target.y - before.windows.character.y);
+    await until(() => application.evaluate(() => globalThis.__dragonGirlTest.dragging), '未进入真实拖拽状态');
+    assert.equal((await drawing()).model.flipped, flippedDuringDrag, '拖动过程中提前切换了朝向');
+    const moved = await application.evaluate(() => globalThis.__dragonGirlTest.snapshot());
+    await page.mouse.move(target.x - moved.windows.character.x, target.y - moved.windows.character.y);
+    if (cancel) await page.evaluate(() => window.dragonGirl.cancelGesture());
+  } finally {
+    await page.mouse.up();
+  }
   await until(() => application.evaluate(() => !globalThis.__dragonGirlTest.dragging), '拖动未结束');
   if (cancel) assert.deepEqual((await application.evaluate(() => globalThis.__dragonGirlTest.snapshot())).character, before.character);
   assert.equal(await application.evaluate(() => globalThis.__dragonGirlTest.bubbleVisible), false, '拖动误触点击气泡');
