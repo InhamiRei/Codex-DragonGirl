@@ -29,9 +29,27 @@
   color: #503378;
   box-shadow: 0 1px 4px #7153a01a;
 }
+#dragon-config[data-character='maro'] {
+  --rail: #d69570;
+  --rail-active: #b96539;
+  --rail-dot-active: #e8a27a;
+  --gear-border: #ebc5af;
+  --gear-highlight-border: #d79872;
+  --gear-highlight-fill: #fff0e5;
+  --gear-highlight-text: #743b22;
+  --gear-highlight-shadow: #ac674125;
+}
+#dragon-config[data-character='kokkoro'] {
+  --rail: #9bb787;
+  --rail-active: #689355;
+  --rail-dot-active: #b0cc9a;
+  --gear-border: #c8d8b9;
+  --gear-highlight-border: #a1bd8b;
+  --gear-highlight-fill: #edf6e6;
+  --gear-highlight-text: #385633;
+  --gear-highlight-shadow: #647f4d25;
+}
 .dragon-wardrobe {
-  --rail: #bda8d8;
-  --rail-active: #9870ce;
   display: grid;
   grid-template-columns: minmax(76px, 108px) minmax(0, 368px) minmax(76px, 108px);
   align-items: stretch;
@@ -58,7 +76,7 @@
   gap: 5px;
   min-width: 0;
   padding: 7px 5px;
-  border: 1px solid #ded2ed;
+  border: 1px solid var(--gear-border, #ded2ed);
   border-radius: 13px;
   background: #fcfaff;
   color: #544761;
@@ -70,7 +88,7 @@
 .dragon-slot {
   position: relative;
   min-height: 92px;
-  border-color: #d7c8e9;
+  border-color: var(--gear-border, #d7c8e9);
   box-shadow: 0 5px 14px #7153a013;
   cursor: pointer;
   transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
@@ -82,7 +100,7 @@
   width: 1px;
   height: 1px;
   overflow: visible;
-  color: var(--rail);
+  color: var(--rail, #bda8d8);
   stroke-width: 1px;
   pointer-events: none;
 }
@@ -94,17 +112,20 @@
 }
 .dragon-slot:hover,
 .dragon-slot[aria-expanded='true'] {
-  border-color: #af94d6;
-  color: #503378;
-  background: #eee5f9;
-  box-shadow: 0 5px 16px #7750ae29;
+  border-color: var(--gear-highlight-border, #af94d6);
+  color: var(--gear-highlight-text, #503378);
+  background: var(--gear-highlight-fill, #eee5f9);
+  box-shadow: 0 5px 16px var(--gear-highlight-shadow, #7750ae29);
+}
+.dragon-slot:focus-visible {
+  outline-color: var(--gear-highlight-border, #b6a5df66);
 }
 .dragon-slot:hover .dragon-slot-link,
 .dragon-slot[aria-expanded='true'] .dragon-slot-link {
-  color: var(--rail-active);
+  color: var(--rail-active, #9870ce);
 }
 .dragon-slot[aria-expanded='true'] .dragon-slot-link circle {
-  fill: #b591e7;
+  fill: var(--rail-dot-active, #b591e7);
 }
 .dragon-gear-visual {
   position: relative;
@@ -145,18 +166,18 @@
   min-height: 88px;
 }
 .dragon-gear-option[data-selected] {
-  border-color: #b39ad6;
-  background: #f1eafa;
-  color: #503378;
-  box-shadow: inset 0 0 0 1px #c5b0e4, 0 4px 12px #7952aa16;
+  border-color: var(--gear-highlight-border, #b39ad6);
+  background: var(--gear-highlight-fill, #f1eafa);
+  color: var(--gear-highlight-text, #503378);
+  box-shadow: inset 0 0 0 1px var(--gear-border, #c5b0e4), 0 4px 12px var(--gear-highlight-shadow, #7952aa16);
 }
 .dragon-color-picker {
   position: relative;
   cursor: pointer;
 }
 .dragon-gear-option:is(button, .dragon-color-picker):hover {
-  border-color: #b39ad6;
-  background: #eee5f9;
+  border-color: var(--gear-highlight-border, #b39ad6);
+  background: var(--gear-highlight-fill, #eee5f9);
 }
 .dragon-color-picker:has(input:focus-visible) {
   outline: 2px solid var(--accent);

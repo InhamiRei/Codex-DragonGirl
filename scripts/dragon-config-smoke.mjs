@@ -26,6 +26,11 @@ const originalCompanions = [
     hat: ['兔帽', [309, 275]], eyes: ['瞳孔', [393, 734]], accessory: ['发饰', [1012, 680]], clothes: ['服饰', [641, 1174]],
   } },
 ];
+// 验证实际渲染出的连线、悬停和展开高亮使用所选角色的配色。
+const companionColors = {
+  maro: { line: 'rgb(214, 149, 112)', activeLine: 'rgb(185, 101, 57)', fill: 'rgb(255, 240, 229)' },
+  kokkoro: { line: 'rgb(155, 183, 135)', activeLine: 'rgb(104, 147, 85)', fill: 'rgb(237, 246, 230)' },
+};
 const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-dragon-config-'));
 const data = path.join(temporary, 'data');
@@ -160,6 +165,17 @@ async function verifyOriginalCompanion(page, pet, { id, name, asset, size, parts
     .find(({ checked }) => checked)?.label);
   assert.equal(checked, name);
   assert.equal(await page.locator('#dragon-gear-options').isHidden(), true);
+  const colors = companionColors[id];
+  const links = await page.locator('.dragon-slot-link polyline')
+    .evaluateAll((lines) => lines.map((line) => getComputedStyle(line).stroke));
+  assert.deepEqual(links, Array(4).fill(colors.line));
+  // 等到颜色过渡结束，再确认悬停的卡片和对应连线一起高亮。
+  await page.locator('.dragon-slot').first().hover();
+  await page.waitForFunction(({ activeLine, fill }) => {
+    const hovered = document.querySelector('.dragon-slot:hover[aria-expanded="false"]');
+    return hovered && getComputedStyle(hovered).backgroundColor === fill
+      && getComputedStyle(hovered.querySelector('polyline')).stroke === activeLine;
+  }, colors);
   for (const [slot, [label]] of Object.entries(parts)) {
     // 核对卡片读取独立的方形缩略图，画布四角保留透明。
     const icon = page.locator('.dragon-slot[data-slot="' + slot + '"] img');
@@ -174,7 +190,9 @@ async function verifyOriginalCompanion(page, pet, { id, name, asset, size, parts
         context.getImageData(x, y, 1, 1).data[3] === 0);
     }, source), true, name + '的' + label + '缺少独立透明缩略图');
     const options = await openGearOptions(page, slot, '原版' + label);
-    assert.equal(await options.locator('div.dragon-gear-option[data-selected]').count(), 1);
+    const choice = options.locator('div.dragon-gear-option[data-selected]');
+    assert.equal(await choice.count(), 1);
+    assert.equal(await choice.evaluate((tile) => getComputedStyle(tile).backgroundColor), colors.fill);
     assert.equal(await options.locator('button, input, select').count(), 0);
     // 展开后的原版卡加载与分类卡相同的图片。
     assert.equal(await options.locator('img').evaluate(async (image) => {
@@ -487,6 +505,9 @@ try {
   await config.click();
   await chooser.getByRole('button', { name: '龙娘', exact: true }).click();
   await ponytailPreview.waitFor({ state: 'visible' });
+  // 切回龙娘时连线恢复紫色，原版角色的配色不跨角色保留。
+  assert.equal(await dashboard.locator('.dragon-slot-link polyline').first()
+    .evaluate((line) => getComputedStyle(line).stroke), 'rgb(189, 168, 216)');
   await waitForPortrait(pet, ponytailAsset);
   await pet.locator(tinted).waitFor({ state: 'visible' });
   await application.close();

@@ -72,6 +72,7 @@ function addGearLink(tile) {
 export class CompanionConfigView {
   // 先创建角色按钮，首次打开配置页时才载入立绘和部件缩略图。
   constructor(root, { selectCharacter, saveGear, toast }) {
+    this.root = root;
     this.selectCharacter = selectCharacter;
     this.saveGear = saveGear;
     this.toast = toast;
@@ -105,6 +106,8 @@ export class CompanionConfigView {
   // 角色改变时重建四张部件卡，立绘和连线都以该角色的原生画幅定位。
   renderCharacter(character) {
     this.character = character;
+    // 以当前预览角色为准，为部件卡、连线和展开项提供同一套配色。
+    this.root.dataset.character = character.id;
     this.showSlot(null);
     this.slots.clear();
     for (const column of this.columns) column.replaceChildren();
