@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -18,11 +19,33 @@ window.makeKeyAndOrderFront(nil)
 application.activate(ignoringOtherApps: true)
 // AppKit 首次显示可能将副屏初始坐标夹回主屏；显示后再定位，避免用户主屏窗口干扰隔离验收。
 window.setFrameOrigin(initialFrame.origin)
-var panel: NSOpenPanel?
+var panel: NSSavePanel?
+var otherChat: NSWindow?
 var floatingMenu: NSPanel?
 var previewPanels: [NSPanel] = []
 var previous = ""
 var orderTimer: Timer?
+
+// 独立保存面板和对照聊天窗口采用相同的偏移与大小。
+var videoPanelFrame: NSRect {
+    NSRect(x: window.frame.minX + 20, y: window.frame.minY + 60, width: 880, height: 448)
+}
+
+// 仅供测试进程读取自己文件面板的控件标识。
+func fixtureAttribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+    return value
+}
+
+// 保存按钮由 AppKit 文件服务提供，用它的标识触发实际确认，兼容不同界面语言。
+func pressSaveButton(in element: AXUIElement) -> Bool {
+    if fixtureAttribute(element, kAXIdentifierAttribute) as? String == "OKButton" {
+        return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
+    }
+    let children = fixtureAttribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
+    return children.contains { pressSaveButton(in: $0) }
+}
 
 // 闪烁诊断只保留最前普通窗口与本测试角色的编号、层级和尺寸，不读取窗口标题或内容。
 func diagnosticOrder(_ windows: [[String: Any]], _ overlays: [Int]) -> [[String: Any]] {
@@ -138,7 +161,9 @@ func closePreviewPanels() {
 
 // 只报告自建窗口的编号，测试不选择或修改任何用户文件。
 func report(_ stage: String) {
-    let data = try! JSONSerialization.data(withJSONObject: ["stage": stage, "window": window.windowNumber])
+    var state: [String: Any] = ["stage": stage, "window": window.windowNumber]
+    if let panel { state["panel"] = panel.windowNumber }
+    let data = try! JSONSerialization.data(withJSONObject: state)
     try! data.write(to: directory.appendingPathComponent("ready.json"), options: .atomic)
 }
 
@@ -153,6 +178,38 @@ func execute(_ command: String) {
         panel = picker
         picker.beginSheetModal(for: window) { _ in panel = nil; report("closed") }
         report("open")
+    case "save-video", "save-compact":
+        // 独立保存面板可以偏离聊天窗口中心，也可以使用自定义标题。
+        let picker = NSSavePanel()
+        picker.title = "导出测试视频"
+        picker.nameFieldStringValue = "fixture.mp4"
+        picker.directoryURL = directory
+        panel = picker
+        // 只记录系统确认的临时视频路径，测试无需写出媒体文件。
+        picker.begin { response in
+            let expected = directory.appendingPathComponent("fixture.mp4").resolvingSymlinksInPath().path
+            let destination = picker.url?.resolvingSymlinksInPath().path
+            panel = nil
+            if response == .OK { report(destination == expected ? "saved-video" : "other-destination") }
+            else { report("closed") }
+        }
+        var frame = videoPanelFrame
+        if command == "save-compact" { frame.size = NSSize(width: 370, height: 204) }
+        picker.setFrame(frame, display: true)
+        report(command)
+    case "other-chat":
+        // 普通聊天窗口故意复用保存面板的标题、位置和尺寸，确保仍能切换跟随目标。
+        let chat = NSWindow(contentRect: .zero, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        chat.title = "导出测试视频"
+        chat.setFrame(videoPanelFrame, display: false)
+        chat.makeKeyAndOrderFront(nil)
+        otherChat = chat
+    case "close-other-chat": otherChat?.orderOut(nil); otherChat = nil
+    case "confirm-save":
+        // 只在当前测试进程的保存面板上操作，其他窗口无法接收确认动作。
+        let windows = fixtureAttribute(AXUIElementCreateApplication(getpid()), kAXWindowsAttribute) as? [AXUIElement] ?? []
+        guard let picker = windows.first(where: { fixtureAttribute($0, kAXIdentifierAttribute) as? String == "save-panel" }),
+              pressSaveButton(in: picker) else { report("save-button-unavailable"); return }
     case "close": panel?.cancel(nil)
     case "move": window.setFrameOrigin(NSPoint(x: 260, y: 200)); report("moved")
     case "minimize": window.miniaturize(nil); report("minimized")

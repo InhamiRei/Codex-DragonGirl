@@ -17,6 +17,9 @@ private struct CodexWindowCandidate {
     let frame: CGRect
     let hasTitle: Bool
     let isPreview: Bool
+
+    // 小尺寸文件面板也参与避让，只有达到宿主尺寸的窗口才能用于定位。
+    var canHost: Bool { frame.width >= 400 && frame.height >= 300 }
 }
 
 let defaultHome = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path
@@ -25,6 +28,8 @@ var cachedProcesses: [pid_t: ProcessInfoRow] = [:]
 var lastDiscovery = Date.distantPast
 var lastOutput = ""
 var cachedModality: [pid_t: (windowIDs: [Int], modal: Bool?, checkedAt: TimeInterval)] = [:]
+// 单次诊断可只读 Quartz，用同一个原生桥验收没有辅助功能权限的路径。
+let quartzOnly = CommandLine.arguments.contains("--once") && CommandLine.arguments.contains("--quartz-only")
 // 拖动时加快窗口采样，静止时维持原先约 120 毫秒一次的查询频率。
 let trackingInterval: TimeInterval = 0.04
 var lastSnapshotAt: TimeInterval = -.infinity
@@ -47,9 +52,9 @@ func accessibilityWindowFrame(_ window: AXUIElement) -> CGRect? {
     return CGRect(origin: point, size: dimensions)
 }
 
-// 系统文件面板可能直接是模态窗口，也可能作为主窗口的 sheet 子节点出现。
-func modalWindowState(_ pid: pid_t, _ visible: [[String: Any]]) -> Bool? {
-    guard AXIsProcessTrusted() else { return nil }
+// 系统文件面板可以是独立窗口、模态窗口或主窗口的 sheet。
+private func modalWindowState(_ pid: pid_t, _ visible: [CodexWindowCandidate]) -> Bool? {
+    guard !quartzOnly, AXIsProcessTrusted() else { return nil }
     let application = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(application, 0.08)
     guard let windows = windowAttribute(application, kAXWindowsAttribute) as? [AXUIElement], !windows.isEmpty else { return nil }
@@ -57,12 +62,15 @@ func modalWindowState(_ pid: pid_t, _ visible: [[String: Any]]) -> Bool? {
     var matched = Set<Int>()
     for window in windows {
         guard let rect = accessibilityWindowFrame(window) else { complete = false; continue }
-        guard let index = visible.firstIndex(where: { frame in
-            guard let x = frame["x"] as? CGFloat, let y = frame["y"] as? CGFloat,
-                  let width = frame["width"] as? CGFloat, let height = frame["height"] as? CGFloat else { return false }
-            return abs(rect.minX - x) <= 2 && abs(rect.minY - y) <= 2 && abs(rect.width - width) <= 2 && abs(rect.height - height) <= 2
+        guard let index = visible.firstIndex(where: { candidate in
+            let frame = candidate.frame
+            return abs(rect.minX - frame.minX) <= 2 && abs(rect.minY - frame.minY) <= 2
+                && abs(rect.width - frame.width) <= 2 && abs(rect.height - frame.height) <= 2
         }) else { continue }
         matched.insert(index)
+        // 独立打开的 NSSavePanel 可以同时报告 AXStandardWindow 和 AXModal=false；系统标识不随标题语言改变。
+        let identifier = windowAttribute(window, kAXIdentifierAttribute) as? String
+        if identifier == "save-panel" || identifier == "open-panel" { return true }
         guard let modal = windowAttribute(window, kAXModalAttribute) as? Bool else { complete = false; continue }
         if modal { return true }
         guard let children = windowAttribute(window, kAXChildrenAttribute) as? [AXUIElement] else { complete = false; continue }
@@ -75,11 +83,51 @@ func modalWindowState(_ pid: pid_t, _ visible: [[String: Any]]) -> Bool? {
     return complete && matched.count == visible.count ? false : nil
 }
 
+// 窗口跟随、层级和文件面板配对使用相同的普通窗口编号与坐标。
+private func normalWindowGeometry(_ row: [String: Any]) -> (id: Int, frame: CGRect)? {
+    guard (row[kCGWindowLayer as String] as? Int) == 0, (row[kCGWindowAlpha as String] as? Double ?? 1) > 0.1,
+          let id = row[kCGWindowNumber as String] as? Int, let bounds = row[kCGWindowBounds as String] as? NSDictionary,
+          let frame = CGRect(dictionaryRepresentation: bounds), frame.width > 0, frame.height > 0 else { return nil }
+    return (id, frame)
+}
+
+// 无辅助功能权限时，AppKit 文件面板服务的离屏窗口可用来识别宿主代为显示的面板。
+private func quartzFilePanelIDs() -> Set<Int> {
+    let services = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.appkit.xpc.openAndSavePanelService")
+    let servicePIDs = Set(services.map(\.processIdentifier))
+    guard !servicePIDs.isEmpty,
+          let all = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
+
+    // 在同一份快照中配对，面板拖动或关闭时不会混用前后两帧的位置。
+    let visible = all.compactMap { row in row[kCGWindowIsOnscreen as String] as? Bool == true ? normalWindowGeometry(row) : nil }
+    let primary = CGDisplayBounds(CGMainDisplayID())
+    var panels = Set<Int>()
+    for row in all {
+        guard let pid = row[kCGWindowOwnerPID as String] as? pid_t, servicePIDs.contains(pid),
+              row[kCGWindowIsOnscreen as String] as? Bool != true, let (id, frame) = normalWindowGeometry(row) else { continue }
+        // 通常两扇窗口依次创建；折叠、展开或改尺寸时，服务窗口仍与可见面板共用左下角。
+        let aligned = visible.filter { $0.frame.minX == frame.minX && $0.frame.maxY == frame.maxY }
+        if let paired = aligned.first(where: { $0.id + 1 == id }) {
+            panels.insert(paired.id)
+        } else {
+            // 服务的空闲窗口也停在 AppKit 坐标原点，此处只接受上面能明确配对的窗口。
+            if frame.minX == primary.minX && frame.maxY == primary.maxY { continue }
+            // 编号分配可能被穿插，先匹配完整矩形；调整尺寸时仍可凭唯一的共同左下角认领面板。
+            let sameFrame = aligned.filter { $0.frame == frame }
+            let matches = sameFrame.isEmpty ? aligned : sameFrame
+            if matches.count == 1, matches[0].id < id { panels.insert(matches[0].id) }
+        }
+    }
+    return panels
+}
+
 // 移动同一个窗口时复用模态结果，新面板出现或缓存到期时重新查询。
-func cachedModalWindowState(_ pid: pid_t, _ windows: [[String: Any]], _ now: TimeInterval) -> Bool? {
-    let windowIDs = windows.compactMap { $0["id"] as? Int }
+private func cachedModalWindowState(_ pid: pid_t, _ windows: [CodexWindowCandidate], _ now: TimeInterval,
+                                    filePanelIDs: () -> Set<Int>) -> Bool? {
+    let windowIDs = windows.map(\.id)
     if let cached = cachedModality[pid], cached.windowIDs == windowIDs, now - cached.checkedAt < 0.5 { return cached.modal }
-    let modal = windows.isEmpty ? false : modalWindowState(pid, windows)
+    var modal = windows.isEmpty ? false : modalWindowState(pid, windows)
+    if modal == nil, !filePanelIDs().isDisjoint(with: windowIDs) { modal = true }
     cachedModality[pid] = (windowIDs: windowIDs, modal: modal, checkedAt: now)
     return modal
 }
@@ -118,27 +166,24 @@ func discoverProcesses() {
 }
 
 // Codex 把画中画的内容和控制放进两块同尺寸的普通层面板，排在聊天窗口上方。
-private func followableWindows(_ windows: [[String: Any]], pid: pid_t) -> [CodexWindowCandidate] {
+private func visibleCodexWindows(_ windows: [[String: Any]], pid: pid_t) -> [CodexWindowCandidate] {
     let candidates = windows.compactMap { window -> CodexWindowCandidate? in
         guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
-              (window[kCGWindowLayer as String] as? Int) == 0,
-              let id = window[kCGWindowNumber as String] as? Int,
-              let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-              let frame = CGRect(dictionaryRepresentation: bounds), frame.width >= 400, frame.height >= 300,
-              (window[kCGWindowAlpha as String] as? Double ?? 1) > 0.1 else { return nil }
+              let (id, frame) = normalWindowGeometry(window) else { return nil }
         // 系统提供标题时，只比对 Codex 原生预览使用的两个固定名称。
         let title = window[kCGWindowName as String] as? String ?? ""
         return CodexWindowCandidate(id: id, frame: frame, hasTitle: !title.isEmpty,
                                     isPreview: title == "Computer Use" || title == "Computer Use Controls")
     }
+    let hosts = candidates.filter(\.canHost)
     var excluded = Set(candidates.filter(\.isPreview).map(\.id))
     // 系统省略标题时，用相邻同框面板和后方更大的宿主识别预览，保留普通窗口的原有顺序。
-    for index in candidates.indices.dropLast() {
-        let controls = candidates[index], content = candidates[index + 1]
+    for index in hosts.indices.dropLast() {
+        let controls = hosts[index], content = hosts[index + 1]
         guard controls.frame == content.frame,
               !controls.hasTitle || controls.isPreview,
               !content.hasTitle || content.isPreview else { continue }
-        let hasLargerHost = candidates.dropFirst(index + 2).contains { candidate in
+        let hasLargerHost = hosts.dropFirst(index + 2).contains { candidate in
             !candidate.isPreview && candidate.frame.width > content.frame.width && candidate.frame.height > content.frame.height
         }
         if controls.isPreview || content.isPreview || hasLargerHost {
@@ -155,17 +200,21 @@ func emitSnapshot() {
     lastSnapshotAt = now
     if Date().timeIntervalSince(lastDiscovery) > 3 { discoverProcesses(); lastDiscovery = Date() }
     let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    let normal = windows.compactMap(normalWindowGeometry)
+    // 一份快照中所有实例共用一次按需查询，正常的辅助功能路径不扫描离屏窗口。
+    lazy var filePanels = quartzFilePanelIDs()
     let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
     var hostFrames: [Int: CGRect] = [:]
     let processes: [[String: Any]] = cachedProcesses.values.sorted { $0.pid < $1.pid }.map { row in
         // 屏幕层级保留预览，跟随与模态判断使用筛选后的宿主列表。
-        let visible: [[String: Any]] = followableWindows(windows, pid: row.pid).map { window in
+        let candidates = visibleCodexWindows(windows, pid: row.pid)
+        let visible: [[String: Any]] = candidates.filter(\.canHost).map { window in
             let id = window.id, rect = window.frame
             hostFrames[id] = rect
             return ["id": id, "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
         }
         var process: [String: Any] = ["pid": row.pid, "appPath": row.appPath, "home": row.home, "networkEnv": row.environment, "frontmost": front == row.pid, "windows": visible, "platform": "darwin"]
-        if let modal = cachedModalWindowState(row.pid, visible, now) { process["modalOpen"] = modal }
+        if let modal = cachedModalWindowState(row.pid, candidates, now, filePanelIDs: { filePanels }) { process["modalOpen"] = modal }
         return process
     }
     if hostFrames != lastHostFrames {
@@ -177,12 +226,8 @@ func emitSnapshot() {
         return window[kCGWindowNumber as String] as? Int
     }
     // 未被普通窗口遮挡的宿主可使用浮动层保持连续显示，窗口几何同时排除其他显示器的无关窗口。
-    let normalWindows = windows.compactMap { window -> [String: Any]? in
-        guard (window[kCGWindowLayer as String] as? Int) == 0,
-              (window[kCGWindowAlpha as String] as? Double ?? 1) > 0.1,
-              let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-              let rect = CGRect(dictionaryRepresentation: bounds), rect.width > 0, rect.height > 0 else { return nil }
-        return ["id": window[kCGWindowNumber as String] ?? 0, "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
+    let normalWindows = normal.map { id, rect -> [String: Any] in
+        ["id": id, "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
     }
     let snapshot: [String: Any] = ["processes": processes, "windowOrder": windowOrder, "normalWindows": normalWindows, "screenPermission": CGPreflightScreenCaptureAccess()]
     guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]), let output = String(data: data, encoding: .utf8), output != lastOutput else { return }

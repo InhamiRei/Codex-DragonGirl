@@ -33,8 +33,8 @@ test('macOS 跟随跳过画中画，文件面板、移动及最小化后正确�
   child = spawn(executable, [directory], { stdio: 'ignore', env: { ...process.env, CODEX_HOME: directory } });
 
   // 每次只检查自建测试进程，原生桥中的其他账户与窗口不进入测试输出。
-  function snapshot() {
-    const result = spawnSync(path.join(root, 'native/bin/dragongirl-native'), ['--once'], { encoding: 'utf8', timeout: 10000 });
+  function snapshot(...options) {
+    const result = spawnSync(path.join(root, 'native/bin/dragongirl-native'), ['--once', ...options], { encoding: 'utf8', timeout: 10000 });
     assert.equal(result.status, 0, result.stderr);
     const { processes, normalWindows } = JSON.parse(result.stdout);
     const process = processes.find((process) => process.pid === child.pid);
@@ -106,6 +106,48 @@ test('macOS 跟随跳过画中画，文件面板、移动及最小化后正确�
     const process = snapshot();
     return process?.windows.length === 1 && followWindowFrame(process)?.id === main.id;
   }, '关闭选择框后没有恢复原主窗口');
+  // 独立的视频保存面板既不居中也不一定带模态标记，窗口编号和尺寸确认弹窗确实进入了前台。
+  await fs.writeFile(command, 'save-video');
+  const saving = await until(() => {
+    const state = snapshot();
+    const front = state?.windows[0];
+    return front && front.id !== main.id && front.width >= 400 && front.height >= 300
+      && Math.abs(front.x + front.width / 2 - main.x - main.width / 2) > 12 && state;
+  }, '未复现偏离主窗口中心的独立保存面板');
+  assert.equal(followWindowFrame(saving), null, '桌宠把保存视频弹窗当成了聊天窗口');
+  assert.equal(snapshot('--quartz-only')?.modalOpen, true, '无辅助功能权限时没有识别独立保存面板');
+  await fs.writeFile(command, 'close');
+  await until(() => followWindowFrame(snapshot())?.id === main.id, '取消保存后没有恢复原主窗口');
+  // 另一个同框同名窗口实际是普通聊天窗口，文件面板的识别结果不能继承到它身上。
+  await fs.writeFile(command, 'other-chat');
+  const chat = await until(() => {
+    const frame = followWindowFrame(snapshot('--quartz-only'));
+    return frame && frame.id !== main.id && frame.id !== saving.windows[0].id && frame;
+  }, '同名的第二个聊天窗口未能成为跟随目标');
+  // 普通标题栏和文件面板的系统边框可能相差一到两个点。
+  for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(chat[key] - saving.windows[0][key]) <= 2, key);
+  assert.equal(followWindowFrame(snapshot())?.id, chat.id);
+  await fs.writeFile(command, 'close-other-chat');
+  await until(() => followWindowFrame(snapshot())?.id === main.id, '关闭第二个聊天窗口后没有恢复');
+  // 折叠的保存面板小于宿主尺寸门槛，但显示期间依然要收起角色。
+  await fs.writeFile(command, 'save-compact');
+  const compact = await until(async () => {
+    const ready = JSON.parse(await fs.readFile(path.join(directory, 'ready.json'), 'utf8'));
+    if (ready.stage !== 'save-compact') return false;
+    const state = snapshot('--quartz-only');
+    return state?.normalWindows.some((frame) => frame.id === ready.panel && frame.height < 300)
+      && state;
+  }, '折叠保存面板未显示');
+  assert.deepEqual(compact.windows, [main]);
+  assert.equal(followWindowFrame(compact), null, '无辅助功能权限时未避让折叠的保存面板');
+  assert.equal(followWindowFrame(snapshot()), null);
+  await fs.writeFile(command, 'confirm-save');
+  const result = await until(async () => {
+    const { stage } = JSON.parse(await fs.readFile(path.join(directory, 'ready.json'), 'utf8'));
+    return stage !== 'save-compact' && stage;
+  }, '保存面板没有响应确认操作');
+  assert.equal(result, 'saved-video', '系统未确认临时目录中的视频保存路径');
+  await until(() => followWindowFrame(snapshot('--quartz-only'))?.id === main.id, '确认保存后没有恢复主窗口');
   await fs.writeFile(path.join(directory, 'command'), 'move');
   await until(() => {
     const frame = followWindowFrame(snapshot());

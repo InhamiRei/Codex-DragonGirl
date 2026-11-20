@@ -181,7 +181,9 @@ try {
       if (!isMac) return receive({ ...state, processes }, bridge);
       // 祈祷特效按需创建，每份快照也要纳入新出现的测试窗口。
       const overlays = [...companion.windows.values(), companion.prayerWave?.window];
-      const fixtureIds = new Set([hostId, coverId, ...overlays.filter((win) => win && !win.isDestroyed())
+      // 宿主的保存面板也要保留在真实层级中，避免因测试过滤掉窗口而误判桌宠已正确避让。
+      const fixtureIds = new Set([hostId, coverId, ...processes.flatMap((row) => row.windows.map((window) => String(window.id))),
+        ...overlays.filter((win) => win && !win.isDestroyed())
         .map((win) => win.getMediaSourceId().split(':')[1])]);
       return receive({ ...state, processes,
         windowOrder: state.windowOrder?.filter((id) => fixtureIds.has(String(id))),
@@ -223,6 +225,19 @@ try {
   }
   // 点击前台宿主会重新排列普通窗口；连续采样必须始终看见角色与气泡，不能容许先消失再补回。
   if (isMac) {
+    // 在真实原生桥和桌宠窗口之间验收保存、取消及原位置恢复。
+    await send(host, 'save-video');
+    await until(async () => {
+      const state = await companionState();
+      return state.follow.frame === null && !state.windows.character.visible && !state.windows.bubble.visible;
+    }, '保存视频期间桌宠或气泡仍然显示');
+    await send(host, 'close');
+    await until(async () => {
+      const state = await companionState();
+      return String(state.follow.frame?.id) === host.id && state.windows.character.visible;
+    }, '取消保存后桌宠没有重新跟随聊天主窗口');
+    assert.deepEqual((await companionState()).character, original, '取消保存改变了桌宠在主窗口上的位置');
+    await application.evaluate(() => globalThis.__dragonGirlApp.companion.showBubble('窗口层级验收', 'speech'));
     await raise(host, cover);
     await expectStack(host, cover, false);
     try {
@@ -474,6 +489,7 @@ try {
   }), '宿主最小化后仍留下震荡波');
   const report = { passed: true, platform: process.platform, checks: ['真实跨应用层级', '仅层级变化触发快照', '完全遮挡', '部分遮挡仍显示', '后台气泡层级', '恢复原位且不抢焦点', '最小化与恢复', '保留主动隐藏', '独立桌面仍置顶', '切回跟随恢复层级', ...(isMac ? ['连续置前 12 次、全程 8ms 采样无闪烁'] : ['真实标题栏往返拖动 4 次、拖动及松手后连续采样无遮挡', '拖动全程不抢焦点', '系统置顶窗口仍正常遮挡角色'])] };
   report.checks.push('连续移动及时跟随', '菜单展开时跟随主窗口且角色和气泡留在菜单之后');
+  if (isMac) report.checks.push('保存视频期间角色与气泡收起，取消后回到聊天主窗口原位');
   report.checks.push('震荡波放出时收起气泡、渐变波纹扫过宿主远角、鼠标穿透、结束和最小化清理');
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
   await fs.writeFile(path.join(root, '.artifacts/follow-report.json'), JSON.stringify(report, null, 2));
