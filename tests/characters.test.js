@@ -10,6 +10,7 @@ import { SettingsStore, normalizeSettings } from '../src/core/settings.js';
 import { imagePoint } from '../src/shared/hit-test.js';
 import { dialogueLine } from '../src/shared/dialogue.js';
 import { KOKKORO_DIALOGUE } from '../src/shared/kokkoro-dialogue.js';
+import { KOKKORO_FACE_BOUNDS } from '../src/renderer/kokkoro-expressions.js';
 
 // 防止打包时误换成旧的低清网格或缺帧；首尾必须与用户确认的待机原图完全一致。
 test('三十帧均为 1254 像素且循环首尾复用待机原图', async () => {
@@ -32,6 +33,17 @@ test('三十帧均为 1254 像素且循环首尾复用待机原图', async () =>
     assert.equal((header & 0x3fff) + 1, 1254);
     assert.equal(((header >>> 14) & 0x3fff) + 1, 1254);
     assert.equal((header >>> 28) & 1, 1, '无损帧必须保留透明通道');
+  }
+});
+
+// 表情只保存实际取样的脸部区域，仍以原图分辨率和 RGBA 格式交给合成器。
+test('可可萝表情帧保留原生脸部尺寸和透明通道', async () => {
+  const { width, height } = KOKKORO_FACE_BOUNDS;
+  for (const name of ['blink-half', 'blink-closed', 'success', 'failure']) {
+    const url = new URL('../assets/characters/kokkoro/' + name + '.png', import.meta.url);
+    const frame = await fs.readFile(url);
+    assert.equal(frame.subarray(1, 4).toString(), 'PNG', name);
+    assert.deepEqual([frame.readUInt32BE(16), frame.readUInt32BE(20), frame[24], frame[25]], [width, height, 8, 6], name);
   }
 });
 

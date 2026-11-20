@@ -170,7 +170,7 @@ try {
   await fs.mkdir(path.join(home, '.codex/sessions'), { recursive: true });
   await fs.writeFile(path.join(data, 'settings.json'), JSON.stringify({
     mode: 'desktop', characterId: 'kokkoro', notifications: false, soundEnabled: false,
-    autoFlip: false, motion: true, eyeTracking: true, blinkEnabled: false, expressionsEnabled: true,
+    autoFlip: false, motion: true, eyeTracking: true, blinkEnabled: false, expressionsEnabled: false,
   }));
   const env = {
     ...process.env, DRAGONGIRL_TEST: '1', DRAGONGIRL_MONITOR_TEST: '1',
@@ -231,7 +231,11 @@ try {
   });
   assert.ok(Math.max(...angles) - Math.min(...angles) > 0.25, '静止鼠标下可可萝的待机摆动没有显示');
   assert.ok(angles.every((angle) => Math.abs(angle) < 0.6), '待机时左右侧倾超过预期');
-  await settings({ blinkEnabled: true });
+  // 两个开关关闭时不加载表情素材；重新开启后继续走真实眨眼和动作预览。
+  const eagerFrames = await page.evaluate(() => performance.getEntriesByType('resource')
+    .filter(({ name }) => /\/kokkoro\/(blink-half|blink-closed|success|failure)\.png$/.test(name)).length);
+  assert.equal(eagerFrames, 0, '关闭眨眼和动态表情时仍加载了表情帧');
+  await settings({ blinkEnabled: true, expressionsEnabled: true });
 
   // 自然定时器实际驱动半闭、闭眼、半闭、睁眼四次变化。
   await page.evaluate(() => {

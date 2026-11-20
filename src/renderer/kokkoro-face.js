@@ -37,7 +37,8 @@ export class KokkoroFace {
       if (this.eyes?.enabled) this.eyes.reset();
       return;
     }
-    if (!this.loading) this.prepareFrames();
+    // 眨眼或表情启用时预热帧素材，两个开关都关闭时只加载待机立绘。
+    if (!this.loading && (this.allowed || (!reducedMotion && settings.blinkEnabled !== false))) this.prepareFrames();
     if (!this.action) this.syncEyes();
   }
 
