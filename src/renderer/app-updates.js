@@ -22,11 +22,9 @@ function renderNotes(text) {
 
 // 每个状态都明确下一步，便携用户在点击安装前能看到迁移说明。
 function presentation({ status, installed, release, error }) {
-  const format = release?.asset?.format;
+  const format = release.asset?.format;
   switch (status) {
     case 'checking': return ['正在检查更新', '正在连接 GitHub Releases…', '检查中…'];
-    case 'current': return ['已是最新版本', '已检查 GitHub 上的最新正式版。', '重新检查', 'update-check'];
-    case 'error': return ['暂时无法检查', '请检查网络连接，也可以打开 GitHub 发布页。', '重新检查', 'update-check'];
     case 'available':
       if (!format) return ['发现新版本', '当前系统的安装包尚未就绪，可以前往发布页查看。', '重新检查', 'update-check'];
       return ['发现新版本', '', error ? '重新下载' : format === 'setup' && !installed ? '下载安装版' : '下载更新', 'update-download'];
@@ -38,7 +36,6 @@ function presentation({ status, installed, release, error }) {
     case 'opened':
       if (format === 'setup') return ['正在重启更新', '', '正在重启…'];
       return [format === 'dmg' ? '已打开安装包' : '已打开压缩包', '', '再次打开', 'update-apply'];
-    default: return ['检查更新', '检查是否有新的正式版本。', '检查更新', 'update-check'];
   }
 }
 
@@ -57,15 +54,14 @@ export function bindAppUpdates(bridge, call) {
 
   // 仅在打开弹窗或切换阶段时更新正文，下载过程中保留说明节点、滚动位置和焦点。
   function renderDialog() {
-    if (!dialog.open || !state) return;
+    if (!dialog.open || !state?.release) return;
     const { status, current, release, error } = state;
     const [title, message, action, command] = presentation(state);
     $('update-heading').textContent = title;
     $('update-current').textContent = `当前 v${current}`;
-    $('update-next').textContent = release ? `v${release.version}` : '';
-    $('update-next').hidden = $('update-arrow').hidden = $('update-changes').hidden = !release;
-    if (release && renderedNotes !== release.notes) { renderNotes(release.notes); renderedNotes = release.notes; }
-    if (release && renderedDate !== release.published) {
+    $('update-next').textContent = `v${release.version}`;
+    if (renderedNotes !== release.notes) { renderNotes(release.notes); renderedNotes = release.notes; }
+    if (renderedDate !== release.published) {
       const date = new Date(release.published);
       $('update-date').textContent = Number.isNaN(date.getTime()) ? ''
         : date.toLocaleDateString('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' });
@@ -93,19 +89,25 @@ export function bindAppUpdates(bridge, call) {
     }
     state = next;
     const { status, release } = state;
-    button.dataset.active = String(Boolean(release));
-    button.title = release ? `查看 v${release.version} 更新` : '检查软件更新';
+    // 只有主进程确认更高的正式版本才显示入口。版本已追平或发布撤回时，同时收起旧弹窗。
+    button.hidden = !release;
+    if (!release) {
+      badge.textContent = '';
+      if (dialog.open) dialog.close();
+      return;
+    }
+    button.title = `查看 v${release.version} 更新`;
     button.setAttribute('aria-label', button.title);
-    badge.textContent = status === 'downloading' ? `${state.percent}%` : status === 'ready' ? '已就绪' : release ? '有更新' : '';
+    badge.textContent = status === 'downloading' ? `${state.percent}%` : status === 'ready' ? '已就绪' : '有更新';
     renderDialog();
   });
   // 命令错误由管理页的公共提示展示，后台状态由主进程单独推送。
   const execute = (command) => { void call(command).catch(() => {}); };
   execute('update-status');
   button.addEventListener('click', () => {
+    if (!state?.release) return;
     if (!dialog.open) dialog.showModal();
     renderDialog();
-    if (!state?.release && state?.status !== 'checking') execute('update-check');
   });
   $('update-close').addEventListener('click', () => dialog.close());
   $('update-release').addEventListener('click', () => execute('update-release'));

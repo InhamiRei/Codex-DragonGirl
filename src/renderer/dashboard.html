@@ -17,8 +17,8 @@
         <div class="brand-copy">
           <strong>GPT龙娘</strong>
           <div class="brand-version-row"><span id="app-version"></span>
-            <button id="app-update-button" type="button" aria-label="检查软件更新" aria-haspopup="dialog" title="检查软件更新">
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.2M4.8 6.6 8 9.8l3.2-3.2M3 11v2h10v-2"/></svg>
+            <button id="app-update-button" type="button" aria-label="查看软件更新" aria-haspopup="dialog" hidden>
+              <svg viewBox="1 1 14 14" aria-hidden="true"><path d="M8 2.5v7.2M4.8 6.6 8 9.8l3.2-3.2M3 11v2h10v-2"/></svg>
               <span id="app-update-badge"></span>
             </button>
           </div>
@@ -973,16 +973,16 @@
       <header class="update-hero">
         <div class="update-hero-copy">
           <span class="update-kicker"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m-3.5-3.5L10 12l3.5-3.5M4 13v2a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-2"/></svg>软件更新</span>
-          <h2 id="update-heading">检查更新</h2>
+          <h2 id="update-heading">发现新版本</h2>
           <div class="update-versions"><span id="update-current"></span>
-            <span id="update-arrow" aria-hidden="true" hidden>→</span><strong id="update-next" hidden></strong></div>
+            <span id="update-arrow" aria-hidden="true">→</span><strong id="update-next"></strong></div>
         </div>
         <div class="update-art" aria-hidden="true"><img src="../../assets/characters/codex-dragon-girl.png" alt="" /></div>
         <button class="update-close" id="update-close" type="button" aria-label="关闭更新窗口" autofocus>
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 6 8 8m0-8-8 8"/></svg></button>
       </header>
       <div class="update-body">
-        <section id="update-changes" hidden>
+        <section>
           <div class="update-section-heading"><h3>更新内容</h3><time id="update-date"></time></div>
           <div id="update-notes" tabindex="0"></div>
         </section>

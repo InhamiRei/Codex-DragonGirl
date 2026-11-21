@@ -48,6 +48,15 @@ async function showRelease(platform, installed) {
     body: '- 可在版本号旁查看更新，直接下载适合当前系统的安装包。\n- 关闭更新窗口后，下载会在后台继续。\n- 安装前会校验文件的完整性。' } });
 }
 
+// 从同一检测入口返回本机版本，覆盖首次打开和已提示版本被撤回两种情况。
+async function checkCurrentRelease() {
+  await application.evaluate(async (_electron, version) => {
+    const service = globalThis.__dragonGirlApp.dashboard.updates;
+    service.fetch = async () => Response.json({ tag_name: 'v' + version, assets: [] });
+    await service.check();
+  }, current);
+}
+
 try {
   await fs.mkdir(output, { recursive: true });
   await fs.mkdir(path.join(temp, 'user/.codex/sessions'), { recursive: true });
@@ -71,21 +80,32 @@ try {
     window.blur();
   });
   const badge = page.locator('#app-update-button'), modal = page.locator('#app-update-dialog'), primary = page.locator('#update-primary');
+  assert.equal(await badge.isVisible(), false);
+  await checkCurrentRelease();
+  await page.locator('#title').click();
+  assert.equal(await badge.isVisible(), false);
+  assert.equal(await modal.isVisible(), false);
+  // 两张侧栏截图使用同一裁剪区域，方便直接比较最新版和发现新版的效果。
+  const side = await page.locator('.sidebar').boundingBox(), nav = await page.locator('.main-nav').boundingBox();
+  const clip = { x: 0, y: 0, width: side.width, height: Math.round(nav.y - 1) };
+  await page.screenshot({ path: path.join(output, 'current.png'), clip });
   await showRelease('darwin', false);
   await page.getByRole('button', { name: '查看 v' + next + ' 更新' }).waitFor();
-  // 用页面标题接收一次普通鼠标点击，截图显示未聚焦按钮，键盘焦点环仍由系统正常绘制。
-  await page.locator('#title').click();
   await badge.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)));
-  // 提示比版本文字细一档，两者可见高度和中心线相同，隐形点击区域仍有 24 像素高。
+  // 字号、行高、标签上下边缘都和版本号对齐，隐形点击区域仍有 24 像素高。
   assert.equal(await badge.evaluate((el) => getComputedStyle(el).fontWeight), '300');
-  assert.equal(await page.locator('#app-version').evaluate((el) => getComputedStyle(el).fontWeight), '400');
-  const badgeBox = await badge.boundingBox(), versionBox = await page.locator('#app-version').boundingBox();
+  const versionLabel = page.locator('#app-version'), badgeLabel = badge.locator('#app-update-badge');
+  assert.equal(await versionLabel.evaluate((el) => getComputedStyle(el).fontWeight), '400');
+  // 同时核对字形字号和行盒高度，单看按钮外框无法发现文字偏小。
+  const textMetrics = (el) => [getComputedStyle(el).fontSize, getComputedStyle(el).lineHeight];
+  assert.deepEqual(await badgeLabel.evaluate(textMetrics), await versionLabel.evaluate(textMetrics));
+  const badgeBox = await badge.boundingBox(), versionBox = await versionLabel.boundingBox(), labelBox = await badgeLabel.boundingBox();
   assert.equal(badgeBox.height, versionBox.height);
   assert.equal(badgeBox.y, versionBox.y);
+  assert.equal(labelBox.height, versionBox.height);
+  assert.equal(labelBox.y, versionBox.y);
   assert.equal(await badge.evaluate((el) => getComputedStyle(el, '::after').height), '24px');
-  // 仅截取应用内容，不截取桌面或用户的其他窗口。
-  const side = await page.locator('.sidebar').boundingBox(), nav = await page.locator('.main-nav').boundingBox();
-  await page.screenshot({ path: path.join(output, 'button.png'), clip: { x: 0, y: 0, width: side.width, height: Math.round(nav.y - 1) } });
+  await page.screenshot({ path: path.join(output, 'button.png'), clip });
   await badge.click();
   await page.getByText('发现新版本', { exact: true }).waitFor();
   await page.locator('.update-art img').evaluate((element) => element.decode());
@@ -125,6 +145,11 @@ try {
   await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.window.setSize(880, 660));
   await page.waitForFunction(() => window.innerWidth <= 880);
   assert.ok(await badge.evaluate((el) => el.getBoundingClientRect().right < document.querySelector('.sidebar').getBoundingClientRect().right));
+  await badge.click();
+  await modal.waitFor({ state: 'visible' });
+  await checkCurrentRelease();
+  await modal.waitFor({ state: 'hidden' });
+  await badge.waitFor({ state: 'hidden' });
   console.log(`已验证 v${current} 到模拟 v${next} 的侧栏、更新弹窗、后台下载和两个平台的安装操作。`);
 } finally {
   if (application) await application.evaluate(() => globalThis.__resumeUpdateTransfer?.()).catch(() => {});
