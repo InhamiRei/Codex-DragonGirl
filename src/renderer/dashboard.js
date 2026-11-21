@@ -245,9 +245,10 @@ function chartHint(element, text, key) {
   element.dataset.tooltip = text;
   if (key) element.dataset.tooltipKey = key;
   element.setAttribute('aria-label', text.replaceAll('\n', ' · '));
-  // 旧节点移除后的离开事件不能关闭已经绑定到新节点的提示。
-  const hide = () => {
-    if (tooltipTarget === element) hideChartTooltip();
+  // 鼠标和键盘都结束查看时才收起，旧节点的离开事件不能关闭新的提示。
+  const hide = (event) => {
+    const otherState = event.type === 'blur' ? ':hover' : ':focus-visible';
+    if (tooltipTarget === element && !element.matches(otherState)) hideChartTooltip();
   };
   element.addEventListener('pointerenter', () => showTooltip(element));
   // 滚动或调整窗口后继续移动鼠标，也能重新显示当前元素的提示。
@@ -259,27 +260,46 @@ function chartHint(element, text, key) {
   element.addEventListener('blur', hide);
 }
 // 固定提示避开视口边界，并将无障碍描述绑定到当前悬停或聚焦的元素。
-function showTooltip(element) {
-  tooltipTarget?.removeAttribute('aria-describedby');
-  tooltipTarget = element;
-  element.setAttribute('aria-describedby', 'chart-tooltip');
+function showTooltip(element, rect = element.getBoundingClientRect()) {
   const tooltip = $('#chart-tooltip');
-  tooltip.textContent = element.dataset.tooltip;
+  // 同一徽标随列表移动时只更新位置，明细变化时才更新无障碍描述的内容。
+  if (tooltipTarget !== element) {
+    tooltipTarget?.removeAttribute('aria-describedby');
+    tooltipTarget = element;
+    element.setAttribute('aria-describedby', tooltip.id);
+  }
+  if (tooltip.textContent !== element.dataset.tooltip) tooltip.textContent = element.dataset.tooltip;
   tooltip.hidden = false;
-  const rect = element.getBoundingClientRect();
-  tooltip.style.left = `${Math.max(8, Math.min(window.innerWidth - tooltip.offsetWidth - 8, rect.x + rect.width / 2 - tooltip.offsetWidth / 2))}px`;
-  const top = rect.top > tooltip.offsetHeight + 16 ? rect.top - tooltip.offsetHeight - 8 : rect.bottom + 8;
-  tooltip.style.top = `${Math.max(8, Math.min(window.innerHeight - tooltip.offsetHeight - 8, top))}px`;
+  // 滚动时复用已测的徽标位置，先读完提示尺寸再写坐标，避免左右定位之间再次触发布局。
+  const width = tooltip.offsetWidth, height = tooltip.offsetHeight;
+  const top = rect.top > height + 16 ? rect.top - height - 8 : rect.bottom + 8;
+  tooltip.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, rect.x + (rect.width - width) / 2))}px`;
+  tooltip.style.top = `${Math.max(8, Math.min(window.innerHeight - height - 8, top))}px`;
 }
-// 页面滚动或重绘后移除旧提示，避免提示悬在已经移动的格子旁边。
+// 收起详情时同时解除触发元素的无障碍关联。
 function hideChartTooltip() {
   $('#chart-tooltip').hidden = true;
   tooltipTarget?.removeAttribute('aria-describedby');
   tooltipTarget = null;
 }
+// 布局变化后，仍在悬停或聚焦的可见重置卡继续显示详情，离开可视区时收起。
+function syncAccountTooltip(badge) {
+  if (badge?.matches('.reset-credits:is(:hover, :focus)')) {
+    const rect = badge.getBoundingClientRect();
+    const clip = $('#content-scroll').getBoundingClientRect();
+    if (rect.bottom > clip.top && rect.top < clip.bottom &&
+        rect.right > clip.left && rect.left < clip.right) {
+      showTooltip(badge, rect);
+      return;
+    }
+  }
+  hideChartTooltip();
+}
 // 全宽年度热力图按自然日补齐空格，周汇总与累计模式使用相同一份账本数据。
 function renderActivity() {
-  hideChartTooltip();
+  const target = $('#usage-chart');
+  // 账本请求可能在切回总览后才返回，只收起即将被替换的图表格子的提示。
+  if (target.contains(tooltipTarget)) hideChartTooltip();
   const today = dayKey(Date.now(), state.settings.timezone);
   const years = [...new Set([today.slice(0, 4), ...Object.keys(report.daily).map((day) => day.slice(0, 4))])].sort().reverse();
   if (!years.includes(String(activityYear))) activityYear = Number(years[0]);
@@ -290,7 +310,6 @@ function renderActivity() {
   const weeks = activityCalendar(report.daily, activityYear, today);
   const days = weeks.flatMap((week) => week.days);
   const max = Math.max(0, ...days.map((day) => day.value));
-  const target = $('#usage-chart');
   target.replaceChildren();
   target.dataset.mode = activityMode;
   target.style.setProperty('--weeks', weeks.length);
@@ -474,11 +493,8 @@ function updateAccountCard(current, next) {
 function renderAccounts(instances) {
   const target = $('#accounts');
   const peers = instances.map((i) => [i.id, i.identity, instanceLabel(i, state.settings)]);
-  const hint = tooltipTarget?.dataset.tooltipKey ? {
-    key: tooltipTarget.dataset.tooltipKey,
-    focused: document.activeElement === tooltipTarget,
-    rect: tooltipTarget.getBoundingClientRect(),
-  } : null;
+  const hintKey = tooltipTarget?.dataset.tooltipKey;
+  const hintFocused = hintKey && document.activeElement === tooltipTarget;
   for (const [id, entry] of accountCards) if (!instances.some((i) => i.id === id)) {
     entry.card.remove();
     accountCards.delete(id);
@@ -502,16 +518,11 @@ function renderAccounts(instances) {
   }
   if (!instances.length && !target.children.length)
     target.append(node('div', 'panel empty', '尚未发现数据目录，可以手动添加。'));
-  // 只有提示对应的卡片发生变化时才重新绑定，正常后台推送保持原来的节点。
-  if (hint && tooltipTarget?.isConnected) showTooltip(tooltipTarget);
-  else if (hint) {
-    const next = [...target.querySelectorAll('[data-tooltip-key]')].find((item) => item.dataset.tooltipKey === hint.key);
-    if (next && hint.focused) next.focus({ preventScroll: true });
-    else if (next) {
-      const rect = next.getBoundingClientRect();
-      if (Math.abs(rect.x - hint.rect.x) < 1 && Math.abs(rect.y - hint.rect.y) < 1) showTooltip(next);
-      else hideChartTooltip();
-    } else hideChartTooltip();
+  // 刷新后按实例找回徽标，以当前悬停和焦点决定详情是否继续显示。
+  if (hintKey) {
+    const badge = accountCards.get(hintKey)?.card.querySelector('.reset-credits');
+    if (hintFocused && badge && document.activeElement !== badge) badge.focus({ preventScroll: true });
+    syncAccountTooltip(badge);
   }
 }
 // 概览仅按索引已完成的实际数据展示，并持续报告首次扫描进度。
@@ -1072,8 +1083,12 @@ async function start() {
       }
       if (report) renderActivity();
     });
-  document.addEventListener('scroll', hideChartTooltip, true);
-  window.addEventListener('resize', hideChartTooltip);
+  // 滚动和缩放只重新定位已打开的重置卡详情，手动收起的提示不会被重新打开。
+  const syncVisibleTooltip = () => {
+    if (tooltipTarget) syncAccountTooltip(tooltipTarget);
+  };
+  document.addEventListener('scroll', syncVisibleTooltip, true);
+  window.addEventListener('resize', syncVisibleTooltip);
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') hideChartTooltip();
   });

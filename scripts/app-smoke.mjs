@@ -175,12 +175,12 @@ async function hoverHint(target, message) {
   }, message);
 }
 
-// 验证卡片顶部信息与真实悬停交互，覆盖后台重绘、键盘访问和窄窗口边界。
+// 验证卡片顶部信息与真实悬停交互，覆盖滚动、后台重绘和键盘访问。
 async function verifyAccountHeader() {
   // 原生窗口先取得焦点并完成布局，再注入鼠标，避免桌面焦点切换带来迟到的离开事件。
   await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.window.focus());
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  await page.mouse.move(1100, 40);
+  await page.locator('#title').hover();
   assert.deepEqual(await page.locator('.account .plan').allTextContents(), [
     'Pro 100', 'Plus', 'Pro 200', 'Pro 500', 'codex_future',
   ]);
@@ -189,9 +189,22 @@ async function verifyAccountHeader() {
   for (const text of await page.locator('.account-meta .account-usage').allTextContents())
     assert.match(text, /今日消耗 [\d.万亿]+ Tokens/);
   const tooltip = page.locator('#chart-tooltip');
+  const content = page.locator('#content-scroll');
   const first = page.locator('.account').first().locator('.reset-credits');
   await hoverHint(first, '重置卡悬停未显示详情');
   assert.match(await tooltip.textContent(), /可用重置卡 2 张\n第 1 张 · .+ 到期\n第 2 张 · 无到期限制/);
+  // 轻微滚动后指针仍在徽标内，详情应跟随徽标，无需再次移动鼠标。
+  const beforeScroll = await tooltip.boundingBox();
+  await content.evaluate((scroll) => scroll.scrollBy(0, 4));
+  await until(() => content.evaluate((scroll) => scroll.scrollTop >= 4), '账户列表未滚动');
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await first.evaluate((element) => element.matches(':hover')), true, '轻微滚动使指针离开了重置卡');
+  const afterScroll = await tooltip.boundingBox();
+  assert.ok(afterScroll && Math.abs(afterScroll.y - beforeScroll.y + 4) <= 1, '鼠标仍在重置卡上时，滚动打断了详情');
+  // 键盘焦点移到下一项时，鼠标仍悬停在原处，详情应保持可见。
+  await first.focus();
+  await page.keyboard.press('Tab');
+  assert.equal(await first.getAttribute('aria-describedby'), 'chart-tooltip', '键盘移焦打断了鼠标悬停');
   await first.evaluate((element) => { element.dataset.beforeRefresh = 'true'; });
   let keptHover = false;
   for (let count = 3; count <= 5 && !keptHover; count++) {
@@ -213,16 +226,27 @@ async function verifyAccountHeader() {
     if (keptHover) {
       assert.equal(await first.getAttribute('aria-describedby'), 'chart-tooltip', '后台重绘打断了重置卡提示');
       assert.equal(await tooltip.isVisible(), true);
+      assert.ok((await tooltip.textContent()).startsWith(`可用重置卡 ${count} 张\n`), '悬停详情没有同步新的张数');
     }
   }
   assert.ok(keptHover, '刷新时未能保持受控指针悬停');
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
-  await page.screenshot({ animations: 'disabled', path: path.join(root, '.artifacts/accounts-reset-hover.png') });
-  await page.mouse.move(1100, 40);
+  // 直接截取 Electron 已绘制的窗口，避免截图时调整页面导致受控指针离开徽标。
+  const capture = await application.evaluate(async () =>
+    (await globalThis.__dragonGirlApp.dashboard.window.capturePage()).toPNG().toString('base64'));
+  await fs.writeFile(path.join(root, '.artifacts/accounts-reset-hover.png'), capture, 'base64');
+  await page.locator('#title').hover();
   await until(() => tooltip.isHidden(), '移出重置卡后提示未关闭');
   // 缺少明细、没有可用卡与未知到期时间必须有各自的真实提示。
   const missing = page.locator('.account').nth(1).locator('.reset-credits');
-  await missing.focus();
+  // 在同一轮界面事件中切回总览并聚焦，确保账本的异步回包晚于详情打开。
+  await missing.evaluate((badge) => {
+    document.querySelector('.main-nav [data-tab="usage"]').click();
+    document.querySelector('.main-nav [data-tab="overview"]').click();
+    badge.focus({ preventScroll: true });
+  });
+  await until(() => page.locator('#usage-chart').evaluate((chart) => chart.childElementCount > 0), '切页前的账本图表未加载');
+  assert.equal(await tooltip.isVisible(), true, '后台账本重绘关闭了总览中的详情');
   await until(() => tooltip.textContent().then((text) => /服务未返回到期明细/.test(text)), '键盘聚焦未显示缺失明细提示');
   await missing.evaluate((element) => { element.dataset.beforeRefresh = 'true'; });
   await application.evaluate(() => {
@@ -233,6 +257,9 @@ async function verifyAccountHeader() {
   await until(() => missing.textContent().then((value) => value === '重置卡 3 张'), '后台状态未推送到卡片');
   assert.equal(await missing.getAttribute('data-before-refresh'), 'true', '额度更新替换了键盘聚焦节点');
   assert.equal(await missing.evaluate((element) => document.activeElement === element), true, '后台重绘丢失了重置卡焦点');
+  // 已聚焦的重置卡完全滚出列表可视区后，详情也应消失。
+  await content.evaluate((scroll) => { scroll.scrollTop = scroll.scrollHeight; });
+  await until(() => tooltip.isHidden(), '重置卡滚出可视区后仍显示详情');
   await missing.evaluate((element) => element.blur());
   const empty = page.locator('.account').nth(2).locator('.reset-credits');
   await empty.hover();
@@ -240,6 +267,11 @@ async function verifyAccountHeader() {
   await page.locator('.account').nth(3).locator('.reset-credits').focus();
   assert.match(await tooltip.textContent(), /到期时间未知/);
   await page.locator('.account').nth(3).locator('.reset-credits').evaluate((element) => element.blur());
+}
+
+// 完整管理页验收还覆盖三种窗口尺寸；同一套重置卡交互可单独在 Windows 成品上运行。
+async function verifyAccountHeaderWidths() {
+  const first = page.locator('.account').first().locator('.reset-credits'), tooltip = page.locator('#chart-tooltip');
   for (const size of [[880, 660], [1160, 820], [1440, 900]]) {
     await application.evaluate((_, size) => {
       const window = globalThis.__dragonGirlApp.dashboard.window;
@@ -396,7 +428,8 @@ try {
 } catch (e) {
   if (!application) throw e;
 }
-try {
+// 从真实管理窗口进入共用的五实例数据场景，定向验收结束后同样走统一清理流程。
+async function verifyDashboard() {
   await until(
     () => Promise.resolve(application.windows().some((p) => p.url().endsWith('/dashboard.html'))),
     '总览页面未加载',
@@ -479,6 +512,12 @@ try {
     '账户套餐名称未显示为 Pro 100',
   );
   await verifyAccountHeader();
+  if (process.argv.includes('--reset-tooltip-only')) {
+    assert.deepEqual(errors, []);
+    console.log('重置卡验收通过：轻微滚动跟随、后台刷新、键盘移焦、迟到账本更新与滚出视口。');
+    return;
+  }
+  await verifyAccountHeaderWidths();
   await verifyLayout();
   await page.locator('button[data-tab="usage"]').click();
   await until(
@@ -1111,7 +1150,7 @@ try {
         checks: [
           '侧栏显示实际应用版本号',
           'Plus、Pro 100、Pro 200、Pro 500 原名与未知套餐保留',
-          '重置卡置顶、悬停明细、键盘访问与后台重绘保持',
+          '重置卡悬停与键盘明细、轻微滚动和后台刷新保持、滚出视区收起',
           '真实 RPC 读取重置卡详情并排除已使用卡',
           '今日消耗置于运行信息旁与三种窗口宽度适配',
           '旧版默认气泡自动迁移',
@@ -1148,6 +1187,9 @@ try {
     ),
   );
   console.log('应用集成检查通过：五实例隔离、账本、设置、音效、窗口跟随、对齐与中文界面。');
+}
+try {
+  await verifyDashboard();
 } catch (error) {
   // 集成失败保留实际页面与无障碍状态，后续定位无需反复猜测窗口时序。
   await page?.screenshot({ path: path.join(root, '.artifacts/app-failure.png') }).catch(() => {});

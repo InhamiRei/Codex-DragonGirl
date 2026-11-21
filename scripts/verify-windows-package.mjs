@@ -44,7 +44,7 @@ try {
   // 桌面用例串行运行同一个解压包，避免测试窗口互抢焦点并保留每项诊断。
   const env = { ...process.env, DRAGONGIRL_TEST_EXECUTABLE: executable };
   const scripts = [
-    'windows-smoke.mjs', 'update-smoke.mjs', 'startup-smoke.mjs', 'position-smoke.mjs', 'bubble-smoke.mjs',
+    'windows-smoke.mjs', 'update-smoke.mjs', 'app-smoke.mjs', 'startup-smoke.mjs', 'position-smoke.mjs', 'bubble-smoke.mjs',
     'follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs',
     'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs',
     'account-tests-smoke.mjs', 'performance-smoke.mjs', 'character-smoke.mjs', 'dragon-config-smoke.mjs',
@@ -54,7 +54,10 @@ try {
     console.log(`验收 ${script}`);
     // 六款发型各自启动验收窗口，沿用整套项目检查为单项提供的四分钟时限。
     const timeout = script === 'dragon-config-smoke.mjs' ? 240000 : 120000;
-    const result = spawnSync(process.execPath, [path.join(root, 'scripts', script)], {
+    // Windows 复用五实例重置卡用例，完整应用用例中的 macOS CLI 夹具仅在 Mac 上运行。
+    const args = [path.join(root, 'scripts', script)];
+    if (script === 'app-smoke.mjs') args.push('--reset-tooltip-only');
+    const result = spawnSync(process.execPath, args, {
       env, encoding: 'utf8', timeout,
     });
     if (result.status !== 0) throw new Error(`${script} 验收失败：${result.error?.message || result.stderr || result.stdout || result.signal || result.status}`);
@@ -65,6 +68,7 @@ try {
   report.checks.push('首次默认龙娘与角色切换', '三十帧 1254 像素动作、配色和几何一致', '三个角色的眨眼与视线、麻吕眼眶和脸部逐像素保持固定');
   report.checks.push('实际安装包侧栏版本、陪伴配置切换与原版部件、龙娘瞳色与重启恢复', '可可萝的完成、失败与任务台词', '账号测智界面与本地协议');
   report.checks.push('NSIS 安装包 SHA-256', '更新提示、下载校验、关闭弹窗后继续下载与安装操作');
+  report.checks.push('重置卡悬停、滚动跟随、键盘访问、滚出视口与后台刷新');
   await fs.writeFile(path.join(output, 'verification-Windows-x64.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally {
