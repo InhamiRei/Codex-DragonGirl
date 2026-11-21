@@ -2,9 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { verifyAudioLibrary } from '../src/core/audio-library-store.js';
-import { copyReleasePayload, readReleaseVersion, verifyMacBundleVersion, verifyReleasePayload } from './release-payload.mjs';
+import { copyReleasePayload, readReleaseVersion, releaseFileInfo, verifyMacBundleVersion, verifyReleasePayload } from './release-payload.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = path.join(root, 'output');
 const version = await readReleaseVersion(root);
@@ -134,15 +133,7 @@ const manifest = {
   minimumOS: '15.0',
   signature: 'ad-hoc',
   notarized: false,
-  files: [],
+  files: [await releaseFileInfo(zip), await releaseFileInfo(dmg)],
 };
-for (const file of [zip, dmg]) {
-  const bytes = await fs.readFile(file);
-  manifest.files.push({
-    name: path.basename(file),
-    bytes: bytes.length,
-    sha256: createHash('sha256').update(bytes).digest('hex'),
-  });
-}
 await fs.writeFile(path.join(output, 'release-manifest.json'), JSON.stringify(manifest, null, 2));
 console.log(JSON.stringify(manifest, null, 2));

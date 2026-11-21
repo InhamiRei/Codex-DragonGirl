@@ -2,8 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { verifyMacBundleVersion, verifyReleasePayload } from './release-payload.mjs';
+import { verifyMacBundleVersion, verifyReleaseFile, verifyReleasePayload } from './release-payload.mjs';
 const root = process.cwd(),
   output = path.join(root, 'output'),
   manifest = JSON.parse(await fs.readFile(path.join(output, 'release-manifest.json'), 'utf8')),
@@ -17,10 +16,7 @@ function run(command, args, env = process.env) {
   return result.stdout;
 }
 try {
-  for (const f of manifest.files) {
-    const data = await fs.readFile(path.join(output, f.name));
-    if (createHash('sha256').update(data).digest('hex') !== f.sha256) throw new Error('安装包哈希不符');
-  }
+  for (const file of manifest.files) await verifyReleaseFile(output, file);
   const zip = manifest.files.find((f) => f.name.endsWith('.zip')),
     dmg = manifest.files.find((f) => f.name.endsWith('.dmg'));
   run('/usr/bin/ditto', ['-x', '-k', path.join(output, zip.name), temp]);
@@ -42,6 +38,7 @@ try {
   ]);
   mounted = true;
   verifyMacBundleVersion(path.join(mount, 'Codex 龙娘.app'), manifest.version);
+  await verifyReleasePayload(root, path.join(mount, 'Codex 龙娘.app/Contents/Resources/app'), manifest.version);
   await fs.access(path.join(mount, 'Codex 龙娘.app/Contents/MacOS/CodexDragonGirl'));
   if ((await fs.readlink(path.join(mount, 'Applications'))) !== '/Applications')
     throw new Error('安装快捷入口错误');
@@ -67,7 +64,7 @@ try {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
   // 从解压后的真实安装包验证窗口遮挡、菜单、气泡时序与表情，避免只在源码目录中通过。
-  for (const script of ['follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'account-tests-smoke.mjs', 'performance-smoke.mjs',
+  for (const script of ['update-smoke.mjs', 'follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'account-tests-smoke.mjs', 'performance-smoke.mjs',
     'character-smoke.mjs', 'dragon-config-smoke.mjs', 'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs',
     'kokkoro-interaction-smoke.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
@@ -98,6 +95,7 @@ try {
       '后台刷新复用节点与菜单、常驻气泡和账号状态及时更新',
       '首次默认龙娘、角色切换与工作中手动捋发',
       '实际安装包侧栏版本、陪伴配置切换与原版部件、龙娘瞳色与重启恢复',
+      '更新窗口、百分比同步与后台下载完成',
       '三十帧原生 1254 像素、配色与尺寸一致、低头抬头平滑',
       '三个角色的眨眼与视线、麻吕眼眶和脸部逐像素保持固定',
       '可可萝的完成、失败与任务台词',

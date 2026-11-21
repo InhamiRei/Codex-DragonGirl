@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld(
   Object.freeze({
     command: (command, value) => ipcRenderer.invoke('dg:command', command, value),
     onMonitor: (listener) => subscribe('dg:monitor', listener),
+    // 更新窗口只订阅主进程已经筛选的发布状态。
+    onAppUpdate: (listener) => subscribe('dg:update-state', listener),
     onAccountTests: (listener) => subscribe('dg:account-tests', listener),
     onSound: (listener) => subscribe('dg:sound', listener),
     onExpression: (listener) => subscribe('dg:expression', listener),

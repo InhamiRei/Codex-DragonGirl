@@ -2,9 +2,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import builder from 'electron-builder';
 import { verifyAudioLibrary } from '../src/core/audio-library-store.js';
-import { copyReleasePayload, readReleaseVersion, verifyReleasePayload } from './release-payload.mjs';
+import { copyReleasePayload, readReleaseVersion, releaseFileInfo, verifyReleasePayload } from './release-payload.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 if (process.platform !== 'win32' || process.arch !== 'x64')
@@ -31,12 +31,12 @@ await copyReleasePayload(root, application, '.exe');
 await verifyReleasePayload(root, application, version, '.exe');
 await fs.writeFile(path.join(bundle, '使用说明.txt'), '\ufeff' + [
   'GPT龙娘 · 作者 Hey、小怪兽',
-  '请先完整解压 ZIP，再双击 DragonGirl.exe。不要只拖出单个 EXE。',
+  '安装版请双击 Setup 安装器；使用便携 ZIP 时请完整解压，再双击 DragonGirl.exe。',
   '支持 Windows 10 / 11 x64；无需安装 Node.js、npm 或开发工具。',
   '账户统计需要本机已安装并登录 Codex；九段原声音效已内置，首次打开即可离线播放。',
   '本版本未作商业代码签名。请从项目官方 Release 下载并核对 SHA-256。',
   '用户数据：%APPDATA%\\Codex DragonGirl\\',
-  '升级前退出旧版，再解压新版到新目录；保留上述用户数据目录即可保留设置与账本。',
+  '点击管理窗口版本旁的更新按钮可切换到安装版，之后可在龙娘内重启更新。也可从发布页下载便携 ZIP。',
   '项目：https://github.com/InhamiRei/Codex-DragonGirl',
   '',
 ].join('\r\n'));
@@ -49,11 +49,22 @@ const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-C
   encoding: 'utf8', windowsHide: true,
 });
 if (result.status !== 0) throw new Error(`Windows 压缩失败：${result.stderr || result.error?.message}`);
-const bytes = await fs.readFile(zip);
+// 用同一份已验证的目录制作当前用户 NSIS 安装器；自动更新复用 GitHub 正式附件和稳定应用标识。
+const installer = name + '-Setup.exe';
+await builder.build({
+  projectDir: root, prepackaged: bundle, publish: 'never',
+  targets: builder.Platform.WINDOWS.createTarget(['nsis'], builder.Arch.x64),
+  config: {
+    appId: 'com.inhamirei.dragongirl', productName: 'Codex DragonGirl', directories: { output }, publish: null,
+    win: { executableName: 'DragonGirl', signAndEditExecutable: false },
+    nsis: { artifactName: installer, oneClick: true, perMachine: false, runAfterFinish: true,
+      shortcutName: 'GPT龙娘', deleteAppDataOnUninstall: false, differentialPackage: false },
+  },
+});
 const manifest = {
   version, platform: 'Windows', architecture: 'x64', minimumOS: 'Windows 10',
   signed: false, executable: `${name}/DragonGirl.exe`,
-  files: [{ name: path.basename(zip), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }],
+  files: [await releaseFileInfo(zip), await releaseFileInfo(path.join(output, installer))],
 };
 await fs.writeFile(path.join(output, 'release-manifest-Windows-x64.json'), JSON.stringify(manifest, null, 2));
 console.log(JSON.stringify(manifest, null, 2));

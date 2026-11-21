@@ -12,7 +12,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,8 +29,10 @@ jobs:
         run: node scripts/fetch-reference-audio.mjs
       - name: 验证统计、交互与真实 Windows 窗口
         run: npm test
-      - name: 构建 Windows 便携包
+      - name: 构建 Windows 便携包与安装版
         run: npm run package:win
+      - name: 在临时 Windows 环境验证安装、应用内升级和重启
+        run: node scripts/windows-update-install-smoke.mjs
       # 桌面功能统一用解压后的便携包验收，包含原先源码阶段的账号测智。
       - name: 验证便携包与桌面功能
         run: npm run verify:windows
@@ -39,6 +41,7 @@ jobs:
           name: Windows-x64
           path: |
             output/*-Windows-x64.zip
+            output/*-Windows-x64-Setup.exe
             output/release-manifest-Windows-x64.json
             output/verification-Windows-x64.json
           if-no-files-found: error

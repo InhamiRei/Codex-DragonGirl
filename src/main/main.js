@@ -1,5 +1,6 @@
-import { app, protocol, net, dialog } from 'electron';
+import { app, protocol, net, dialog, shell } from 'electron';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Monitor } from './monitor.js';
 import { Dashboard } from './dashboard.js';
@@ -11,6 +12,8 @@ import { accountTestPreview } from './test-preview.js';
 import { StartupController } from './startup.js';
 import { startupReason } from '../core/startup-policy.js';
 import { SettingsStore } from '../core/settings.js';
+import { AppUpdates } from '../core/app-updates.js';
+import { fetchUpdateResource, markUpdateDownload, launchWindowsUpdate } from './update-platform.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const testMode = process.env.DRAGONGIRL_TEST === '1';
@@ -26,10 +29,23 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'dragon', privileges: { standard: true, secure: true, supportFetchAPI: true } },
   { scheme: 'dragon-preview', privileges: { standard: true, secure: true } },
 ]);
-let companion, monitor, dashboard, startup;
+let companion, monitor, dashboard, startup, installerOnQuit;
 let quitAfterSave = false,
   closing = false;
 const hasLock = app.requestSingleInstanceLock();
+
+// 安装器输入来自校验通过的本地缓存，渲染窗口只能请求执行已准备好的更新。
+async function openUpdateFile(file, format) {
+  if (format === 'setup') {
+    if (process.platform !== 'win32' || !app.isPackaged) throw new Error('请在 Windows 发行版中安装更新。');
+    installerOnQuit = file;
+    setImmediate(() => app.quit());
+    return;
+  }
+  const error = await shell.openPath(file);
+  if (error) throw new Error('无法打开下载文件：' + error);
+}
+
 if (!hasLock) {
   // 第二次启动成功通知现有实例后再反馈，启动器不会把正常去重当成异常退出。
   void reportLaunch('ready').finally(() => app.quit());
@@ -60,7 +76,14 @@ if (!hasLock) {
       for (const [name, controller] of [['管理窗口', dashboard], ['统计采集', monitor], ['桌面角色', companion]])
         await controller?.stop().catch((error) => console.error(`结束${name}失败：`, error.message));
     })().finally(() => {
-      void startup.stop().catch((error) => console.error('结束启动联动失败：', error.message)).finally(() => {
+      void startup.stop().catch((error) => console.error('结束启动联动失败：', error.message)).finally(async () => {
+        if (installerOnQuit) {
+          try { await launchWindowsUpdate(installerOnQuit); }
+          catch (error) {
+            dialog.showErrorBox('更新未能启动', '将重新打开当前版本。\n' + error.message);
+            app.relaunch();
+          }
+        }
         quitAfterSave = true;
         app.quit();
       });
@@ -127,7 +150,12 @@ if (!hasLock) {
         monitor = new Monitor(app.getPath('userData'), {
           testMode: testMode && process.env.DRAGONGIRL_LIVE_VERIFY !== '1',
         });
-        dashboard = new Dashboard(monitor, companion, startup);
+        const updates = new AppUpdates({ current: app.getVersion(), directory: path.join(app.getPath('userData'), 'updates'),
+          installed: process.platform === 'win32' && existsSync(path.join(path.dirname(process.execPath), 'Uninstall DragonGirl.exe')),
+          fetch: fetchUpdateResource, markDownload: markUpdateDownload, openFile: openUpdateFile, openPage: (url) => shell.openExternal(url) });
+        dashboard = new Dashboard(monitor, companion, startup, updates);
+        // 隔离桌面测试自行注入发布数据，正常启动及长期运行自动检测新版本。
+        if (!testMode) updates.start();
         globalThis.__dragonGirlApp = { monitor, dashboard, companion, startup };
         await monitor.start();
         if (startup.reason === 'manual') await dashboard.open();

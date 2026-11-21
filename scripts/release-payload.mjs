@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { AUDIO_FILES } from '../src/shared/audio-library.js';
 import { CHARACTERS } from '../src/shared/characters.js';
 import { DRAGON_FOREGROUND, DRAGON_GEAR, DRAGON_HAIRSTYLES } from '../src/shared/dragon-gear.js';
+import { fileDigest } from '../src/core/file-digest.js';
 
 // 发布包只收录运行模块、内置角色、原声和出处。README 海报与开发验收文件留在仓库。
 const runtimeFolders = [
@@ -11,6 +12,20 @@ const runtimeFolders = [
   ['assets/characters', /\.(?:png|webp)$/],
 ];
 const audioFiles = [...AUDIO_FILES.map((file) => file.localFile), 'original-audio-sources.json'];
+
+// 两个平台采用相同的发布清单字段，摘要和大小从同一次流式读取获得。
+export async function releaseFileInfo(file) {
+  return { name: path.basename(file), ...await fileDigest(file) };
+}
+
+// 解包前先核对成品完整性，不把整个磁盘映像或安装器留在内存中。
+export async function verifyReleaseFile(directory, expected) {
+  const file = path.join(directory, expected.name);
+  const actual = await fileDigest(file);
+  if (actual.bytes !== expected.bytes || actual.sha256 !== expected.sha256)
+    throw new Error('安装包长度或 SHA-256 不符：' + expected.name);
+  return file;
+}
 
 // 版本以 package.json 为准；锁文件不同步时禁止构建新包。
 export async function readReleaseVersion(root) {

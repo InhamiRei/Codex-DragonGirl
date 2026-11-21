@@ -7,6 +7,7 @@ import { activityCalendar, activityLevel } from '../shared/activity.js';
 import { CHARACTERS } from '../shared/characters.js';
 import { AccountTestsView } from './account-tests.js';
 import { CompanionConfigView } from './companion-config.js';
+import { bindAppUpdates } from './app-updates.js';
 const bridge = window.dragonGirl,
   sound = new SoundEngine();
 let state,
@@ -975,6 +976,7 @@ async function start() {
   state = await call('snapshot');
   // 共享侧栏读取实际运行版本，使五个页面上的显示一致。
   $('#app-version').textContent = `v${state.appVersion}`;
+  bindAppUpdates(bridge, call);
   accountTests = new AccountTestsView({ call, toast, getState: () => state });
   companionConfig = new CompanionConfigView($('#dragon-config'), {
     // 角色切换只同步偏好草稿中未修改的角色字段。

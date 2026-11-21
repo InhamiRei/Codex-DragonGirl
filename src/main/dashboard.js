@@ -26,10 +26,13 @@ function codexWindowFrame(codexProcess) {
 // 总览窗口统一管理 N 个采集源，桌宠窗口只负责各自展示和交互。
 export class Dashboard {
   // 绑定主角色、采集器和经过来源校验的界面命令。
-  constructor(monitor, primary, startup = null) {
+  constructor(monitor, primary, startup = null, updates = null) {
     this.monitor = monitor;
     this.primary = primary;
     this.startup = startup;
+    this.updates = updates;
+    // 独立推送更新进度，关闭面板时由主进程继续管理下载。
+    updates?.on('change', (state) => this.sendUpdateState(state));
     this.pets = new Map();
     this.assetDirectory = path.join(monitor.directory, 'assets');
     this.bundledAudioDirectory = path.join(ROOT, 'assets/audio');
@@ -431,9 +434,20 @@ export class Dashboard {
     await fs.writeFile(result.filePath, body);
     return true;
   }
+  // 初始快照和随后变化走同一条有序消息通道，避免迟到的查询结果覆盖新进度。
+  sendUpdateState(state) {
+    if (this.window && !this.window.isDestroyed()) this.window.webContents.send('dg:update-state', state);
+  }
+
   // 固定命令表只暴露统计和本应用设置，禁止渲染层调用任意命令或修改 Codex 资料。
   async command(command, value) {
     if (this.stopping) throw new Error('应用正在退出');
+    // 更新命令不接受界面指定的 URL、安装路径或命令行参数。
+    if (command === 'update-status') return this.sendUpdateState(this.updates.state);
+    if (command === 'update-check') return this.updates.check();
+    if (command === 'update-download') return this.updates.download();
+    if (command === 'update-apply') return this.updates.apply();
+    if (command === 'update-release') return this.updates.visitRelease();
     if (command === 'test-models') return this.tests.models(value);
     if (command === 'test-start') return this.tests.start(value);
     if (command === 'test-cancel') return this.tests.cancel(value);
@@ -581,6 +595,7 @@ export class Dashboard {
   // 退出前关闭所有附属角色，取消后台窗口资源。
   async stop() {
     this.stopping = true;
+    await this.updates?.stop();
     powerMonitor.removeListener('resume', this.onResume);
     await this.petUpdate?.catch(() => {});
     await this.tests.stop().catch((error) => console.error('结束账号测试失败：', error.message));

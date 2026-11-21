@@ -44,7 +44,8 @@
 
 | 电脑 | 下载文件 | 打开方法 |
 | --- | --- | --- |
-| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-<版本>-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
+| Windows 10 / 11，Intel / AMD 64 位 | `Codex-DragonGirl-<版本>-Windows-x64-Setup.exe` | 双击安装到当前用户的应用目录，后续可在龙娘内重启更新 |
+| 同上，偏好便携版 | `Codex-DragonGirl-<版本>-Windows-x64.zip` | 完整解压后双击文件夹内的 `DragonGirl.exe` |
 | macOS 15+，Apple Silicon | `Codex-DragonGirl-<版本>-macOS-arm64.dmg` | 把「Codex 龙娘.app」拖入 Applications |
 | 同上，偏好 ZIP | `Codex-DragonGirl-<版本>-macOS-arm64.zip` | 解压后打开 App，或移入 Applications |
 
@@ -52,7 +53,13 @@ Windows 请保留解压后的整个文件夹，程序需要旁边的运行时文
 
 安装包未作商业代码签名；macOS 包采用 ad-hoc 签名，尚未进行 Apple Developer ID 公证。首次打开可能需要系统确认，请从本仓库 Release 下载并核对附件中的 SHA-256。macOS 若拦截，可在「系统设置 → 隐私与安全性」中允许本应用。
 
-升级：退出旧版，下载对应系统的新版本并替换应用文件。设置和账本保存在独立用户目录中；Windows 可将新版解压到新文件夹后启动。
+从 **v1.7.0** 起，龙娘会在启动时和运行期间每六小时检查 GitHub 最新正式版。有新版时，管理窗口左上角的版本旁会出现「有更新」。点击可以看发布说明并下载，也可以随时点版本旁的下载图标手动检查。下载时可关闭管理窗口，龙娘会在后台完成下载并核对 SHA-256。
+
+- **macOS** 下载完成后点「打开安装包」，退出龙娘，将新版拖入「应用程序」替换。
+- **Windows 安装版** 下载完成后点「重启并更新」，龙娘保存数据并退出，安装器完成后自动重新打开应用。
+- **Windows 便携版** 可以点「下载安装版」，下载完成后确认切换到安装版并重启。想继续使用便携版，可从窗口里的「GitHub 发布页」下载 ZIP。若该次发布只有 ZIP，更新窗口也可直接下载并打开压缩包。
+
+v1.6.7 及更早版本需要先手动安装一次 v1.7.0。设置和账本保存在独立用户目录，升级后会自动沿用。
 
 ## 第一次使用
 
@@ -160,7 +167,7 @@ npm run verify:package
 
 声音测试使用隔离目录中的原声音效；首次运行测试前需准备上述音效缓存。构建输出位于 `output/`，测试报告位于 `.artifacts/`，两者均不进入源码仓库。Windows Actions 验证原生窗口、统计和解压后的独立应用，并保留构建产物。
 
-发版用 `npm version <版本号> --no-git-tag-version` 同步应用与锁文件。侧栏读取实际运行的版本，打包核对包内元数据与 macOS 系统版本，成品验收再启动应用核对侧栏。
+发版用 `npm version <版本号> --no-git-tag-version` 同步应用与锁文件。侧栏读取实际运行的版本，打包核对包内元数据与 macOS 系统版本，成品验收再启动应用核对侧栏。把同一版本的 Windows Setup、便携 ZIP、macOS DMG 和 ZIP 上传到草稿 Release，再以 `v<版本号>` 标签发布为最新正式版。更新窗口按附件名匹配当前系统，读取 GitHub 提供的 SHA-256。Windows CI 构建和验证安装包，公开发布仍由维护者执行。
 
 `verify:project` 串行检查语法、单元测试和当前系统的桌面功能，覆盖窗口跟随、启动、位置恢复、声音、气泡、视线、眨眼、开心、伤心、菜单和账号测智。性能回归检查重复推送不重建未变化的卡片、图表和托盘菜单，以及常驻气泡和账号运行状态的及时更新。汇总报告与各项日志位于 `.artifacts/project-audit/`，任意检查失败会返回非零退出码。
 

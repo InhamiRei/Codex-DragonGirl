@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="dashboard.css" />
     <link rel="stylesheet" href="account-tests.css" />
     <link rel="stylesheet" href="dragon-config.css" />
+    <link rel="stylesheet" href="app-updates.css" />
   </head>
   <body>
     <aside class="sidebar">
@@ -15,7 +16,12 @@
         <!-- 侧栏由所有页面共用，版本号始终紧跟应用标题。 -->
         <div class="brand-copy">
           <strong>GPT龙娘</strong>
-          <span id="app-version"></span>
+          <div class="brand-version-row"><span id="app-version"></span>
+            <button id="app-update-button" type="button" aria-label="检查软件更新" aria-haspopup="dialog" title="检查软件更新">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.2M4.8 6.6 8 9.8l3.2-3.2M3 11v2h10v-2"/></svg>
+              <span id="app-update-badge"></span>
+            </button>
+          </div>
         </div>
       </div>
       <nav class="main-nav" aria-label="主导航">
@@ -962,6 +968,32 @@
         </div>
       </div>
     </main>
+    <!-- 原生模态弹窗处理焦点约束与 Escape，关闭窗口不会取消后台下载。 -->
+    <dialog id="app-update-dialog" aria-labelledby="update-heading">
+      <header class="update-hero">
+        <div class="update-hero-copy">
+          <span class="update-kicker"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m-3.5-3.5L10 12l3.5-3.5M4 13v2a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-2"/></svg>软件更新</span>
+          <h2 id="update-heading">检查更新</h2>
+          <div class="update-versions"><span id="update-current"></span>
+            <span id="update-arrow" aria-hidden="true" hidden>→</span><strong id="update-next" hidden></strong></div>
+        </div>
+        <div class="update-art" aria-hidden="true"><img src="../../assets/characters/codex-dragon-girl.png" alt="" /></div>
+        <button class="update-close" id="update-close" type="button" aria-label="关闭更新窗口" autofocus>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 6 8 8m0-8-8 8"/></svg></button>
+      </header>
+      <div class="update-body">
+        <section id="update-changes" hidden>
+          <div class="update-section-heading"><h3>更新内容</h3><time id="update-date"></time></div>
+          <div id="update-notes" tabindex="0"></div>
+        </section>
+        <progress id="update-progress" max="100" value="0" aria-label="更新下载进度" hidden></progress>
+        <p id="update-message" role="status" hidden></p>
+      </div>
+      <footer class="update-footer">
+        <button id="update-release" class="text-button" type="button">GitHub 发布页 <span aria-hidden="true">↗</span></button>
+        <button id="update-primary" class="primary" type="button"></button>
+      </footer>
+    </dialog>
     <div id="chart-tooltip" class="chart-tooltip" role="tooltip" hidden></div>
     <script type="module" src="dashboard.js"></script>
   </body>
