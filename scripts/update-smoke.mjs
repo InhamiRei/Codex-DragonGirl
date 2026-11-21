@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
 import { _electron as electron } from 'playwright';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -13,6 +14,48 @@ const current = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'u
 const next = current.split('.').map((value, index) => String(Number(value) + (index === 2 ? 1 : 0))).join('.');
 const executable = process.env.DRAGONGIRL_TEST_EXECUTABLE;
 let application;
+
+// 用本机 HTTP 服务验证打包应用的 Electron 下载通道，覆盖真实重定向、读取响应和取消。
+async function checkDownloadTransport() {
+  const server = createServer((request, response) => {
+    if (request.url === '/redirect') return response.writeHead(302, { location: '/file' }).end();
+    if (request.url === '/file') return response.end('DragonGirl');
+    if (request.url === '/empty') return response.writeHead(204).end();
+    if (request.url === '/disconnect') return response.destroy();
+    if (request.url === '/pending') return;
+    // 模拟还有后续分块的安装包，确保 Chromium 已交付响应头，供客户端在正文途中取消。
+    response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'X-Content-Type-Options': 'nosniff' });
+    response.write(Buffer.alloc(4096, 17));
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  try {
+    const result = await application.evaluate(async (_electron, origin) => {
+      const service = globalThis.__dragonGirlApp.dashboard.updates;
+      // 此处直接调用生产网络通道，后续界面用例才替换发布信息。
+      const get = (url, signal = AbortSignal.timeout(10000)) => service.fetch(url, { redirect: 'manual', signal });
+      const redirect = await get(origin + '/redirect');
+      const location = redirect.headers.get('location');
+      const file = await get(location);
+      const contents = await file.text();
+      const empty = await get(origin + '/empty');
+      // 真实断线会立即报错，尚未收到响应头的慢请求则由调用方超时取消。
+      const disconnected = await get(origin + '/disconnect').then(() => false, (error) => error.name !== 'TimeoutError');
+      const timedOut = await get(origin + '/pending', AbortSignal.timeout(200)).then(() => false, (error) => error.name === 'TimeoutError');
+      const controller = new AbortController();
+      const partial = await get(origin + '/partial', AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]));
+      const reading = partial.arrayBuffer();
+      controller.abort();
+      const cancelled = await reading.then(() => false, () => true);
+      return { status: redirect.status, location, contents, empty: [empty.status, empty.body], disconnected, timedOut, cancelled };
+    }, origin);
+    assert.deepEqual(result, { status: 302, location: origin + '/file', contents: 'DragonGirl', empty: [204, null],
+      disconnected: true, timedOut: true, cancelled: true });
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
 
 // 用真实管理窗口、真实下载器与隔离数据生成截图；虚构发布只存在于这次验收的主进程内。
 async function showRelease(platform, installed) {
@@ -71,6 +114,7 @@ try {
     if (Date.now() > deadline) throw new Error('更新验收未找到管理窗口');
     await new Promise((resolve) => setTimeout(resolve, 80));
   }
+  await checkDownloadTransport();
   await page.waitForFunction((version) => document.querySelector('#app-version')?.textContent === 'v' + version, current);
   // 此用例使用定向发送给页面的输入，避免桌面上其他窗口的实际键鼠操作关闭截图中的弹窗。
   await application.evaluate(() => {
@@ -150,7 +194,7 @@ try {
   await checkCurrentRelease();
   await modal.waitFor({ state: 'hidden' });
   await badge.waitFor({ state: 'hidden' });
-  console.log(`已验证 v${current} 到模拟 v${next} 的侧栏、更新弹窗、后台下载和两个平台的安装操作。`);
+  console.log(`已验证 Electron 下载的真实跳转、断线和取消，以及 v${current} 到模拟 v${next} 的侧栏、进度和安装操作。`);
 } finally {
   if (application) await application.evaluate(() => globalThis.__resumeUpdateTransfer?.()).catch(() => {});
   await application?.close();
