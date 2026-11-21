@@ -63,13 +63,26 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 80));
   }
   await page.waitForFunction((version) => document.querySelector('#app-version')?.textContent === 'v' + version, current);
+  // 此用例使用定向发送给页面的输入，避免桌面上其他窗口的实际键鼠操作关闭截图中的弹窗。
+  await application.evaluate(() => {
+    const window = globalThis.__dragonGirlApp.dashboard.window;
+    window.setIgnoreMouseEvents(true);
+    window.setFocusable(false);
+    window.blur();
+  });
   const badge = page.locator('#app-update-button'), modal = page.locator('#app-update-dialog'), primary = page.locator('#update-primary');
   await showRelease('darwin', false);
   await page.getByRole('button', { name: '查看 v' + next + ' 更新' }).waitFor();
+  // 用页面标题接收一次普通鼠标点击，截图显示未聚焦按钮，键盘焦点环仍由系统正常绘制。
+  await page.locator('#title').click();
   await badge.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)));
-  // 更新提示和版本号均用常规字重，最窄受支持窗口也要完整显示按钮。
-  assert.equal(await badge.evaluate((el) => getComputedStyle(el).fontWeight), '400');
+  // 提示比版本文字细一档，两者可见高度和中心线相同，隐形点击区域仍有 24 像素高。
+  assert.equal(await badge.evaluate((el) => getComputedStyle(el).fontWeight), '300');
   assert.equal(await page.locator('#app-version').evaluate((el) => getComputedStyle(el).fontWeight), '400');
+  const badgeBox = await badge.boundingBox(), versionBox = await page.locator('#app-version').boundingBox();
+  assert.equal(badgeBox.height, versionBox.height);
+  assert.equal(badgeBox.y, versionBox.y);
+  assert.equal(await badge.evaluate((el) => getComputedStyle(el, '::after').height), '24px');
   // 仅截取应用内容，不截取桌面或用户的其他窗口。
   const side = await page.locator('.sidebar').boundingBox(), nav = await page.locator('.main-nav').boundingBox();
   await page.screenshot({ path: path.join(output, 'button.png'), clip: { x: 0, y: 0, width: side.width, height: Math.round(nav.y - 1) } });
@@ -79,7 +92,6 @@ try {
   assert.equal(await page.locator('#update-message').isVisible(), false);
   assert.equal(await page.getByRole('progressbar').isVisible(), false);
   await modal.screenshot({ path: path.join(output, 'mac-window.png') });
-  await page.screenshot({ path: path.join(output, 'dashboard.png') });
   await primary.click();
   await page.waitForFunction(() => document.querySelector('#update-progress').value === 50);
   assert.equal(await primary.innerText(), '下载中 50%');

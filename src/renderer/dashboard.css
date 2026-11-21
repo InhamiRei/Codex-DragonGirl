@@ -216,6 +216,7 @@ label,
   object-fit: contain;
 }
 .brand-copy {
+  --version-line-height: 15px;
   display: grid;
   align-content: center;
 }
@@ -228,7 +229,7 @@ label,
 #app-version {
   color: var(--text-secondary);
   font-size: 11px;
-  line-height: 15px;
+  line-height: var(--version-line-height);
   font-variant-numeric: tabular-nums;
 }
 .main-nav {
