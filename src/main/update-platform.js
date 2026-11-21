@@ -21,7 +21,7 @@ export async function markUpdateDownload(file, url) {
 // 账本、窗口桥与助手收尾后启动当前用户安装器，NSIS 在成功安装后重新打开龙娘。
 export function launchWindowsUpdate(file) {
   return new Promise((resolve, reject) => {
-    const child = spawn(file, ['--updated', '/S', '--force-run'], { detached: true, stdio: 'ignore', cwd: path.dirname(file) });
+    const child = spawn(file, ['--updated', '/S', '--dg-restart'], { detached: true, stdio: 'ignore', cwd: path.dirname(file) });
     child.once('error', reject);
     child.once('spawn', () => { child.unref(); resolve(); });
   });

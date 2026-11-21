@@ -57,8 +57,8 @@ await builder.build({
   config: {
     appId: 'com.inhamirei.dragongirl', productName: 'Codex DragonGirl', directories: { output }, publish: null,
     win: { executableName: 'DragonGirl', signAndEditExecutable: false },
-    nsis: { artifactName: installer, oneClick: true, perMachine: false, runAfterFinish: true,
-      shortcutName: 'GPT龙娘', deleteAppDataOnUninstall: false, differentialPackage: false },
+    nsis: { artifactName: installer, include: path.join(root, 'scripts/windows-update.nsh'), oneClick: true, perMachine: false, runAfterFinish: true,
+      shortcutName: 'GPT龙娘', deleteAppDataOnUninstall: false, differentialPackage: false, packElevateHelper: false },
   },
 });
 const manifest = {

@@ -14,26 +14,24 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const manifest = JSON.parse(await fs.readFile(path.join(root, 'output/release-manifest-Windows-x64.json'), 'utf8'));
 const asset = manifest.files.find((file) => file.name.endsWith('-Setup.exe'));
 const setup = path.join(root, 'output', asset.name);
-const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-nsis-'));
+const temp = await fs.mkdtemp(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'dg-nsis-'));
 const installed = path.join(temp, 'installed'), executable = path.join(installed, 'DragonGirl.exe');
 const metadata = path.join(installed, 'resources/app/package.json');
 // 在临时运行器的真实产品数据目录放入探针，可检测安装器误删用户配置的问题。
 const user = path.join(process.env.APPDATA, 'Codex DragonGirl'), profile = path.join(temp, 'test-home');
 const sentinel = path.join(user, 'update-sentinel-' + path.basename(temp));
+const runtimeFile = path.join(user, 'startup/runtime.json');
 let application;
 
-// 仅按测试目录内的可执行文件全路径查找本次重启的进程。
-function installedProcesses(stop = false) {
-  const select = 'Get-CimInstance Win32_Process -Filter "Name=\'DragonGirl.exe\'" | Where-Object { $_.ExecutablePath -eq $env:DRAGONGIRL_VERIFY_EXE }';
-  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    select + (stop ? ' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }'
-      : ' | Where-Object { $_.CommandLine -notlike "*--type=*" } | Select-Object -ExpandProperty ProcessId')],
-  { env: { ...process.env, DRAGONGIRL_VERIFY_EXE: executable }, encoding: 'utf8', windowsHide: true }).trim();
+// 复用主程序的原子心跳文件；启动编号区分新旧进程，路径按文件系统实际长路径核对。
+async function readRuntime() {
+  return fs.readFile(runtimeFile, 'utf8').then((text) => JSON.parse(text)).catch(() => null);
 }
 
 try {
   // 先建立正式安装布局，将临时应用的版本降低，以同一份真实安装器验证跨版本替换。
   execFileSync(setup, ['/S', '/D=' + installed], { windowsVerbatimArguments: true, timeout: 120000 });
+  console.log('已在临时目录完成首次安装');
   const initial = JSON.parse(await fs.readFile(metadata, 'utf8'));
   assert.equal(initial.version, manifest.version);
   await fs.writeFile(metadata, JSON.stringify({ ...initial, version: '0.0.1' }));
@@ -52,6 +50,8 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   await page.waitForFunction(() => document.querySelector('#app-version')?.textContent === 'v0.0.1');
+  const previousRuntime = await readRuntime();
+  assert.equal(previousRuntime?.pid, await application.evaluate(() => process.pid));
   await application.evaluate(async (_electron, { name, size, digest, version, source }) => {
     const service = globalThis.__dragonGirlApp.dashboard.updates;
     if (!service.state.installed) throw new Error('安装版未被识别');
@@ -68,23 +68,32 @@ try {
   await page.getByRole('button', { name: '下载更新', exact: true }).click();
   const restart = page.getByRole('button', { name: '重启并更新', exact: true });
   await restart.waitFor({ timeout: 60000 });
+  console.log('已从旧版窗口下载并校验本次实际生成的 NSIS 安装包');
   await Promise.all([application.waitForEvent('close', { timeout: 60000 }), restart.click()]);
   application = null;
-  // 必须同时看到新版文件和从原安装位置重新运行的主程序，单纯启动安装器不足以通过。
+  console.log('旧版已完成保存并退出，等待新进程心跳');
+  // 新心跳与新版文件必须同时存在，每次轮询仅读取小文件，无需持续启动 PowerShell。
   const until = Date.now() + 90000;
+  let restarted;
   while (Date.now() < until) {
-    const version = await fs.readFile(metadata, 'utf8').then((data) => JSON.parse(data).version).catch(() => '');
-    if (version === manifest.version && installedProcesses()) break;
+    const runtime = await readRuntime();
+    if (runtime && runtime.launchId !== previousRuntime.launchId && runtime.pid !== previousRuntime.pid
+      && Date.now() - runtime.updatedAt < 6000) { restarted = runtime; break; }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   assert.equal(JSON.parse(await fs.readFile(metadata, 'utf8')).version, manifest.version);
-  assert.ok(installedProcesses(), '安装结束后龙娘未重启');
+  assert.ok(restarted, '安装结束后未收到新版主程序心跳');
+  assert.equal((await fs.realpath(restarted.executable)).toLowerCase(), (await fs.realpath(executable)).toLowerCase());
+  process.kill(restarted.pid, 0);
   await verifyReleasePayload(root, path.join(installed, 'resources/app'), manifest.version, '.exe');
   assert.equal(await fs.readFile(sentinel, 'utf8'), '本地数据');
   console.log('已验证 NSIS 正式安装、应用内完整下载、重启替换和用户数据保留');
 } finally {
   await application?.close().catch(() => {});
-  installedProcesses(true);
+  // 只回收这次安装目录内的进程，不按名称清理其他位置的龙娘。
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    'Get-CimInstance Win32_Process -Filter "Name=\'DragonGirl.exe\'" | Where-Object { $_.ExecutablePath -eq $env:DRAGONGIRL_VERIFY_EXE } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }'],
+  { env: { ...process.env, DRAGONGIRL_VERIFY_EXE: await fs.realpath(executable).catch(() => executable) }, windowsHide: true });
   const uninstall = path.join(installed, 'Uninstall DragonGirl.exe');
   if (await fs.stat(uninstall).catch(() => null)) execFileSync(uninstall, ['/S'], { timeout: 90000 });
   await fs.rm(sentinel, { force: true });
