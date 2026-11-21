@@ -2,7 +2,7 @@ import { createReadStream, watch } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parentPort, workerData } from 'node:worker_threads';
-import { parserState, parseUsageEvent, TASK_END_EVENTS } from '../core/usage-parser.js';
+import { isInheritedEvent, parserState, parseUsageEvent, TASK_END_EVENTS } from '../core/usage-parser.js';
 import { readLogLines } from '../core/log-lines.js';
 
 // 定期检查近期日志，目录监听跟踪旧会话的追加，低频核对补齐漏掉的系统事件。
@@ -38,12 +38,24 @@ function logLines(file, offset, size) {
   return readLogLines(stream, offset);
 }
 
-// 恢复历史会话时按需读取首行以识别实例下的会话、子代理和继承边界。
+// 文件身份由首条有效会话元数据确定；父历史中的上下文、任务开始和结果都不能改变提醒状态。
+function applyTaskEvent(event, state, home) {
+  if (!event) return;
+  if (event.type === 'session_meta') {
+    if (state.thread) return;
+  } else if (isInheritedEvent(event, state)) return;
+  const { task } = parseUsageEvent(event, state, home);
+  if (task?.turn) state.turn = task.turn;
+  return task;
+}
+
+// 旧会话首次追加时跳过空行或无效记录，找到文件自身的身份和继承边界即可停止。
 async function readMetadata(file, offset, state, home) {
   for await (const { line } of logLines(file, 0, offset)) {
     const event = taskEvent(line);
-    if (event?.type === 'session_meta') parseUsageEvent(event, state, home);
-    break;
+    if (event?.type !== 'session_meta') continue;
+    applyTaskEvent(event, state, home);
+    if (state.thread) break;
   }
 }
 
@@ -51,10 +63,7 @@ async function readMetadata(file, offset, state, home) {
 async function readPreviousTurn(file, offset, state, home) {
   const context = { ...state, turn: '' };
   for await (const { line } of logLines(file, Math.max(0, offset - 128 * 1024), offset)) {
-    const event = taskEvent(line);
-    if (!event) continue;
-    const { task } = parseUsageEvent(event, context, home);
-    if (task?.turn) context.turn = task.turn;
+    applyTaskEvent(taskEvent(line), context, home);
   }
   return context.turn;
 }
@@ -92,11 +101,8 @@ async function checkFile(source, file, changedByWatch) {
     let previousTurn;
     for await (const entry of logLines(file, start, stat.size)) {
       offset = entry.offset;
-      const event = taskEvent(entry.line);
-      if (!event) continue;
-      const { task } = parseUsageEvent(event, state, source.id);
+      const task = applyTaskEvent(taskEvent(entry.line), state, source.id);
       if (!task) continue;
-      if (task.turn) state.turn = task.turn;
       if (!(task.time > workerData.startedAt)) continue;
       if (!task.turn && start) {
         previousTurn ??= await readPreviousTurn(file, start, state, source.id);

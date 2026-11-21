@@ -43,6 +43,11 @@ export function parserState() {
     issues: 0,
   };
 }
+// 继承记录按子会话起始序号识别，旧格式还可通过父会话标识和创建时间判断。
+export function isInheritedEvent(event, state, timestamp = Date.parse(event?.timestamp)) {
+  return (state.boundary !== null && Number(event?.ordinal) < state.boundary) ||
+    (!!state.parent && timestamp < state.started);
+}
 // 合法时间戳外的记录不参加日统计，避免被误放到今天。
 export function parseUsageEvent(event, state, homeId) {
   const p = event?.payload || {},
@@ -73,10 +78,7 @@ export function parseUsageEvent(event, state, homeId) {
     if (settings.service_tier) state.tier = settings.service_tier;
     return {};
   }
-  // 子代理日志中的空值没有可比较的序号，后续真实事件仍需按继承边界正常入账。
-  const inherited =
-    (state.boundary !== null && Number(event?.ordinal) < state.boundary) ||
-    (timestamp < state.started && !!state.parent);
+  const inherited = isInheritedEvent(event, state, timestamp);
   if (Number.isFinite(timestamp) && !inherited) state.lastAt = Math.max(state.lastAt || 0, timestamp);
   if (p.type === 'task_started') {
     state.turn = String(p.turn_id || '');

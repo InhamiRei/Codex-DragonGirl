@@ -10,8 +10,8 @@ import { normalizeSettings } from '../src/core/settings.js';
 import { Monitor } from '../src/main/monitor.js';
 
 // 生成真实 JSONL 结构，避免提醒监听依赖模拟的日志解析器。
-function logLine(type, payload, timestamp = new Date().toISOString()) {
-  return JSON.stringify({ type, payload, timestamp }) + '\n';
+function logLine(type, payload, timestamp = new Date().toISOString(), ordinal) {
+  return JSON.stringify({ type, payload, timestamp, ordinal }) + '\n';
 }
 
 // 主任务和子代理使用同一种任务结果，子代理身份来自会话首行。
@@ -71,6 +71,64 @@ test('并发主任务优先，逐个显示子代理且同一轮只通知一次',
   assert.equal(notices[3].text, '子代理完成');
   t.mock.timers.tick(4000);
   assert.equal(notices.length, 4);
+});
+
+// 用实际监听器验证继承日志不会消费父轮次的提醒，同时覆盖首读、分批追加和重启后回读。
+test('子代理继承父会话的历史不会误报主任务停止或占用真正的结束提醒', { timeout: 20000 }, async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-inherited-notices-'));
+  const sessions = path.join(home, 'sessions');
+  await fs.mkdir(sessions);
+  const monitor = new Monitor(home, { testMode: true });
+  t.after(async () => {
+    await monitor.stop();
+    await fs.rm(home, { recursive: true, force: true });
+  });
+  const now = Date.now(), fresh = new Date(now).toISOString(), old = new Date(now - 60000);
+  const parentMeta = logLine('session_meta', { id: 'parent', source: 'cli', timestamp: old.toISOString() }, fresh, 1);
+  // 三个子会话使用相同的继承边界，复制过来的结束记录带着新时间戳。
+  const childMeta = (id) => logLine('session_meta', { id, parent_thread_id: 'parent',
+    source: { subagent: {} }, subagent_history_start_ordinal: 284 }, fresh, 0);
+  const history = parentMeta
+    + logLine('turn_context', { turn_id: 'parent-turn' }, fresh, 279)
+    + logLine('event_msg', { type: 'task_started', turn_id: 'parent-turn' }, fresh, 280)
+    + logLine('event_msg', { type: 'turn_aborted', turn_id: 'parent-turn' }, fresh, 281);
+  const childDone = logLine('event_msg', { type: 'task_complete' }, fresh, 284);
+  const parent = path.join(sessions, 'parent.jsonl');
+  const appended = path.join(sessions, 'appended.jsonl'), resumed = path.join(sessions, 'resumed.jsonl');
+  await fs.writeFile(parent, parentMeta + logLine('turn_context', { turn_id: 'parent-turn' }, fresh));
+  await fs.writeFile(path.join(sessions, 'child.jsonl'), childMeta('child') + history + childDone);
+  await fs.writeFile(appended, childMeta('appended'));
+  await fs.writeFile(resumed, '\n' + childMeta('resumed') + history);
+  await fs.utimes(resumed, old, old);
+
+  monitor.instances = [{ id: 'home', name: '测试实例', home }];
+  monitor.settings = normalizeSettings({ subagentNotifications: false, taskCheckSeconds: 60 });
+  monitor.taskStartedAt = now - 1000;
+  const notices = [];
+  monitor.on('notice', (notice) => notices.push(notice.dialogueKind));
+  monitor.startTaskWorker();
+  // 每批都含有真实结果，用 Worker 回执确认扫描完成，避免因为检查过早而误判没有提醒。
+  const nextTasks = async () => (await once(monitor.taskWorker, 'message', { signal: AbortSignal.timeout(5000) }))[0].tasks;
+  const initial = await nextTasks();
+  assert.deepEqual(initial.map(({ thread, turn, status, source }) => [thread, turn, status, source]),
+    [['child', '', 'complete', '子代理']]);
+  assert.deepEqual(notices, []);
+
+  // 新增的子轮次可用自己的上下文；旧文件的无轮次结果不可借用回读到的父轮次。
+  await fs.appendFile(appended, history + logLine('turn_context', { turn_id: 'child-turn' }, fresh, 284)
+    + logLine('event_msg', { type: 'task_complete' }, fresh, 285));
+  await fs.appendFile(resumed, childDone);
+  await fs.appendFile(parent, finish('parent-turn', fresh)
+    + logLine('event_msg', { type: 'turn_aborted', turn_id: 'another-parent-turn' }, fresh));
+  const next = nextTasks();
+  monitor.reconcileTaskLogs();
+  const tasks = await next;
+  assert.deepEqual(tasks.map(({ thread, turn, status, source }) => [thread, turn, status, source]).sort(), [
+    ['appended', 'child-turn', 'complete', '子代理'], ['resumed', '', 'complete', '子代理'],
+    ['parent', 'parent-turn', 'complete', '主任务'], ['parent', 'another-parent-turn', 'cancelled', '主任务'],
+  ].sort());
+  await until(() => notices.length === 2, '主任务真正完成和取消时均应提醒');
+  assert.deepEqual(notices, ['complete', 'cancelled']);
 });
 
 // 用真正的两个 Worker 验证初次短会话、恢复旧会话、重复日志和用量隔离。
