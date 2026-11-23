@@ -3,7 +3,7 @@ import { SoundLibraryView } from './sound-library.js';
 import { enhanceSelects, syncSelects, closeSelects, destroySelects } from './select.js';
 import { planLabel, instanceLabel, originLabel, quotaAvailableWindows } from '../shared/presentation.js';
 import { SoundEngine } from './audio.js';
-import { dayKey, midnight, nextDay } from '../shared/time.js';
+import { dayKey, midnight, nextDay, formatterForZone } from '../shared/time.js';
 import { activityCalendar, activityLevel } from '../shared/activity.js';
 import { CHARACTERS } from '../shared/characters.js';
 import { AccountTestsView } from './account-tests.js';
@@ -64,36 +64,32 @@ function toast(message) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => ($('#toast').hidden = true), 5000);
 }
-// 数字与日期展示统一使用本地界面的精度和所选时区。
+// 复用各处既定的数字精度与日期格式，后台刷新时直接格式化最新数值。
+const compactNumber = new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 2 });
+const moneyPrecision = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+const standardMoney = new Intl.NumberFormat('zh-CN', moneyPrecision);
+const compactMoney = new Intl.NumberFormat('zh-CN', { ...moneyPrecision, notation: 'compact' });
+const resetFields = { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
+const resetClock = formatterForZone('zh-CN', resetFields);
+const creditExpiry = formatterForZone('zh-CN', { ...resetFields, year: 'numeric' });
+
+// 统计数字保留两位小数的紧凑写法。
 function compact(n) {
-  return new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 2 }).format(
-    n || 0,
-  );
+  return compactNumber.format(n || 0);
 }
 // 金额明确保留未知状态，人民币只按用户设置的参考汇率换算。
 function money(value) {
   if (value === null || value === undefined) return '未定价';
   const cny = state.settings.currency === 'CNY';
-  const amount = new Intl.NumberFormat('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-    notation:
-      Math.abs(value * (cny ? state.settings.exchangeRate : 1)) >= 10000 ? 'compact' : 'standard',
-  }).format(value * (cny ? state.settings.exchangeRate : 1));
-  return `${amount} ${cny ? '元' : '美元'}`;
+  const amount = value * (cny ? state.settings.exchangeRate : 1);
+  const format = Math.abs(amount) >= 10000 ? compactMoney : standardMoney;
+  return `${format.format(amount)} ${cny ? '元' : '美元'}`;
 }
 // 绝对日期和倒计时同时展示，不把计时器结束当作后台已恢复额度。
 function resetText(time) {
   if (!time) return '重置时间未提供';
   const remaining = time - Date.now(),
-    absolute = new Intl.DateTimeFormat('zh-CN', {
-      timeZone: state.settings.timezone,
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).format(time).replace('/', '.');
+    absolute = resetClock(state.settings.timezone).format(time).replace('/', '.');
   if (remaining <= 0) return `等待服务确认重置 · ${absolute}`;
   const minutes = Math.ceil(remaining / 60000),
     days = Math.floor(minutes / 1440),
@@ -107,15 +103,7 @@ function resetCreditText(credits, stale) {
   if (credits.count === 0) lines.push('当前没有可用重置卡');
   else if (!credits.details?.length) lines.push('服务未返回到期明细');
   else {
-    const format = new Intl.DateTimeFormat('zh-CN', {
-      timeZone: state.settings.timezone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    });
+    const format = creditExpiry(state.settings.timezone);
     for (const [index, credit] of credits.details.entries()) {
       const expiry = !credit.expiryKnown
         ? '到期时间未知'

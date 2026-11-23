@@ -145,6 +145,25 @@ try {
   assert.equal(await page.evaluate(() => window.__bubbleAnimations), 1);
   assert.deepEqual(await nativeCalls(), before);
 
+  // 位置逐步往返时原生气泡必须每步都跟上，局部轮廓和内容未变则无需发给网页重画。
+  const movement = await application.evaluate(() => {
+    const c = globalThis.__dragonGirlTest, contents = c.windows.get('bubble').webContents;
+    const send = contents.send.bind(contents), previous = c.bubbleCalls.bounds;
+    let models = 0;
+    contents.send = (channel, ...args) => {
+      if (channel === 'dg:bubble') models++;
+      return send(channel, ...args);
+    };
+    try {
+      for (let i = 0; i < 12; i++) {
+        c.character.x += i < 6 ? 4 : -4;
+        c.applyCharacter();
+      }
+    } finally { contents.send = send; }
+    return { nativeMoves: c.bubbleCalls.bounds - previous, models };
+  });
+  assert.deepEqual(movement, { nativeMoves: 12, models: 0 }, '平移时漏跟随或重复发送了未变化的气泡');
+
   // 延后抵达的旧快照不能把已经更新的文字回退，也不能重新播放入场动画。
   await application.evaluate(() => {
     const c = globalThis.__dragonGirlTest;

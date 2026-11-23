@@ -18,6 +18,8 @@ import { CHARACTERS } from '../shared/characters.js';
 import { DRAGON_GEAR, parseDragonEyeColor } from '../shared/dragon-gear.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const DASHBOARD_URL = 'dragon://app/src/renderer/dashboard.html';
+// 用量气泡沿用自己的紧凑数字精度，同一进程中的多个角色共用格式器。
+const bubbleTokens = new Intl.NumberFormat('zh-CN', { notation: 'compact' });
 
 // 文件写完当前块后才向界面要下一块，提前关闭端口会触发导入回滚。
 async function* audioChunks(port, signal) {
@@ -244,9 +246,7 @@ export class Dashboard {
       name: instanceLabel(i, this.monitor.settings),
       plan: planLabel(planType),
       quota,
-      tokens: new Intl.NumberFormat('zh-CN', { notation: 'compact' }).format(
-        this.latest?.today?.homes[i.id] || 0,
-      ),
+      tokens: bubbleTokens.format(this.latest?.today?.homes[i.id] || 0),
       status:
         i.taskState === 'working'
           ? '工作中'
@@ -405,7 +405,7 @@ export class Dashboard {
       }
       const frame = codexWindowFrame(this.monitor.processes.find((p) => p.pid === pet.followPID));
       pet.followFrame(frame, this.pendingFollowOffsets.get(pet.home) || settings.followOffsets[pet.home] || { x: 1, y: 1 }, {
-        order: this.monitor.windowOrder, topmost: this.monitor.topmostWindows, normalWindows: this.monitor.normalWindows,
+        order: this.monitor.windowOrder, normalWindows: this.monitor.normalWindows,
       });
       pet.syncPrayerWave();
     }

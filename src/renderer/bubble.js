@@ -251,7 +251,6 @@ function drawOutline(model) {
     `A ${radiusX} ${radiusY} 0 0 1 ${centerX - radiusX} ${centerY}`,
     `A ${radiusX} ${radiusY} 0 0 1 ${centerX} ${centerY - radiusY} Z`,
   ].join(' '));
-  outlinePath.removeAttribute('transform');
   const rightSide = model.horizontal === 'right';
   tail.style.left = `${rightSide ? anchorX + BUBBLE_FRAME.thoughtRoot - BUBBLE_FRAME.thoughtWidth : anchorX - BUBBLE_FRAME.thoughtRoot}px`;
   tail.style.top = `${below ? BUBBLE_SIZE.height - tailTop - BUBBLE_FRAME.thoughtHeight : tailTop}px`;
@@ -283,8 +282,6 @@ function render(model) {
   if (renderedRevision !== model.revision) {
     renderedRevision = model.revision;
     if (!keepVisible) document.body.dataset.ready = 'false';
-    document.documentElement.style.setProperty('--max-width', `${BUBBLE_SIZE.width}px`);
-    document.documentElement.style.setProperty('--max-height', `${BUBBLE_SIZE.height}px`);
     document.documentElement.style.setProperty('--bubble-scale', String(model.scale));
     plan.hidden = true;
     if (model.usage) renderUsage(model.usage);
@@ -308,9 +305,9 @@ function render(model) {
 // 直接按完整椭圆命中，移除凸点后的空白与两颗独立小泡都继续穿透。
 function routeCursor(point, refresh = false) {
   lastCursor = point;
-  const matrix = outlinePath.getScreenCTM();
+  const matrix = document.body.dataset.ready === 'true' && outlinePath.getScreenCTM();
   const local = matrix && new DOMPoint(point.x, point.y).matrixTransform(matrix.inverse());
-  const enabled = document.body.dataset.ready === 'true' && !!local &&
+  const enabled = !!local &&
     (outlinePath.isPointInFill(local) || outlinePath.isPointInStroke(local));
   if (enabled === lastInteractive && !refresh) return;
   lastInteractive = enabled;
@@ -320,6 +317,9 @@ function routeCursor(point, refresh = false) {
 // 等字体可用后再测量首屏，避免初始化阶段的替代字体把气泡撑大。
 async function start() {
   await document.fonts.ready;
+  // 设计画布大小固定，切换语录、额度或角色比例时只更新实际缩放值。
+  document.documentElement.style.setProperty('--max-width', `${BUBBLE_SIZE.width}px`);
+  document.documentElement.style.setProperty('--max-height', `${BUBBLE_SIZE.height}px`);
   bridge.onBubble(render);
   render(await bridge.bootstrap());
   bridge.onCursor(point => routeCursor(point, point.refresh === true));

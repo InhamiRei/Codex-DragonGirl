@@ -497,7 +497,7 @@ export class Companion {
     // 显示轮次独立于内容版本，后台额度更新与气泡内换句不能被当作重新打开。
     if (opening) this.bubbleModel.showId += 1;
     this.bubbleVisible = true;
-    this.positionBubble();
+    this.positionBubble(true);
     clearTimeout(this.bubbleTimer);
     // 祷文由释放震荡波的流程收起，普通气泡仍使用各自的自动关闭设置。
     if (kind !== 'prayer' && !this.appearance.settings?.pinnedBubble)
@@ -632,7 +632,7 @@ export class Companion {
       measurement.height > this.bubbleModel.maxHeight
     ) return;
     this.bubbleModel.measuredRevision = measurement.revision;
-    this.positionBubble();
+    this.positionBubble(true);
     const window = this.windows.get('bubble');
     if (this.bubbleVisible && !window.isVisible()) {
       window.showInactive();
@@ -641,26 +641,32 @@ export class Companion {
     }
   }
 
-  // 默认使用角色左上方的位置，方向和思绪泡锚点随屏幕边缘避让一起更新。
-  positionBubble() {
+  // 实际窗口随角色移动；只有内容、测量状态或窗口内的图形变化时才通知渲染端。
+  positionBubble(notify = false) {
     const limits = this.bubbleLimits();
-    if (limits.scale !== this.bubbleModel.scale || limits.maxWidth !== this.bubbleModel.maxWidth || limits.maxHeight !== this.bubbleModel.maxHeight)
+    if (limits.scale !== this.bubbleModel.scale || limits.maxWidth !== this.bubbleModel.maxWidth || limits.maxHeight !== this.bubbleModel.maxHeight) {
       this.bubbleModel = {
         ...this.bubbleModel,
         ...limits,
         revision: this.bubbleModel.revision + 1,
         measuredRevision: -1,
       };
+      notify = true;
+    }
     const layout = placeBubble(this.character, this.display.workArea, {
       width: limits.maxWidth, height: limits.maxHeight, scale: limits.scale,
     });
-    this.bubbleModel = { ...this.bubbleModel, side: layout.side, horizontal: layout.horizontal, tailX: layout.tailX };
+    const { side, horizontal, tailX } = layout;
+    if (this.bubbleModel.side !== side || this.bubbleModel.horizontal !== horizontal || this.bubbleModel.tailX !== tailX) {
+      Object.assign(this.bubbleModel, { side, horizontal, tailX });
+      notify = true;
+    }
     const window = this.windows.get('bubble');
     const current = window.getBounds();
     // 原生窗口位置不变时不重复定位，避免在透明窗口上制造无意义的重绘与位置回跳。
-    if (['x', 'y', 'width', 'height'].some(key => current[key] !== layout.bounds[key]))
+    if (RECT_KEYS.some(key => current[key] !== layout.bounds[key]))
       window.setBounds(layout.bounds, false);
-    window.webContents.send('dg:bubble', this.bubbleModel);
+    if (notify) window.webContents.send('dg:bubble', this.bubbleModel);
   }
 
   // 已收起的窗口不重复向系统发隐藏命令，避免 AppKit 释放另一扇角色窗口正在使用的鼠标捕获。
@@ -690,7 +696,7 @@ export class Companion {
   setInteractive(view, enabled) {
     const window = this.windows.get(view);
     if (!window || window.isDestroyed()) return;
-    const next = !!(this.canInteract(view) && (enabled || view === 'character' && (this.gesture.active || this.contextMenu)));
+    const next = !!((enabled || view === 'character' && (this.gesture.active || this.contextMenu)) && this.canInteract(view));
     if (this.interactive.get(view) === next) {
       // 被隐藏状态否决的迟到消息也要回执，否则渲染端可能一直认为鼠标已经启用。
       if (enabled !== next && this.ready.has(view)) window.webContents.send('dg:input-state', next);
@@ -709,7 +715,7 @@ export class Companion {
     clearTimeout(this.cursorTimer);
     // 菜单自行追踪鼠标；全局轮询此时不能把所属窗口重新设为穿透。
     if (this.contextMenu) return;
-    const point = screen.getCursorScreenPoint();
+    let point;
     let nearby = false;
     let followingEyes = false;
     for (const [view, window] of this.windows) {
@@ -718,6 +724,8 @@ export class Companion {
       // macOS 原生显示可能先于 Electron 的 show 通知完成，不能让可见角色一直保留隐藏标记。
       if (view === 'character' && visible !== this.lastCharacterVisibility) this.sendCharacterLayout();
       if (!visible) continue;
+      // 两扇窗口都已隐藏时无需查询全局光标；显示后的第一次采样仍会立即命中。
+      point ??= screen.getCursorScreenPoint();
       const bounds = window.getBounds();
       const inside = containsPoint(bounds, point);
       const followEyes = view === 'character' && eyeTrackingEnabled(this.appearance.asset, this.appearance.settings);
@@ -961,7 +969,7 @@ export class Companion {
     const usage = typeof content === 'string' ? null : content.usage;
     if (text === this.bubbleModel.text && JSON.stringify(usage) === JSON.stringify(this.bubbleModel.usage)) return;
     this.setBubbleContent(content);
-    this.positionBubble();
+    this.positionBubble(true);
   }
 
   // 跟随模式交由宿主决定层级，独立桌面模式继续置顶；只在模式切换时重设默认窗口属性。
@@ -1010,13 +1018,12 @@ export class Companion {
     const overlays = group.filter(window => window.isVisible());
     const sources = new Map(overlays.map((window) => [window.getMediaSourceId().split(':')[1], window]));
     if (!sources.size) return;
-    const topmost = new Set(this.followTopmost?.map(String));
     const [baseId, ...upperIds] = sources.keys();
     // 浮动层已天然高于宿主，只维护组内波纹、角色和气泡的前后顺序。
     const localOrder = this.followOrder?.some((id) => String(id) === baseId) ? this.followOrder : null;
     const moves = floating
-      ? followWindowStack(localOrder, baseId, upperIds, { force: force || levelChanged })
-      : followWindowStack(this.followOrder, hostId, [...sources.keys()], { force: force || levelChanged, topmost: [...topmost] });
+      ? followWindowStack(localOrder, baseId, upperIds, force || levelChanged)
+      : followWindowStack(this.followOrder, hostId, [...sources.keys()], force || levelChanged);
     if (!moves) { this.followFrame(null); return; }
     try {
       for (const { id, above } of moves) {
@@ -1030,11 +1037,10 @@ export class Companion {
   }
 
   // 保留当前宿主和相对锚点，显示器事件到达时无需等待下一份原生快照。
-  followFrame(frame, offset = { x: 1, y: 1 }, { order = null, topmost = [], normalWindows = null } = {}) {
+  followFrame(frame, offset = { x: 1, y: 1 }, { order = null, normalWindows = null } = {}) {
     // 独立桌面的菜单忽略宿主坐标，避免菜单关闭后的屏幕重排使用跟随位置。
     if (this.contextMenu && frame && !this.followMode) return;
     this.followOrder = order;
-    this.followTopmost = topmost;
     this.followNormalWindows = normalWindows;
     if (this.gesture.active && this.followTarget?.id !== frame?.id) this.cancelGesture();
     this.followTarget = frame;

@@ -226,7 +226,7 @@ internal static class DragonBridge
             {
                 try
                 {
-                    if (!IsTarget(process) || Windows(process.Id, true).Count == 0) continue;
+                    if (!IsTarget(process) || FirstHostWindow(process.Id, true) == IntPtr.Zero) continue;
                     Dictionary<string, string> environment = ReadEnvironment(process.Id);
                     if (environment == null) continue;
                     string home;
@@ -244,36 +244,44 @@ internal static class DragonBridge
         discoveredAt = DateTime.UtcNow;
     }
 
-    // 保留可见宿主窗口；原生菜单继续参与层级排序，但不能成为跟随或聚焦目标。
-    private static List<Dictionary<string, object>> Windows(int pid, bool includeMinimized, Dictionary<long, Rect> frames = null)
+    // 过滤同进程工具窗、附属面板和菜单，小型最小化窗口仍可供用户从管理页恢复。
+    private static bool CanHost(IntPtr window, Rect rect, bool minimized)
     {
-        List<Dictionary<string, object>> windows = new List<Dictionary<string, object>>();
+        if (!minimized && (rect.Right - rect.Left < 400 || rect.Bottom - rect.Top < 300)) return false;
+        if ((GetWindowLongPtr(window, -20).ToInt64() & 0x80) != 0) return false; // WS_EX_TOOLWINDOW。
+        IntPtr parent = GetWindow(window, 4); // GW_OWNER。
+        if (parent != IntPtr.Zero && IsWindowVisible(parent)) return false;
         StringBuilder className = new StringBuilder(64);
+        return GetClassName(window, className, className.Capacity) == 0 || className.ToString() != "#32768";
+    }
+
+    // 发现或聚焦进程只需要最前面的宿主，第一个命中后就结束系统枚举。
+    private static IntPtr FirstHostWindow(int pid, bool includeMinimized)
+    {
+        IntPtr found = IntPtr.Zero;
         EnumWindows(delegate(IntPtr window, IntPtr parameter)
         {
             uint owner;
             GetWindowThreadProcessId(window, out owner);
             if (owner != (uint)pid || !IsWindowVisible(window)) return true;
             bool minimized = IsIconic(window);
-            if (!includeMinimized && minimized) return true;
-            IntPtr parent = GetWindow(window, 4); // GW_OWNER。
-            if ((GetWindowLongPtr(window, -20).ToInt64() & 0x80) != 0 // WS_EX_TOOLWINDOW。
-                || (parent != IntPtr.Zero && IsWindowVisible(parent))) return true;
             int cloaked;
-            if (!includeMinimized && DwmGetWindowAttribute(window, 14, out cloaked, 4) == 0 && cloaked != 0) return true;
+            if (!includeMinimized && (minimized || DwmGetWindowAttribute(window, 14, out cloaked, 4) == 0 && cloaked != 0)) return true;
             Rect rect;
-            if (!GetWindowRect(window, out rect)) return true;
-            if (!minimized && (rect.Right - rect.Left < 400 || rect.Bottom - rect.Top < 300)) return true;
-            if (GetClassName(window, className, className.Capacity) > 0 && className.ToString() == "#32768") return true;
-            long id = window.ToInt64();
-            if (frames != null) frames[id] = rect;
-            windows.Add(new Dictionary<string, object> {
-                { "id", id }, { "x", rect.Left }, { "y", rect.Top },
-                { "width", rect.Right - rect.Left }, { "height", rect.Bottom - rect.Top }
-            });
-            return true;
+            if (!GetWindowRect(window, out rect) || !CanHost(window, rect, minimized)) return true;
+            found = window;
+            return false;
         }, IntPtr.Zero);
-        return windows;
+        return found;
+    }
+
+    // 普通遮挡窗和宿主用相同的物理矩形，序列化时可以复用同一次采样得到的记录。
+    private static Dictionary<string, object> WindowFrame(long id, Rect rect)
+    {
+        return new Dictionary<string, object> {
+            { "id", id }, { "x", rect.Left }, { "y", rect.Top },
+            { "width", rect.Right - rect.Left }, { "height", rect.Bottom - rect.Top }
+        };
     }
 
     // 只比较宿主几何，角色自移动与其他窗口变动不会延长高频采样。
@@ -314,9 +322,35 @@ internal static class DragonBridge
         GetWindowThreadProcessId(GetForegroundWindow(), out front);
         List<Dictionary<string, object>> rows = new List<Dictionary<string, object>>();
         Dictionary<long, Rect> frames = new Dictionary<long, Rect>();
+        var hostsByPid = new Dictionary<uint, List<Dictionary<string, object>>>();
+        foreach (ProcessRow row in processes) hostsByPid[(uint)row.Pid] = new List<Dictionary<string, object>>();
+        List<long> topmost = new List<long>(), order = new List<long>();
+        List<Dictionary<string, object>> normalWindows = new List<Dictionary<string, object>>();
+        // 同一次 EnumWindows 既提供遮挡顺序也提供各实例的宿主，拖动时不会为每个进程重扫整桌面。
+        foreach (ScreenWindow window in VisibleWindows())
+        {
+            long id = window.Handle.ToInt64();
+            order.Add(id);
+            Dictionary<string, object> frame = null;
+            if (window.Topmost) topmost.Add(id);
+            else
+            {
+                frame = WindowFrame(id, window.Bounds);
+                normalWindows.Add(frame);
+            }
+            if (hostsByPid.Count == 0) continue;
+            uint owner;
+            GetWindowThreadProcessId(window.Handle, out owner);
+            List<Dictionary<string, object>> hosts;
+            if (hostsByPid.TryGetValue(owner, out hosts) && CanHost(window.Handle, window.Bounds, false))
+            {
+                hosts.Add(frame ?? WindowFrame(id, window.Bounds));
+                frames[id] = window.Bounds;
+            }
+        }
         foreach (ProcessRow row in processes)
         {
-            List<Dictionary<string, object>> hosts = Windows(row.Pid, false, frames);
+            List<Dictionary<string, object>> hosts = hostsByPid[(uint)row.Pid];
             bool blocked = hosts.Count > 0 && !IsWindowEnabled(new IntPtr((long)hosts[0]["id"]));
             rows.Add(new Dictionary<string, object> {
                 { "pid", row.Pid }, { "appPath", row.AppPath }, { "home", row.Home },
@@ -329,18 +363,6 @@ internal static class DragonBridge
             lastHostFrames = frames;
             hostMovement.Restart();
         }
-        List<long> topmost = new List<long>(), order = new List<long>();
-        List<Dictionary<string, object>> normalWindows = new List<Dictionary<string, object>>();
-        foreach (ScreenWindow window in VisibleWindows())
-        {
-            long id = window.Handle.ToInt64();
-            order.Add(id);
-            if (window.Topmost) topmost.Add(id);
-            else normalWindows.Add(new Dictionary<string, object> {
-                { "id", id }, { "x", window.Bounds.Left }, { "y", window.Bounds.Top },
-                { "width", window.Bounds.Right - window.Bounds.Left }, { "height", window.Bounds.Bottom - window.Bounds.Top }
-            });
-        }
         return Json.Serialize(new Dictionary<string, object> { { "processes", rows }, { "windowOrder", order }, { "topmostWindows", topmost }, { "normalWindows", normalWindows }, { "screenPermission", true } });
     }
 
@@ -350,10 +372,9 @@ internal static class DragonBridge
         using (Process process = Process.GetProcessById(pid))
         {
             if (!IsTarget(process)) return 1;
-            List<Dictionary<string, object>> windows = Windows(pid, false);
-            if (windows.Count == 0) windows = Windows(pid, true);
-            if (windows.Count == 0) return 1;
-            IntPtr window = new IntPtr((long)windows[0]["id"]);
+            IntPtr window = FirstHostWindow(pid, false);
+            if (window == IntPtr.Zero) window = FirstHostWindow(pid, true);
+            if (window == IntPtr.Zero) return 1;
             if (IsIconic(window)) ShowWindow(window, 9); // SW_RESTORE 也会取消最大化，仅用于最小化窗口。
             if (!IsWindowEnabled(window))
             {

@@ -137,7 +137,6 @@ export class Monitor extends EventEmitter {
       this.nativeError = '窗口桥暂不可用，正在恢复';
       this.processes = this.processes.map(row => ({ ...row, windows: [], frontmost: false }));
       this.windowOrder = [];
-      this.topmostWindows = [];
       this.normalWindows = [];
       this.emit('windows', { processes: this.processes, windowOrder: [], topmostWindows: [], normalWindows: [] });
       this.publish();
@@ -191,7 +190,6 @@ export class Monitor extends EventEmitter {
     }
     this.processes = processes;
     this.windowOrder = state.windowOrder;
-    this.topmostWindows = state.topmostWindows;
     this.normalWindows = state.normalWindows;
     this.nativeError = null;
     this.screenPermission = state.screenPermission;

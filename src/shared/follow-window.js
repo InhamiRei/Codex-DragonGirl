@@ -77,27 +77,20 @@ export function followWindowFloating(normalWindows, host, overlays, regions = []
   return false;
 }
 
-// 按宿主、角色、气泡的顺序规划相邻层级；只移动偏离位置的窗口，保留其他应用的遮挡关系。
-export function followWindowStack(windowOrder, hostId, overlays, { force = false, topmost = [] } = {}) {
+// 为使用 Electron 相对排序的平台规划移动；Windows 置顶组由原生桥读取和处理。
+export function followWindowStack(windowOrder, hostId, overlays, force = false) {
   const order = windowOrder?.map(String) || [];
-  const raised = new Set(topmost.map(String));
-  const owned = new Set(overlays.map(String));
   let above = String(hostId);
   if (windowOrder && !order.includes(above)) return null;
   const moves = [];
   for (const id of overlays.map(String)) {
     const parent = order.indexOf(above);
-    if (force || parent <= 0 || order[parent - 1] !== id || raised.has(id) !== raised.has(above)) {
-      // Windows 紧邻置顶组的普通窗口改用移到普通组顶端，避免 SetWindowPos 继承置顶属性。
-      const top = !!windowOrder && parent >= 0 && !raised.has(above)
-        && order.slice(0, parent).every((id) => raised.has(id) || owned.has(id));
-      moves.push({ id, above, top });
+    if (force || parent <= 0 || order[parent - 1] !== id) {
+      moves.push({ id, above });
       const current = order.indexOf(id);
       if (current >= 0) order.splice(current, 1);
       const target = order.indexOf(above);
       order.splice(target < 0 ? order.length : target, 0, id);
-      if (raised.has(above)) raised.add(id);
-      else raised.delete(id);
     }
     above = id;
   }
