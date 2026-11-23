@@ -101,7 +101,8 @@ if (process.argv.includes('--app-only')) {
 }
 const zip = path.join(output, `Codex-DragonGirl-${version}-macOS-arm64.zip`);
 await fs.rm(zip, { force: true });
-run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', bundle, zip]);
+// ZIP 保留应用、权限和框架符号链接，排除构建机为文件生成的 AppleDouble 附属条目。
+run('/usr/bin/ditto', ['-c', '-k', '--norsrc', '--noextattr', '--keepParent', bundle, zip]);
 // 安装映像内同时放入应用、Applications 快捷入口和简明说明。
 const staging = path.join(output, 'dmg-staging');
 await fs.rm(staging, { recursive: true, force: true });

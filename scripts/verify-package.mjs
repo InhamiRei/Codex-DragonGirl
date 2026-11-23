@@ -19,6 +19,9 @@ try {
   for (const file of manifest.files) await verifyReleaseFile(output, file);
   const zip = manifest.files.find((f) => f.name.endsWith('.zip')),
     dmg = manifest.files.find((f) => f.name.endsWith('.dmg'));
+  // 直接核对压缩包目录，解压之后便无法可靠发现构建机的附属元数据是否被一同分发。
+  const entries = run('/usr/bin/unzip', ['-Z1', path.join(output, zip.name)]).split('\n');
+  if (entries.some((entry) => entry.startsWith('__MACOSX/'))) throw new Error('ZIP 包含多余的 macOS 附属元数据');
   run('/usr/bin/ditto', ['-x', '-k', path.join(output, zip.name), temp]);
   const application = path.join(temp, 'Codex 龙娘.app'),
     code = path.join(application, 'Contents/Resources/app');
