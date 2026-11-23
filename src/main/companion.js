@@ -21,8 +21,7 @@ import {
   resizeCharacter,
   placeBubble,
   containsPoint,
-  BUBBLE_SIZE,
-  BUBBLE_MAX_SIZE,
+  bubbleDimensions,
 } from '../shared/geometry.js';
 import { DragGesture } from '../shared/gesture.js';
 import { StateStore } from './state-store.js';
@@ -86,7 +85,6 @@ export class Companion {
     this.bubbleVisible = false;
     this.dialogueCounts = new Map();
     this.bubbleKind = null;
-    this.bubbleSize = { ...BUBBLE_SIZE };
     this.bubbleModel = {
       text: '',
       usage: null,
@@ -431,7 +429,7 @@ export class Companion {
     this.windows.get('character')?.webContents.send('dg:cancelled');
   }
 
-  // 更改大小时固定底部及吸附边；气泡尺寸保持独立，文字不会跟着缩放。
+  // 更改大小时固定底部及吸附边，正在显示的气泡随角色的新宽度同步排版。
   setScale(scale) {
     this.cancelGesture();
     this.state.scale = scale;
@@ -447,10 +445,10 @@ export class Companion {
     this.updateMenu();
   }
 
-  // 轻点角色打开用量或收起当前气泡，点击用量气泡与菜单入口负责显示语录。
+  // 连续轻点头像依次打开用量、显示一句语录、收起；中间也可以改点气泡。
   toggleBubble() {
     if (this.bubbleVisible) {
-      this.hideBubble();
+      this.advanceBubble();
       return;
     }
     if (!this.state.speechEnabled) return;
@@ -588,18 +586,14 @@ export class Companion {
   // 用量气泡切换为一条语录，其余气泡点击收起；迟到点击不能重新叫出已隐藏的角色或气泡。
   advanceBubble() {
     if (this.stopping || !this.visible || this.suppressedByFollow || !this.bubbleVisible) return;
-    if (this.bubbleKind === 'usage') this.speak();
+    if (this.bubbleKind === 'usage') this.showBubble(this.nextDialogue('chat'), 'speech');
     else this.hideBubble();
   }
 
-  // 使用固定设计尺寸，仅在屏幕工作区小于气泡时收紧边界，内容长度不参与计算。
+  // 布局基于实际角色宽度和当前工作区，显示器切换或小屏自动缩小时也会更新比例。
   bubbleLimits() {
-    const area = this.display?.workArea;
-    if (!area) return { maxWidth: BUBBLE_MAX_SIZE.width, maxHeight: BUBBLE_MAX_SIZE.height };
-    return {
-      maxWidth: Math.min(BUBBLE_MAX_SIZE.width, Math.max(1, area.width - 8)),
-      maxHeight: Math.min(BUBBLE_MAX_SIZE.height, Math.max(1, area.height - 8)),
-    };
+    const { width, height, scale } = bubbleDimensions(this.character?.width, this.display?.workArea);
+    return { maxWidth: width, maxHeight: height, scale };
   }
 
   // 界面消息只确认当前内容已经排版，原生窗口始终使用固定尺寸，不能被正文长度改写。
@@ -615,8 +609,6 @@ export class Companion {
       measurement.width > this.bubbleModel.maxWidth ||
       measurement.height > this.bubbleModel.maxHeight
     ) return;
-    const limits = this.bubbleLimits();
-    this.bubbleSize = { width: limits.maxWidth, height: limits.maxHeight };
     this.bubbleModel.measuredRevision = measurement.revision;
     this.positionBubble();
     const window = this.windows.get('bubble');
@@ -626,14 +618,16 @@ export class Companion {
   // 默认使用角色左上方的位置，方向和思绪泡锚点随屏幕边缘避让一起更新。
   positionBubble() {
     const limits = this.bubbleLimits();
-    if (limits.maxWidth !== this.bubbleModel.maxWidth || limits.maxHeight !== this.bubbleModel.maxHeight)
+    if (limits.scale !== this.bubbleModel.scale || limits.maxWidth !== this.bubbleModel.maxWidth || limits.maxHeight !== this.bubbleModel.maxHeight)
       this.bubbleModel = {
         ...this.bubbleModel,
         ...limits,
         revision: this.bubbleModel.revision + 1,
         measuredRevision: -1,
       };
-    const layout = placeBubble(this.character, this.display.workArea, this.bubbleSize);
+    const layout = placeBubble(this.character, this.display.workArea, {
+      width: limits.maxWidth, height: limits.maxHeight, scale: limits.scale,
+    });
     this.bubbleModel = { ...this.bubbleModel, side: layout.side, horizontal: layout.horizontal, tailX: layout.tailX };
     const window = this.windows.get('bubble');
     const current = window.getBounds();

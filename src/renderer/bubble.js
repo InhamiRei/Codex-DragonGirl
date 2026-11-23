@@ -1,4 +1,4 @@
-import { BUBBLE_FRAME } from '../shared/geometry.js';
+import { BUBBLE_FRAME, BUBBLE_SIZE } from '../shared/geometry.js';
 import { quotaResetTime } from '../shared/time.js';
 import { tokenDisplayParts } from '../shared/presentation.js';
 
@@ -100,8 +100,9 @@ function renderUsage(usage) {
 // 判断文字是否处于固定椭圆内部，只调整内容容器，不再根据文字改写气泡尺寸。
 function contentFitsEllipse() {
   const rect = bubble.getBoundingClientRect();
-  const radiusX = Math.max(1, rect.width / 2 - 5);
-  const radiusY = Math.max(1, rect.height / 2 - 5);
+  const inset = 5 * rect.width / bubble.offsetWidth;
+  const radiusX = Math.max(1, rect.width / 2 - inset);
+  const radiusY = Math.max(1, rect.height / 2 - inset);
   const walker = document.createTreeWalker(contentPane, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     if (!walker.currentNode.textContent.trim()) continue;
@@ -130,7 +131,7 @@ function measure(model, scrollTop = 0) {
   // 测量在未滚动的坐标中进行，结束后恢复已有阅读位置，不让后台刷新把长内容推回顶部。
   contentPane.scrollTop = Math.min(scrollTop, Math.max(0, contentPane.scrollHeight - contentPane.clientHeight));
   const label = model.kind === 'usage'
-    ? '点击查看一句语录，点击角色可收起气泡'
+    ? '点击角色或气泡查看一句语录，再点收起'
     : model.kind === 'prayer' ? '点击收起祷文，可用滚轮回看'
     : '点击收起气泡';
   bubble.setAttribute('aria-label', scrollable && model.kind !== 'prayer'
@@ -254,7 +255,8 @@ function drawOutline(model) {
     `A ${radiusX} ${radiusY} 0 0 1 ${centerX} ${centerY - radiusY} Z`,
   ].join(' '));
   outlinePath.removeAttribute('transform');
-  const anchorX = Math.max(centerX - radiusX + 20, Math.min(centerX + radiusX - 20, model.tailX));
+  // 主进程传来逻辑像素，先还原到设计画布坐标，思绪泡只随外层缩放一次。
+  const anchorX = Math.max(centerX - radiusX + 20, Math.min(centerX + radiusX - 20, model.tailX / model.scale));
   const arc = radiusY * Math.sqrt(Math.max(0, 1 - ((anchorX - centerX) / radiusX) ** 2));
   const below = model.side === 'below';
   const edge = centerY + (below ? -arc : arc);
@@ -291,8 +293,9 @@ function render(model) {
   if (renderedRevision !== model.revision) {
     renderedRevision = model.revision;
     if (!keepVisible) document.body.dataset.ready = 'false';
-    document.documentElement.style.setProperty('--max-width', `${model.maxWidth}px`);
-    document.documentElement.style.setProperty('--max-height', `${model.maxHeight}px`);
+    document.documentElement.style.setProperty('--max-width', `${BUBBLE_SIZE.width}px`);
+    document.documentElement.style.setProperty('--max-height', `${BUBBLE_SIZE.height}px`);
+    document.documentElement.style.setProperty('--bubble-scale', String(model.scale));
     plan.hidden = true;
     if (model.usage) renderUsage(model.usage);
     else if (!sameTyping) message.textContent = model.typingId == null ? model.text : '';

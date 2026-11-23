@@ -31,6 +31,31 @@ internal static class WindowFixture
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr window, out Rect rectangle);
 
+    // 与被测桥使用相同物理坐标，按 Electron 换算出的探针位置读取本次夹具上的像素。
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
+    // 捕获两个测试点时计入分层透明窗口，禁止把只包含 WinForms 底板的位图当成屏幕结果。
+    [DllImport("gdi32.dll")]
+    private static extern bool BitBlt(IntPtr destination, int x, int y, int width, int height,
+        IntPtr source, int sourceX, int sourceY, uint operation);
+
+    // 只取夹具客户区内一个像素；返回 RGB，不保存或采集桌面截图。
+    private static string Pixel(Form host, int x, int y)
+    {
+        if (!host.RectangleToScreen(host.ClientRectangle).Contains(x, y)) throw new ArgumentOutOfRangeException();
+        using (Bitmap bitmap = new Bitmap(1, 1))
+        {
+            using (Graphics target = Graphics.FromImage(bitmap))
+            using (Graphics desktop = Graphics.FromHwnd(IntPtr.Zero))
+            {
+                IntPtr src = desktop.GetHdc(), dst = target.GetHdc();
+                try { if (!BitBlt(dst, 0, 0, 1, 1, src, x, y, 0x40CC0020)) throw new InvalidOperationException(); }
+                finally { target.ReleaseHdc(dst); desktop.ReleaseHdc(src); }
+            }
+            return (bitmap.GetPixel(0, 0).ToArgb() & 0xffffff).ToString("X6");
+        }
+    }
+
     // Win32 窗口矩形保持原始物理像素。
     [StructLayout(LayoutKind.Sequential)]
     private struct Rect { internal int Left, Top, Right, Bottom; }
@@ -137,6 +162,7 @@ internal static class WindowFixture
     [STAThread]
     private static void Main(string[] args)
     {
+        SetProcessDpiAwarenessContext(new IntPtr(-4));
         Form form = new Form { Text = "窗口桥测试", StartPosition = FormStartPosition.Manual, Bounds = new Rectangle(150, 150, 1100, 792) };
         string directory = args.Length == 2 && args[0] == "--controlled" ? args[1] : null;
         string previous = "";
@@ -159,8 +185,28 @@ internal static class WindowFixture
             if (command == previous) return;
             previous = command;
             command = command.Split('\n')[0];
-            switch (command)
+            string[] parts = command.Split(' ');
+            switch (parts[0])
             {
+                // 只移动夹具自身，保留当前焦点和前后顺序；深蓝宿主和绿色遮挡者便于独立验证合成结果。
+                case "video-bounds":
+                    form.BackColor = Path.GetFileNameWithoutExtension(Application.ExecutablePath) == "Codex"
+                        ? Color.FromArgb(11, 37, 73) : Color.FromArgb(27, 142, 68);
+                    form.Bounds = new Rectangle(int.Parse(parts[1]), int.Parse(parts[2]), int.Parse(parts[3]), int.Parse(parts[4]));
+                    break;
+                // 保持两个窗口各有一段标题栏露出，只点击确认属于本夹具的位置。
+                case "click-exposed":
+                    Point caption = new Point(form.Left + 50, form.Top + SystemInformation.FrameBorderSize.Height + SystemInformation.CaptionHeight / 2);
+                    if (GetAncestor(WindowFromPoint(caption), 2) != form.Handle) break;
+                    restoreCursor = Cursor.Position;
+                    Cursor.Position = caption;
+                    mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
+                    mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+                    break;
+                case "sample":
+                    File.WriteAllText(Path.Combine(directory, "pixels"), Pixel(form, int.Parse(parts[1]), int.Parse(parts[2]))
+                        + " " + Pixel(form, int.Parse(parts[3]), int.Parse(parts[4])));
+                    break;
                 case "raise": SetWindowPos(form.Handle, IntPtr.Zero, 0, 0, 0, 0, 0x13); break;
                 case "lower": SetWindowPos(form.Handle, new IntPtr(1), 0, 0, 0, 0, 0x13); break;
                 case "activate": form.Activate(); break;

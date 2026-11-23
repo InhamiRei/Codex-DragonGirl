@@ -98,12 +98,13 @@ function systemState(pid) {
 
 // 只读本次隔离应用的实际状态，不采集其他应用的标题、屏幕或账户内容。
 async function companionState() {
-  return application.evaluate(() => {
+  return application.evaluate(({ screen }) => {
     const { companion, monitor } = globalThis.__dragonGirlApp;
     return {
       visible: companion.visible, character: companion.character,
       windows: Object.fromEntries([...companion.windows].map(([view, window]) => [view, {
         visible: window.isVisible(), topmost: window.isAlwaysOnTop(),
+        bounds: process.platform === 'win32' ? screen.dipToScreenRect(window, window.getBounds()) : window.getBounds(),
       }])),
       dragging: companion.gesture.active, sequence: monitor.nativeSequence,
       follow: { frame: companion.followTarget, normal: companion.followNormalWindows?.slice(0, 12), bubble: companion.windows.get('bubble').getBounds(), menu: !!companion.contextMenu, mode: companion.followMode },
@@ -123,18 +124,18 @@ async function expectStack(host, cover, covered, bubble = true, raised = !covere
     const state = await companionState();
     const characterPosition = order.indexOf(ids.character), bubblePosition = order.indexOf(ids.bubble);
     const coverFrame = normal?.find((frame) => String(frame.id) === cover.id);
-    const areas = [state.character, ...(bubble ? [state.follow.bubble] : [])];
-    const coverOverlaps = !isMac || !!coverFrame && areas.some((area) => coverFrame.x < area.x + area.width
+    const areas = [isMac ? state.character : state.windows.character.bounds, ...(bubble ? [state.windows.bubble.bounds] : [])];
+    const coverOverlaps = actualRaised.includes(cover.id) || !!coverFrame && areas.some((area) => coverFrame.x < area.x + area.width
       && coverFrame.x + coverFrame.width > area.x && coverFrame.y < area.y + area.height && coverFrame.y + coverFrame.height > area.y);
     // 浮动层与普通层之间可能存在其他屏幕上的窗口，验收实际前后关系，不要求跨层全局编号相邻。
-    const layered = (isMac ? state.windows.character.topmost : actualRaised.includes(ids.character))
-      ? characterPosition >= 0 && characterPosition < position && (!bubble || bubblePosition >= 0 && bubblePosition < characterPosition)
-      : position > 0 && order[position - 1] === ids.character && (!bubble || order[position - 2] === ids.bubble);
+    const layered = isMac && !state.windows.character.topmost
+      ? position > 0 && order[position - 1] === ids.character && (!bubble || order[position - 2] === ids.bubble)
+      : characterPosition >= 0 && characterPosition < position && (!bubble || bubblePosition >= 0 && bubblePosition < characterPosition);
     last = { order: order.filter((id) => fixtureIds.has(id)), frontOrder: systemOrder.slice(0, 16), normal: normal?.slice(0, 12), ids, host: host.id, cover: cover.id, state, actualRaised };
     return state.windows.character.visible && (!bubble || state.windows.bubble.visible)
       // Windows 由原生桥直接设置层级，以真实 Win32 样式为准，Electron 缓存仅用于诊断。
       && (!isMac || !covered || !coverOverlaps || !state.windows.character.topmost && !state.windows.bubble.topmost)
-      && (isMac || actualRaised.includes(ids.character) === raised && (!bubble || actualRaised.includes(ids.bubble) === raised))
+      && (isMac || raised === null || actualRaised.includes(ids.character) === raised && (!bubble || actualRaised.includes(ids.bubble) === raised))
       && layered
       && (covered ? order.indexOf(cover.id) >= 0 && order.indexOf(cover.id) < position
         && (!coverOverlaps || order.indexOf(cover.id) < (bubble ? bubblePosition : characterPosition))
@@ -142,6 +143,71 @@ async function expectStack(host, cover, covered, bubble = true, raised = !covere
       && state;
   }, covered ? '龙娘或气泡仍浮在覆盖应用前面' : '宿主置前后角色或气泡未恢复到相邻层级'); }
   catch (error) { throw new Error(`${error.message}\n${JSON.stringify(last)}`); }
+}
+
+// 两个夹具的标题栏始终各露出一段，复现用户直接点击切换。取两个合成后的屏幕像素验证半遮挡。
+async function checkWindowsSwitching(host, cover) {
+  const area = await application.evaluate(({ screen }) => screen.dipToScreenRect(null, screen.getPrimaryDisplay().workArea));
+  const hostX = area.x + Math.round(area.width * .18), hostY = area.y + Math.round(area.height * .08);
+  const hostWidth = Math.round(area.width * .76), hostHeight = Math.round(area.height * .76);
+  const coverX = area.x + 10, coverY = hostY + 55;
+  // 调整的是测试窗体，传给夹具的边界和采样点都使用 Windows 物理像素。
+  const sizeCover = (right) => send(cover, `video-bounds ${coverX} ${coverY} ${right - coverX} ${hostHeight}`);
+  await send(host, 'restore');
+  await send(host, `video-bounds ${hostX} ${hostY} ${hostWidth} ${hostHeight}`);
+  await sizeCover(hostX + Math.round(hostWidth / 2));
+  await send(host, 'click-exposed');
+  await until(() => systemState(host.child.pid).host?.frontmost, '测试标题栏没有激活 Codex');
+  await expectStack(host, cover, false, false);
+  await until(() => application.evaluate(({ screen }, expected) => {
+    const frame = globalThis.__dragonGirlApp.companion.followTarget;
+    if (!frame) return false;
+    const actual = screen.dipToScreenRect(null, frame);
+    return Object.keys(expected).every(key => Math.abs(actual[key] - expected[key]) <= 2);
+  }, { x: hostX, y: hostY, width: hostWidth, height: hostHeight }), '角色尚未移动到录屏场景中的宿主位置');
+  const points = await application.evaluate(({ screen }) => {
+    const c = globalThis.__dragonGirlApp.companion.character;
+    return [.42, .67].map(fraction => screen.dipToScreenPoint({
+      x: Math.round(c.x + c.width * fraction), y: Math.round(c.y + c.height * .68),
+    }));
+  });
+  const characterPage = application.windows().find(page => page.url().endsWith('/character.html'));
+  // 两个色标绘制在真实角色窗口内；它们经历与角色立绘相同的系统合成、遮挡和显隐。
+  await characterPage.evaluate(async () => {
+    const { rect } = await window.dragonGirl.bootstrap();
+    for (const fraction of [.42, .67]) {
+      const point = document.createElement('i');
+      point.style.cssText = `position:absolute;z-index:999;pointer-events:none;background:#e629d8;width:12px;height:12px;left:${rect.x + rect.width * fraction - 6}px;top:${rect.y + rect.height * .68 - 6}px`;
+      document.body.append(point);
+    }
+  });
+  // 等待取样而非只检查 isVisible；同时检测错误置顶、被宿主压住和只露出半边时整只隐藏。
+  async function expectPixels(left, right) {
+    let last;
+    await until(async () => {
+      await send(host, 'sample ' + points.flatMap(p => [p.x, p.y]).join(' '));
+      last = await fs.readFile(path.join(host.directory, 'pixels'), 'utf8');
+      return last === `${left} ${right}`;
+    }, '角色与遮挡窗口的实际屏幕像素不符').catch(error => { throw new Error(`${error.message}，期望 ${left} ${right}，实测 ${last}`); });
+  }
+  const petColor = 'E629D8', coverColor = '1B8E44';
+  for (const bubbleOpen of [false, true]) {
+    if (bubbleOpen) await application.evaluate(() => globalThis.__dragonGirlApp.companion.showBubble('切窗验收', 'speech'));
+    await expectPixels(petColor, petColor);
+    await send(cover, 'click-exposed');
+    await until(() => systemState(host.child.pid).host?.frontmost === false, '点击另一个窗口后焦点未切走');
+    await expectStack(host, cover, true, bubbleOpen);
+    await expectPixels(petColor, petColor);
+    await sizeCover(Math.round((points[0].x + points[1].x) / 2));
+    await expectPixels(coverColor, petColor);
+    await sizeCover(hostX + hostWidth + 8);
+    await expectPixels(coverColor, coverColor);
+    await send(host, 'click-exposed');
+    await until(() => systemState(host.child.pid).host?.frontmost, '点击露出的 Codex 标题栏未切回');
+    await expectStack(host, cover, false, bubbleOpen);
+    await expectPixels(petColor, petColor);
+    await sizeCover(hostX + Math.round(hostWidth / 2));
+  }
 }
 
 // 使用真实跟随宿主，跳到气泡播完的时刻以独立验收原生窗口和波前。
@@ -333,7 +399,7 @@ try {
   assert.equal(systemState(host.child.pid).host.frontmost, foreground, '层级同步改变了键盘焦点');
   assert.deepEqual((await companionState()).character, original, '遮挡改变了角色跟随位置');
   await send(cover, 'partial');
-  await expectStack(host, cover, true);
+  await expectStack(host, cover, true, true, null);
   await send(cover, 'full');
   await expectStack(host, cover, true);
   // 后台通知重新打开气泡时也不能将它提升到覆盖应用前面。
@@ -487,9 +553,11 @@ try {
     const c = globalThis.__dragonGirlApp.companion;
     return !c.prayerWave && !c.bubbleVisible && !c.windows.get('character').isVisible();
   }), '宿主最小化后仍留下震荡波');
+  if (!isMac) await checkWindowsSwitching(host, cover);
   const report = { passed: true, platform: process.platform, checks: ['真实跨应用层级', '仅层级变化触发快照', '完全遮挡', '部分遮挡仍显示', '后台气泡层级', '恢复原位且不抢焦点', '最小化与恢复', '保留主动隐藏', '独立桌面仍置顶', '切回跟随恢复层级', ...(isMac ? ['连续置前 12 次、全程 8ms 采样无闪烁'] : ['真实标题栏往返拖动 4 次、拖动及松手后连续采样无遮挡', '拖动全程不抢焦点', '系统置顶窗口仍正常遮挡角色'])] };
   report.checks.push('连续移动及时跟随', '菜单展开时跟随主窗口且角色和气泡留在菜单之后');
   if (isMac) report.checks.push('保存视频期间角色与气泡收起，取消后回到聊天主窗口原位');
+  else report.checks.push('气泡收起和打开时真实点击切换两窗，屏幕像素验证角色露出、半遮挡、完全遮挡与切回');
   report.checks.push('震荡波放出时收起气泡、渐变波纹扫过宿主远角、鼠标穿透、结束和最小化清理');
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
   await fs.writeFile(path.join(root, '.artifacts/follow-report.json'), JSON.stringify(report, null, 2));

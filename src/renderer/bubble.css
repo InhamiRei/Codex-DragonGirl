@@ -2,18 +2,21 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; user-select: none; -webkit-user-select: none; }
+#canvas { position: relative; width: var(--max-width); height: var(--max-height); transform: scale(var(--bubble-scale, 1)); transform-origin: top left; }
 .outline { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; visibility: hidden; }
 .outline path { fill: var(--paper); stroke: var(--ink); stroke-width: 3.5; stroke-linejoin: round; pointer-events: visiblePainted; }
 .bubble { position: absolute; z-index: 1; top: 8px; left: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; width: calc(var(--max-width) - 16px); height: calc(var(--max-height) - 42px); margin: 0; padding: 18px 24px; border: 3px solid transparent; border-radius: 50%; color: var(--text); cursor: pointer; visibility: hidden; }
 .bubble * { font-family: inherit; font-weight: inherit; }
+body[data-layout="usage"] .bubble { padding-block: 13px; }
 .bubble-content { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 0 1 auto; width: 160px; max-width: 100%; max-height: 100%; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: none; }
 .bubble-content:has(.usage[data-multiple="false"] > .quota) { row-gap: 12px; }
 .bubble-content::-webkit-scrollbar { display: none; width: 0; height: 0; }
-body[data-layout="text"] .bubble-content, body[data-compact="true"] .bubble-content { max-height: min(84px, 100%); }
+body[data-layout="text"] .bubble-content { max-height: min(96px, 100%); }
+body[data-compact="true"] .bubble-content { max-height: min(84px, 100%); }
 .bubble-header { display: none; align-items: baseline; justify-content: center; flex-wrap: wrap; gap: 6px; flex-shrink: 0; max-width: 100%; font-size: 15px; line-height: 18px; text-align: center; }
 body[data-layout="usage"] .bubble-header { display: flex; }
 .plan, .quota-title { min-width: 0; overflow-wrap: anywhere; }
-.message { flex-shrink: 0; width: 100%; max-width: 100%; margin: 0; font-size: 13px; line-height: 1.6; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message { flex-shrink: 0; width: 100%; max-width: 100%; margin: 0; font-size: 16px; line-height: 1.45; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; }
 body[data-layout="text"] .message { text-wrap: balance; }
 body[data-kind="prayer"] { --prayer-line-height: 20px; }
 body[data-kind="prayer"] .bubble-content { height: min(calc(4 * var(--prayer-line-height)), 100%); overscroll-behavior: contain; overflow-anchor: none; }
@@ -35,8 +38,8 @@ body[data-layout="usage"] .message { width: 160px; white-space: normal; }
 .usage { display: grid; justify-items: center; gap: 4px; width: 100%; }
 .quota { display: grid; width: 100%; --meter-color: var(--text); --meter-track: #f0ecf7; --meter-border: #d4cbe6; }
 .quota-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 13px; }
-.quota-label { min-width: 0; font-size: 10.5px; line-height: 13px; text-align: left; }
-.quota-reset { flex-shrink: 0; color: #9b8bb7; font-size: 9.5px; line-height: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.quota-label { min-width: 0; font-size: 12.5px; line-height: 15px; text-align: left; }
+.quota-reset { flex-shrink: 0; color: #87769f; font-size: 12.5px; line-height: 15px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .quota-meter { display: grid; grid-template-columns: minmax(0, 1fr) 40px; align-items: center; gap: 7px; min-height: 17px; }
 .quota-battery { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 2px; height: 7px; }
 .battery-segment { position: relative; min-width: 0; overflow: hidden; border: 1px solid var(--meter-border); border-radius: 2px; background: var(--meter-track); }
@@ -50,7 +53,7 @@ body[data-layout="usage"] .message { width: 160px; white-space: normal; }
 .quota[data-low="true"] { --meter-color: #c78f7c; --meter-track: #faf0ec; --meter-border: #e8c9bc; }
 .quota-note { margin: 3px 0; color: var(--muted); font-size: 12px; }
 .usage-footer { display: grid; justify-items: center; gap: 2px; width: 100%; }
-.today { width: 136px; max-width: 100%; color: var(--muted); font-size: 10px; font-weight: 400; line-height: 18px; text-align: center; white-space: nowrap; }
+.today { width: 100%; color: #87769f; font-size: 12.5px; font-weight: 400; line-height: 18px; text-align: center; white-space: nowrap; }
 .metric-value { color: var(--text); font-variant-numeric: tabular-nums; }
 .bubble:focus-visible { outline: 2px solid #c3afe7; outline-offset: 3px; }
 .tail { position: absolute; width: 44px; height: 22px; pointer-events: none; visibility: hidden; }

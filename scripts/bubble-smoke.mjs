@@ -254,6 +254,32 @@ try {
       await until(() => application.evaluate(() => !globalThis.__dragonGirlTest.bubbleVisible), '渲染层未处理注入的 Esc');
       await application.evaluate((_, settings) => { globalThis.__dragonGirlTest.appearance.settings = settings; }, settings);
     }
+    // 同一只已经打开的气泡连续调大小。分别核对窗口、绘制后的字高和内边距，也覆盖 Windows 的 DPI 换算。
+    const sentence = '今天也一起工作吧。';
+    await show({ text: sentence });
+    let previousLayout;
+    for (const petScale of [.5, .75, 1, 1.25, 1.5]) {
+      const native = await application.evaluate((_, value) => {
+        const c = globalThis.__dragonGirlTest;
+        c.setScale(value);
+        return { bounds: c.windows.get('bubble').getContentBounds(), revision: c.bubbleModel.revision };
+      }, petScale);
+      await until(() => page.evaluate(async revision => {
+        const model = await window.dragonGirl.bootstrap();
+        return model.measuredRevision === revision && document.body.dataset.ready === 'true';
+      }, native.revision), '角色缩放后已打开的气泡没有更新');
+      const layout = await page.evaluate(() => {
+        const card = document.getElementById('bubble').getBoundingClientRect();
+        const message = document.getElementById('message'), range = document.createRange();
+        range.selectNodeContents(message);
+        return { width: card.width, text: range.getBoundingClientRect().height, inset: card.left, viewport: innerWidth };
+      });
+      assert.ok(Math.abs(native.bounds.width - layout.viewport) <= 1 && layout.width < native.bounds.width);
+      assert.ok(layout.text >= 12, '最小角色的正文字高不足');
+      if (previousLayout) assert.ok(layout.width > previousLayout.width && layout.text > previousLayout.text
+        && layout.inset > previousLayout.inset, '角色变大时气泡、字号和内边距没有同步放大');
+      previousLayout = layout;
+    }
     await application.close(); application = null;
   }
   await fs.writeFile(path.join(root, '.artifacts/bubble-scrollbar-report.json'), JSON.stringify({ passed: true, results }, null, 2));
