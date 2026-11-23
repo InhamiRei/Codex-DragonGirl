@@ -90,7 +90,7 @@ async function raise(target, other) {
 
 // 系统顺序独立于 Electron 的 isVisible，能发现窗口仍可见但错误浮在其他应用上方的问题。
 function systemState(pid) {
-  const result = spawnSync(bridge, ['--once'], { encoding: 'utf8', timeout: 10000 });
+  const result = spawnSync(bridge, ['--once'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
   return { host: snapshot.processes.find((row) => row.pid === pid), order: snapshot.windowOrder.map(String), normal: snapshot.normalWindows, raised: snapshot.topmostWindows?.map(String) || [] };
@@ -200,8 +200,13 @@ try {
   await raise(host, cover);
   // Windows 用真实输入激活宿主，覆盖普通窗口置前权限限制，不能只验收后台窗口之间的排序。
   if (!isMac) {
+    // 桌面已有应用可能遮住标题栏，先临时提升测试窗，确认点击后再恢复普通层级。
+    await send(host, 'topmost');
+    await until(() => systemState(host.child.pid).raised.includes(host.id), '测试宿主未进入置顶组');
     await send(host, 'click');
     await until(() => systemState(host.child.pid).host?.frontmost, '标题栏点击没有实际激活测试宿主');
+    await send(host, 'normal');
+    await until(() => !systemState(host.child.pid).raised.includes(host.id), '测试宿主未恢复普通层级');
   }
   await expectStack(host, cover, false);
   // 连续真实拖动并在松手后继续采样，不能只等最终恢复，也不能靠抢占键盘焦点来通过。
@@ -326,11 +331,12 @@ try {
   console.log(`${isMac ? 'macOS' : 'Windows'} 连续跟随更新 ${positions} 个位置，菜单与桌宠顺序 ${JSON.stringify(menuOrder)}`);
   assert.equal(String(snapshot.host?.windows[0]?.id), host.id, '菜单被误当成主窗口');
   assert.deepEqual(menuOrder, [menu, ids.bubble, ids.character], '角色或气泡盖住宿主的浮动菜单');
-  const foreground = systemState(host.child.pid).host.frontmost;
-  // 宿主没有移动或最小化，前台应用也不变，只置前另一个应用的窗口。
+  const foreground = isMac && systemState(host.child.pid).host.frontmost;
+  // Windows 降低当前活动窗口时可能自行转移焦点，从测试命令执行完成后开始观测。
   await raise(cover, host);
+  const foregroundAfterRaise = !isMac && systemState(host.child.pid).host.frontmost;
   await expectStack(host, cover, true);
-  assert.equal(systemState(host.child.pid).host.frontmost, foreground, '层级同步改变了键盘焦点');
+  assert.equal(systemState(host.child.pid).host.frontmost, isMac ? foreground : foregroundAfterRaise, '层级同步改变了键盘焦点');
   assert.deepEqual((await companionState()).character, original, '遮挡改变了角色跟随位置');
   await send(cover, 'partial');
   await expectStack(host, cover, true);
@@ -343,6 +349,13 @@ try {
     companion.showBubble('后台气泡不能置顶', 'notice');
   });
   await expectStack(host, cover, true);
+  if (!isMac) {
+    await application.evaluate(() => globalThis.__dragonGirlApp.companion.hideBubble());
+    const covered = await expectStack(host, cover, true, false);
+    assert.equal(covered.windows.bubble.visible, false);
+    await application.evaluate(() => globalThis.__dragonGirlApp.companion.showBubble('后台气泡层级验收', 'notice'));
+    await expectStack(host, cover, true);
+  }
   await raise(host, cover);
   await expectStack(host, cover, false);
   assert.deepEqual((await companionState()).character, original);

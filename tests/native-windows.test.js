@@ -8,6 +8,12 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
+function buildWindowFixture(executable) {
+  const csc = path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
+  const build = spawnSync(csc, ['/nologo', '/target:winexe', '/platform:x64', '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', `/out:${executable}`, path.join(root, 'tests/fixtures/WindowFixture.cs')], { encoding: 'utf8' });
+  assert.equal(build.status, 0, build.stdout + build.stderr);
+}
+
 // 用真实 Windows 内存边界复现跨页失败，同时验收完整终止符和白名单。
 test('Windows 原生桥按可读区域读取 UTF-16 环境块', { skip: process.platform !== 'win32', timeout: 15000 }, async (t) => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-environment-boundary-'));
@@ -25,9 +31,7 @@ test('Windows 原生桥按可读区域读取 UTF-16 环境块', { skip: process.
 test('Windows 原生桥读取窗口并仅公开环境白名单', { skip: process.platform !== 'win32', timeout: 40000 }, async (t) => {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), '龙娘 窗口测试-'));
   const executable = path.join(temp, 'Codex.exe');
-  const csc = path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
-  const build = spawnSync(csc, ['/nologo', '/target:winexe', '/platform:x64', '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', `/out:${executable}`, path.join(root, 'tests/fixtures/WindowFixture.cs')], { encoding: 'utf8' });
-  assert.equal(build.status, 0, build.stdout + build.stderr);
+  buildWindowFixture(executable);
   const home = path.join(temp, '自定义账户');
   await fs.mkdir(home);
   const ready = path.join(temp, 'ready');
@@ -91,4 +95,43 @@ test('Windows 原生桥读取窗口并仅公开环境白名单', { skip: process
   while (!heartbeat && stream.exitCode === null && Date.now() < heartbeatDeadline)
     await new Promise((resolve) => setTimeout(resolve, 100));
   assert.ok(heartbeat, '窗口静止后原生桥没有补发恢复心跳');
+});
+
+test('Windows 同进程置顶工具窗口保留遮挡顺序，桌宠继续跟随主窗口', { skip: process.platform !== 'win32', timeout: 30000 }, async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-tool-window-'));
+  let child;
+  t.after(async () => {
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise((resolve) => child.once('exit', resolve));
+      child.kill();
+      await exited;
+    }
+    await fs.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+  const executable = path.join(directory, 'Codex.exe');
+  buildWindowFixture(executable);
+  child = spawn(executable, ['--controlled', directory, '--tool-window'], {
+    env: { ...process.env, CODEX_HOME: directory }, stdio: 'ignore',
+  });
+  async function waitForFixture() {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const value = await fs.readFile(path.join(directory, 'ready.json'), 'utf8').catch((error) => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+      if (value) return JSON.parse(value);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.fail('测试窗口未写入 ready.json');
+  }
+  const { window: host, tool } = await waitForFixture();
+  const result = spawnSync(path.join(root, 'native/bin/dragongirl-native.exe'), ['--once'], {
+    encoding: 'utf8', timeout: 5000, windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const state = JSON.parse(result.stdout);
+  const hosts = state.processes.find((row) => row.pid === child.pid)?.windows;
+  assert.ok(state.topmostWindows.includes(tool) && !state.topmostWindows.includes(host), '测试需要一个置顶工具窗口和一个普通主窗口');
+  assert.ok(state.windowOrder.indexOf(tool) < state.windowOrder.indexOf(host), '工具窗口应排在主窗口之前');
+  assert.deepEqual(hosts?.map(({ id }) => id), [host], '桌宠把同进程的置顶工具窗口误认作宿主');
 });

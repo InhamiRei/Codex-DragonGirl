@@ -138,7 +138,7 @@ internal static class WindowFixture
     private static void Main(string[] args)
     {
         Form form = new Form { Text = "窗口桥测试", StartPosition = FormStartPosition.Manual, Bounds = new Rectangle(150, 150, 1100, 792) };
-        string directory = args.Length == 2 && args[0] == "--controlled" ? args[1] : null;
+        string directory = args.Length >= 2 && args[0] == "--controlled" ? args[1] : null;
         string previous = "";
         Point? restoreCursor = null;
         ContextMenuStrip menu = null;
@@ -165,8 +165,11 @@ internal static class WindowFixture
                 case "lower": SetWindowPos(form.Handle, new IntPtr(1), 0, 0, 0, 0, 0x13); break;
                 case "activate": form.Activate(); break;
                 case "click":
+                    // 与 RecordDrag 的起点错开，避免快速成品启动时把激活和拖动识别成双击最大化。
+                    Point caption = new Point(form.Left + 200, form.Top + SystemInformation.FrameBorderSize.Height + SystemInformation.CaptionHeight / 2);
+                    if (GetAncestor(WindowFromPoint(caption), 2) != form.Handle) break;
                     restoreCursor = Cursor.Position;
-                    Cursor.Position = new Point(form.Left + 100, form.Top + 10);
+                    Cursor.Position = caption;
                     mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
                     mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
                     break;
@@ -191,7 +194,19 @@ internal static class WindowFixture
             if (args.Length > 0 && args[0] == "--minimized") form.WindowState = FormWindowState.Minimized;
             string ready = Environment.GetEnvironmentVariable("DRAGONGIRL_FIXTURE_READY");
             if (!string.IsNullOrEmpty(ready)) File.WriteAllText(ready, "ready");
-            if (directory != null) File.WriteAllText(Path.Combine(directory, "ready.json"), "{\"window\":" + form.Handle.ToInt64() + "}");
+            if (directory != null)
+            {
+                string handles = "{\"window\":" + form.Handle.ToInt64();
+                if (Array.IndexOf(args, "--tool-window") >= 0)
+                {
+                    // 同进程的置顶工具面板尺寸也满足宿主门槛；它能遮挡桌宠，但不应成为桌宠跟随目标。
+                    Form tool = new Form { FormBorderStyle = FormBorderStyle.FixedToolWindow, ShowInTaskbar = false,
+                        TopMost = true, StartPosition = FormStartPosition.Manual, Bounds = new Rectangle(200, 200, 600, 420) };
+                    tool.Show(form);
+                    handles += ",\"tool\":" + tool.Handle.ToInt64();
+                }
+                File.WriteAllText(Path.Combine(directory, "ready.json"), handles + "}");
+            }
         };
         // 异常关闭也恢复本测试临时移动的系统鼠标，不留下测试状态。
         form.FormClosed += delegate {

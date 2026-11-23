@@ -215,7 +215,7 @@ internal static class DragonBridge
             {
                 try
                 {
-                    if (!IsTarget(process) || Windows(process.Id, true).Count == 0) continue;
+                    if (!IsTarget(process) || Windows(process.Id, true, includeToolWindows: true).Count == 0) continue;
                     Dictionary<string, string> environment = ReadEnvironment(process.Id);
                     if (environment == null) continue;
                     string home;
@@ -233,8 +233,9 @@ internal static class DragonBridge
         discoveredAt = DateTime.UtcNow;
     }
 
-    // 保留可见宿主窗口；原生菜单继续参与层级排序，但不能成为跟随或聚焦目标。
-    private static List<Dictionary<string, object>> Windows(int pid, bool includeMinimized, Dictionary<long, Rect> frames = null)
+    // 原生菜单和工具窗口继续参与层级排序，但不能成为跟随或聚焦目标。
+    private static List<Dictionary<string, object>> Windows(int pid, bool includeMinimized,
+        Dictionary<long, Rect> frames = null, bool includeToolWindows = false)
     {
         List<Dictionary<string, object>> windows = new List<Dictionary<string, object>>();
         StringBuilder className = new StringBuilder(64);
@@ -249,6 +250,8 @@ internal static class DragonBridge
             if (!GetWindowRect(window, out rect)) return true;
             if (!includeMinimized && (rect.Right - rect.Left < 400 || rect.Bottom - rect.Top < 300)) return true;
             if (GetClassName(window, className, className.Capacity) > 0 && className.ToString() == "#32768") return true;
+            const long toolWindowStyle = 0x80; // WS_EX_TOOLWINDOW
+            if (!includeToolWindows && (GetWindowLongPtr(window, -20).ToInt64() & toolWindowStyle) != 0) return true;
             long id = window.ToInt64();
             if (frames != null) frames[id] = rect;
             windows.Add(new Dictionary<string, object> {
