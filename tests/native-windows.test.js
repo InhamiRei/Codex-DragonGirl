@@ -32,9 +32,14 @@ test('Windows 原生桥读取窗口并仅公开环境白名单', { skip: process
   await fs.mkdir(home);
   const ready = path.join(temp, 'ready');
   const child = spawn(executable, ['--minimized'], { env: { ...process.env, CODEX_HOME: home, DRAGONGIRL_SECRET_TEST: 'do-not-publish-this', HTTPS_PROXY: 'http://localhost:12345', DRAGONGIRL_FIXTURE_READY: ready }, stdio: 'ignore' });
+  const children = [child];
   t.after(async () => {
-    child.kill();
-    await new Promise((resolve) => child.exitCode !== null ? resolve() : child.once('exit', resolve));
+    await Promise.all(children.map(async (fixture) => {
+      if (fixture.exitCode !== null || fixture.signalCode !== null) return;
+      const exited = new Promise((resolve) => fixture.once('exit', resolve));
+      fixture.kill();
+      await exited;
+    }));
     await fs.rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const bridge = path.join(root, 'native/bin/dragongirl-native.exe');
@@ -91,4 +96,27 @@ test('Windows 原生桥读取窗口并仅公开环境白名单', { skip: process
   while (!heartbeat && stream.exitCode === null && Date.now() < heartbeatDeadline)
     await new Promise((resolve) => setTimeout(resolve, 100));
   assert.ok(heartbeat, '窗口静止后原生桥没有补发恢复心跳');
+
+  // 两个进程同时可见时，同一桌面快照必须把实际句柄和对应的账户分别归回自己的宿主。
+  const otherHome = path.join(temp, '第二个账户');
+  await fs.mkdir(otherHome);
+  const other = spawn(executable, ['--controlled', otherHome], {
+    env: { ...process.env, CODEX_HOME: otherHome }, stdio: 'ignore',
+  });
+  children.push(other);
+  const otherReady = path.join(otherHome, 'ready.json');
+  const untilReady = Date.now() + 6000;
+  let otherId;
+  while (!otherId && Date.now() < untilReady) {
+    try { otherId = JSON.parse(await fs.readFile(otherReady, 'utf8')).window; }
+    catch { await new Promise((resolve) => setTimeout(resolve, 80)); }
+  }
+  assert.ok(otherId, '第二个真实宿主窗口未就绪');
+  const both = spawnSync(bridge, ['--once'], { encoding: 'utf8', timeout: 10000 });
+  assert.equal(both.status, 0, both.stderr);
+  const hosts = JSON.parse(both.stdout).processes;
+  const peer = hosts.find(({ pid }) => pid === other.pid);
+  assert.deepEqual(hosts.find(({ pid }) => pid === child.pid)?.windows.map(w => w.id), [restored.windows[0].id]);
+  assert.deepEqual(peer?.windows.map(w => w.id), [otherId]);
+  assert.equal((await fs.realpath(peer.home)).toLowerCase(), (await fs.realpath(otherHome)).toLowerCase());
 });
