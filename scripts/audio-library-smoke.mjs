@@ -16,7 +16,7 @@ delete env.ELECTRON_RUN_AS_NODE;
 let application, page;
 const errors = [];
 
-// 将已有的立体声 WAV 原样循环成三分钟测试录音，首尾都有可识别的信号。
+// 在三分钟立体声录音中加入同峰值、不同平均强度的段落，以及已知时间的单声道脉冲。
 async function writeLongSource(target) {
   const file = AUDIO_FILES.find((entry) => entry.id === 'end_a');
   const sample = await fs.readFile(path.join(root, 'assets/audio', file.localFile));
@@ -27,7 +27,72 @@ async function writeLongSource(target) {
   wav.writeUInt32LE(size + 36, 4);
   wav.writeUInt32LE(size, 40);
   wav.fill(sample.subarray(44), 44);
+  const rate = wav.readUInt32LE(24), frameBytes = wav.readUInt16LE(32);
+  assert.equal(frameBytes, 4);
+  const offset = (seconds) => 44 + Math.round(seconds * rate) * frameBytes;
+  for (const [start, level] of [[24, 0.025], [48, 0.70]]) {
+    const cycle = Buffer.alloc(512 * frameBytes);
+    for (let frame = 0; frame < 512; frame++) {
+      const value = frame === 0 ? 0.9 : frame === 1 ? -0.9 : level * Math.sin(frame * Math.PI / 32);
+      const pcm = Math.round(value * 32767);
+      cycle.writeInt16LE(pcm, frame * frameBytes);
+      cycle.writeInt16LE(-pcm, frame * frameBytes + 2);
+    }
+    wav.fill(cycle, offset(start), offset(start + 16));
+  }
+  // 静音段的左右声道分别放入一个向下、一个向上的单采样尖峰。
+  wav.fill(0, offset(72), offset(84));
+  wav.writeInt16LE(-29490, offset(78.125) + 2);
+  wav.writeInt16LE(29490, offset(81.375));
   await fs.writeFile(target, wav);
+}
+
+// 直接量测界面的细线，核对段落强弱、单向瞬态和曲线留白。
+async function verifyWaveform() {
+  const result = await page.locator('#audio-wave canvas').evaluate((canvas) => {
+    const { width, height } = canvas;
+    const pixels = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+    // 透明像素不计入波形，用平均墨色量比较两段在同一标尺下的可见强度。
+    const ink = (left, right, top, bottom) => {
+      let total = 0;
+      for (let y = top; y < bottom; y++) {
+        for (let x = left; x < right; x++) {
+          const index = (y * width + x) * 4;
+          total += pixels[index + 3] / 255 * (255 - (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3);
+        }
+      }
+      return total / ((right - left) * (bottom - top));
+    };
+    const x = (seconds) => Math.floor(width * seconds / 180);
+    // 排除中线附近的像素，单向瞬态只能落在符合其极性的半边。
+    const pulse = (seconds) => ({
+      above: ink(x(seconds) - 1, x(seconds) + 2, 0, Math.floor(height * 0.45)),
+      below: ink(x(seconds) - 1, x(seconds) + 2, Math.ceil(height * 0.55), height),
+    });
+    // 连续描线应该跨过每个横坐标，响段也应保留线条上下的空白。
+    const left = x(49), right = x(63);
+    let emptyColumns = 0, painted = 0;
+    for (let column = left; column < right; column++) {
+      let marked = 0;
+      for (let row = 0; row < height; row++) if (pixels[(row * width + column) * 4 + 3] > 16) marked++;
+      if (!marked) emptyColumns++;
+      painted += marked;
+    }
+    return {
+      sparse: ink(x(25), x(39), 0, height), dense: ink(x(49), x(63), 0, height),
+      silent: pulse(75), negative: pulse(78.125), positive: pulse(81.375),
+      emptyColumns, coverage: painted / ((right - left) * height),
+    };
+  });
+  assert.ok(result.dense > result.sparse * 1.3,
+    `相同峰值掩盖了声音强弱：弱段 ${result.sparse.toFixed(2)}，强段 ${result.dense.toFixed(2)}`);
+  assert.deepEqual(result.silent, { above: 0, below: 0 });
+  assert.equal(result.negative.above, 0);
+  assert.ok(result.negative.below > 0, '右声道负脉冲未出现在正确的时间和下半轴');
+  assert.equal(result.positive.below, 0);
+  assert.ok(result.positive.above > 0, '左声道正脉冲未出现在正确的时间和上半轴');
+  assert.equal(result.emptyColumns, 0, '波形中出现断开的竖条');
+  assert.ok(result.coverage < 0.28, '响段被画成了实心色块');
 }
 
 // 先通过开发版导入，第二次从指定的实际成品打开同一份测试用户目录。
@@ -86,6 +151,7 @@ try {
   assert.deepEqual(await ruler.allTextContents(), ['0.000 s', '90.000 s', '180.000 s']);
   assert.equal(await length.textContent(), '已选 180.000 秒');
   assert.equal(await length.getAttribute('data-error'), 'false');
+  await verifyWaveform();
   assert.equal(await editor.locator('input[type=range], #audio-source-name, #audio-editor-message').count(), 0);
   assert.doesNotMatch(await editor.innerText(), /拖动波形选取片段|片段最长|三分钟录音\.wav/);
   await page.locator('#audio-save').click();
@@ -99,6 +165,18 @@ try {
   await longRow.getByRole('button', { name: /裁剪/ }).click();
   await page.locator('#audio-wave[data-ready=true]').waitFor();
   const wave = await page.locator('#audio-wave').boundingBox();
+  // 在全曲中部试听，核对高亮选区和播放线使用的起止时间与实际波形一致。
+  await page.locator('#audio-start').fill('47');
+  await page.locator('#audio-end').fill('60.146');
+  assert.equal(await length.textContent(), '已选 13.146 秒');
+  const selected = await editor.locator('.wave-selection').boundingBox();
+  assert.ok(Math.abs(selected.x - wave.x - wave.width * 47 / 180) < 1);
+  assert.ok(Math.abs(selected.width - wave.width * 13.146 / 180) < 1);
+  await page.locator('#audio-preview').click();
+  await editor.locator('.wave-playhead').waitFor({ state: 'visible' });
+  const playing = await editor.locator('.wave-playhead').boundingBox();
+  assert.ok(playing.x >= selected.x - 1 && playing.x < selected.x + selected.width);
+  await page.locator('#audio-preview').click();
   await page.mouse.move(wave.x + wave.width * 0.1, wave.y + 16);
   await page.mouse.down();
   await page.mouse.move(wave.x + wave.width * 0.8, wave.y + 25, { steps: 7 });
@@ -129,7 +207,6 @@ try {
   await page.locator('#audio-preview').click();
   await page.locator('.wave-playhead').waitFor({ state: 'visible' });
   await page.locator('#audio-preview').click();
-  await page.locator('#audio-editor').screenshot({ path: path.join(root, '.artifacts/audio-editor.png') });
   await page.locator('#audio-save').click();
   await page.locator('#audio-editor').waitFor({ state: 'hidden' });
   const row = page.locator('#sound-library-list li').filter({ hasText: '轻声提醒' });
@@ -165,6 +242,7 @@ try {
   await page.locator(`li[data-clip-id="${longId}"]`).getByRole('button', { name: /裁剪/ }).click();
   await page.locator('#audio-wave[data-ready=true]').waitFor();
   assert.equal(await page.locator('#audio-selection-length').textContent(), '已选 180.000 秒');
+  await verifyWaveform();
   await page.locator('#audio-cancel').click();
   const character = application.windows().find((window) => window.url().endsWith('/character.html'));
   await character.waitForFunction((id) => window.__soundEngine?.buffers.has(id), id);
@@ -212,6 +290,15 @@ try {
   }
   await page.locator('#import-audio').scrollIntoViewIfNeeded();
   await page.locator('#import-audio').locator('xpath=ancestor::article').screenshot({ path: path.join(root, '.artifacts/sound-library.png') });
+  // 用真实的内置提问提示音截取样式预览，短录音的两次起音应能从细线上辨认。
+  await page.locator('li[data-clip-id="ask_a"]').getByRole('button', { name: /裁剪/ }).click();
+  await page.locator('#audio-wave[data-ready=true]').waitFor();
+  await page.locator('#audio-start').fill('0.160');
+  await page.locator('#audio-end').fill('0.540');
+  await page.locator('.wave-heading > span').click();
+  await page.locator('#audio-editor').screenshot({ path: path.join(root, '.artifacts/audio-editor.png') });
+  await page.locator('#audio-wave').screenshot({ path: path.join(root, '.artifacts/audio-waveform-preview.png') });
+  await page.locator('#audio-cancel').click();
   assert.deepEqual(errors, []);
   console.log('音效库验收通过：三分钟整曲导入和播至末尾、全曲视图、精确裁剪、试听、重启恢复与宽窄布局。');
 } finally {
