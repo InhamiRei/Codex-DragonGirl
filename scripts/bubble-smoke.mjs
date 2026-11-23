@@ -259,22 +259,31 @@ try {
     await show({ text: sentence });
     let previousLayout;
     for (const petScale of [.5, .75, 1, 1.25, 1.5]) {
-      const native = await application.evaluate((_, value) => {
+      const target = await application.evaluate((_, value) => {
         const c = globalThis.__dragonGirlTest;
         c.setScale(value);
-        return { bounds: c.windows.get('bubble').getContentBounds(), revision: c.bubbleModel.revision };
+        return { width: c.bubbleModel.maxWidth, revision: c.bubbleModel.revision };
       }, petScale);
+      // 系统窗口调整大小和渲染进程更新视口是独立消息，须等两者都到达本轮目标。
+      let nativeWidth, viewport;
+      await until(async () => {
+        nativeWidth = await application.evaluate(() => globalThis.__dragonGirlTest.windows.get('bubble').getContentBounds().width);
+        viewport = await page.evaluate(() => innerWidth);
+        return Math.abs(target.width - nativeWidth) <= 1 && Math.abs(nativeWidth - viewport) <= 1;
+      }, '缩放后的原生窗口与视口不一致').catch(error => {
+        throw new Error(`${error.message}：${JSON.stringify({ scale, petScale, target, nativeWidth, viewport })}`);
+      });
       await until(() => page.evaluate(async revision => {
         const model = await window.dragonGirl.bootstrap();
         return model.measuredRevision === revision && document.body.dataset.ready === 'true';
-      }, native.revision), '角色缩放后已打开的气泡没有更新');
+      }, target.revision), '角色缩放后已打开的气泡没有更新');
       const layout = await page.evaluate(() => {
         const card = document.getElementById('bubble').getBoundingClientRect();
         const message = document.getElementById('message'), range = document.createRange();
         range.selectNodeContents(message);
         return { width: card.width, text: range.getBoundingClientRect().height, inset: card.left, viewport: innerWidth };
       });
-      assert.ok(Math.abs(native.bounds.width - layout.viewport) <= 1 && layout.width < native.bounds.width);
+      assert.ok(layout.width < nativeWidth);
       assert.ok(layout.text >= 12, '最小角色的正文字高不足');
       if (previousLayout) assert.ok(layout.width > previousLayout.width && layout.text > previousLayout.text
         && layout.inset > previousLayout.inset, '角色变大时气泡、字号和内边距没有同步放大');
