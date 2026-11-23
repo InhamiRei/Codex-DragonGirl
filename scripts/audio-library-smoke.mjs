@@ -47,7 +47,7 @@ async function writeLongSource(target) {
   await fs.writeFile(target, wav);
 }
 
-// 直接量测界面的细线，核对段落强弱、单向瞬态和曲线留白。
+// 在实际画布上核对柱间留白、上下对称、段落强弱，以及两个声道各自的瞬态位置。
 async function verifyWaveform() {
   const result = await page.locator('#audio-wave canvas').evaluate((canvas) => {
     const { width, height } = canvas;
@@ -64,35 +64,34 @@ async function verifyWaveform() {
       return total / ((right - left) * (bottom - top));
     };
     const x = (seconds) => Math.floor(width * seconds / 180);
-    // 排除中线附近的像素，单向瞬态只能落在符合其极性的半边。
+    // 按一根柱的时间分辨率查找瞬态，并排除中线附近的静音标记。
+    const radius = Math.ceil(3 * width / canvas.clientWidth);
     const pulse = (seconds) => ({
-      above: ink(x(seconds) - 1, x(seconds) + 2, 0, Math.floor(height * 0.45)),
-      below: ink(x(seconds) - 1, x(seconds) + 2, Math.ceil(height * 0.55), height),
+      above: ink(x(seconds) - radius, x(seconds) + radius + 1, 0, Math.floor(height * 0.45)),
+      below: ink(x(seconds) - radius, x(seconds) + radius + 1, Math.ceil(height * 0.55), height),
     });
-    // 连续描线应该跨过每个横坐标，响段也应保留线条上下的空白。
+    // 响段中线上约三分之二的宽度是柱体，其余是留白；按透明度计算以兼容小数显示比例。
     const left = x(49), right = x(63);
-    let emptyColumns = 0, painted = 0;
+    let painted = 0;
     for (let column = left; column < right; column++) {
-      let marked = 0;
-      for (let row = 0; row < height; row++) if (pixels[(row * width + column) * 4 + 3] > 16) marked++;
-      if (!marked) emptyColumns++;
-      painted += marked;
+      painted += pixels[(Math.floor(height / 2) * width + column) * 4 + 3] / 255;
     }
     return {
       sparse: ink(x(25), x(39), 0, height), dense: ink(x(49), x(63), 0, height),
       silent: pulse(75), negative: pulse(78.125), positive: pulse(81.375),
-      emptyColumns, coverage: painted / ((right - left) * height),
+      centerCoverage: painted / (right - left),
+      grid: getComputedStyle(canvas.parentElement).backgroundImage,
     };
   });
   assert.ok(result.dense > result.sparse * 1.3,
     `相同峰值掩盖了声音强弱：弱段 ${result.sparse.toFixed(2)}，强段 ${result.dense.toFixed(2)}`);
   assert.deepEqual(result.silent, { above: 0, below: 0 });
-  assert.equal(result.negative.above, 0);
-  assert.ok(result.negative.below > 0, '右声道负脉冲未出现在正确的时间和下半轴');
-  assert.equal(result.positive.below, 0);
-  assert.ok(result.positive.above > 0, '左声道正脉冲未出现在正确的时间和上半轴');
-  assert.equal(result.emptyColumns, 0, '波形中出现断开的竖条');
-  assert.ok(result.coverage < 0.28, '响段被画成了实心色块');
+  for (const pulse of [result.negative, result.positive]) {
+    assert.ok(pulse.above > 0 && pulse.below > 0, '瞬态应在对应时刻画成一根对称柱');
+    assert.ok(Math.abs(pulse.above - pulse.below) < pulse.above * 0.05, '柱体上下高度不对称');
+  }
+  assert.ok(result.centerCoverage > 0.60 && result.centerCoverage < 0.74, '波形柱之间应有均匀留白');
+  assert.equal(result.grid.match(/linear-gradient/g)?.length, 2, '波形背景应有横纵网格');
 }
 
 // 先通过开发版导入，第二次从指定的实际成品打开同一份测试用户目录。
@@ -172,6 +171,18 @@ try {
   const selected = await editor.locator('.wave-selection').boundingBox();
   assert.ok(Math.abs(selected.x - wave.x - wave.width * 47 / 180) < 1);
   assert.ok(Math.abs(selected.width - wave.width * 13.146 / 180) < 1);
+  // 在相同强度的两段读取柱体颜色，确认紫色只随选区着色。
+  const [inside, outside] = await page.locator('#audio-wave canvas').evaluate((canvas) => {
+    const context = canvas.getContext('2d');
+    return [54, 62].map((seconds) => {
+      const x = Math.floor(canvas.width * seconds / 180), width = Math.ceil(3 * canvas.width / canvas.clientWidth);
+      const { data } = context.getImageData(x, Math.floor(canvas.height / 2), width, 1);
+      for (let i = 0; i < data.length; i += 4) if (data[i + 3] >= 240) return [...data.slice(i, i + 3)];
+      throw new Error('未在选区对照位置找到柱体');
+    });
+  });
+  assert.ok(inside[2] - inside[1] > 35 && outside[2] - outside[1] < 25 && inside[1] < outside[1],
+    '选区内应为紫色柱，选区外应为灰色柱');
   await page.locator('#audio-preview').click();
   await editor.locator('.wave-playhead').waitFor({ state: 'visible' });
   const playing = await editor.locator('.wave-playhead').boundingBox();
@@ -292,7 +303,7 @@ try {
   }
   await page.locator('#import-audio').scrollIntoViewIfNeeded();
   await page.locator('#import-audio').locator('xpath=ancestor::article').screenshot({ path: path.join(root, '.artifacts/sound-library.png') });
-  // 用真实的内置提问提示音截取样式预览，短录音的两次起音应能从细线上辨认。
+  // 用真实的内置提问提示音截取预览，检查竖条、网格和选区的整体效果。
   await page.locator('li[data-clip-id="ask_a"]').getByRole('button', { name: /裁剪/ }).click();
   await page.locator('#audio-wave[data-ready=true]').waitFor();
   await page.locator('#audio-start').fill('0.160');

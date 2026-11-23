@@ -5,81 +5,38 @@ const $ = (id) => document.getElementById(id);
 // 将指针位置与选区边界约束在音频的时间范围内。
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
-// 在各声道中选取最接近目标振幅的真实采样，同值时优先用时间窗中部的点。
-function representativeSample(channels, first, end, target) {
-  const middle = Math.floor((first + end - 1) / 2);
-  let frame = middle, value = channels[0][middle], distance = Math.abs(value - target);
-  for (const samples of channels) {
-    for (let i = first; i < end; i++) {
-      const delta = Math.abs(samples[i] - target);
-      if (delta < distance || (delta === distance && Math.abs(i - middle) < Math.abs(frame - middle))) {
-        frame = i;
-        value = samples[i];
-        distance = delta;
-      }
-    }
-  }
-  return { frame, value };
-}
-
-// 细线的每个顶点都来自原录音。概览按局部有效幅度选点，孤立的瞬态保留其真实峰值和时刻。
-function waveformTrace(buffer, width, height) {
-  const count = Math.min(buffer.length, Math.max(1, Math.ceil(width / 4)));
+// 每三个逻辑像素显示一根两像素宽的柱，按该列覆盖的时间统计各声道的能量和峰值。
+function waveformBars(buffer, width, height) {
+  const pitch = 3, barWidth = 2, count = Math.ceil(width / pitch);
   const channels = Array.from({ length: buffer.numberOfChannels }, (_, index) => buffer.getChannelData(index));
-  const windows = [];
-  let fullScale = 0;
+  const peaks = new Float32Array(count), levels = new Float32Array(count);
   for (let i = 0; i < count; i++) {
-    const first = Math.floor(i * buffer.length / count);
-    const end = Math.floor((i + 1) * buffer.length / count);
-    let min = Infinity, max = -Infinity, sumSquares = 0;
+    const first = Math.floor(i * pitch / width * buffer.length);
+    const end = Math.min(buffer.length, Math.max(first + 1, Math.floor((i + 1) * pitch / width * buffer.length)));
+    let peak = 0, sumSquares = 0;
     for (const samples of channels) {
       for (let frame = first; frame < end; frame++) {
         const value = samples[frame];
-        min = Math.min(min, value);
-        max = Math.max(max, value);
+        peak = Math.max(peak, Math.abs(value));
         sumSquares += value * value;
       }
     }
-    // 用正弦波峰值标尺换算 RMS，使持续的音色与极短的尖峰在全曲概览中可以区分。
-    const level = Math.sqrt(2 * sumSquares / ((end - first) * channels.length));
-    const peak = Math.max(-min, max);
-    windows.push({ first, end, min, max, level, peak });
-    fullScale = Math.max(fullScale, peak);
+    peaks[i] = peak;
+    levels[i] = Math.min(peak, Math.sqrt(2 * sumSquares / ((end - first) * channels.length)));
   }
-  // 全曲采用同一个显示比例，轻声的短音效也能看清，静音始终落在中线。
-  const path = new Path2D(), scale = height * 0.38 / (fullScale || 1);
-  const y = (value) => height / 2 - value * scale;
-  const edgeSample = (index) => channels.reduce((loudest, samples) =>
-    Math.abs(samples[index]) > Math.abs(loudest) ? samples[index] : loudest, 0);
-  let previous = edgeSample(0), previousX = 0;
-  path.moveTo(0, y(previous));
-  // 曲线穿过采样的原时刻和振幅，控制点位于两端之间，连接处平滑且不会越过真实极值。
-  const append = ({ frame, value }) => {
-    const x = width * frame / buffer.length, bend = (x - previousX) * 0.25;
-    path.bezierCurveTo(previousX + bend, y(previous), x - bend, y(value), x, y(value));
-    previousX = x;
-    previous = value;
-  };
-  for (let i = 0; i < windows.length; i++) {
-    const { first, end, min, max, level, peak } = windows[i];
-    if (min === max) {
-      append({ frame: Math.floor((first + end - 1) / 2), value: min });
-      continue;
-    }
-    // 同时高于相邻窗口和本窗持续幅度 6 dB 的尖峰，按发生顺序保留正负两端。
-    const surrounding = Math.max(windows[i - 1]?.peak || 0, windows[i + 1]?.peak || 0, level);
-    if (peak > 2 * surrounding) {
-      const extrema = [representativeSample(channels, first, end, min), representativeSample(channels, first, end, max)];
-      extrema.sort((a, b) => a.frame - b.frame).forEach(append);
-      continue;
-    }
-    const lo = clamp(-level, min, max), hi = clamp(level, min, max);
-    const target = Math.abs(hi - previous) > Math.abs(lo - previous) ? hi : lo;
-    append(representativeSample(channels, first, end, target));
+  // 持续声音按有效幅度显示，孤立的点击保留实际峰值，避免整段音乐因峰值接近显得齐平。
+  let maximum = 0;
+  for (let i = 0; i < count; i++) {
+    const surrounding = Math.max(peaks[i - 1] || 0, peaks[i + 1] || 0, levels[i]);
+    if (peaks[i] > 2 * surrounding) levels[i] = peaks[i];
+    maximum = Math.max(maximum, levels[i]);
   }
-  const last = edgeSample(buffer.length - 1);
-  append({ frame: buffer.length - 1, value: last });
-  path.lineTo(width, y(last));
+  // 整段录音共用同一显示比例，柱体围绕中线对称，并为静音保留一个像素的标记。
+  const path = new Path2D(), scale = (height - 24) / (maximum || 1);
+  for (let i = 0; i < count; i++) {
+    const x = i * pitch, barHeight = Math.max(1, levels[i] * scale);
+    path.rect(x, (height - barHeight) / 2, Math.min(barWidth, width - x), barHeight);
+  }
   return path;
 }
 
@@ -128,7 +85,7 @@ export class AudioEditor {
   // 先显示载入状态，取消后迟到的解码结果不会写进下一次编辑。
   async open(label, read) {
     const token = ++this.token;
-    this.buffer = this.trace = null;
+    this.buffer = this.bars = null;
     this.invalidTimes = false;
     this.saving = false;
     $('audio-clip-name').value = label.slice(0, 80);
@@ -162,7 +119,7 @@ export class AudioEditor {
     this.token++;
     this.stopPreview();
     if (this.context) void this.context.close().catch(() => {});
-    this.context = this.buffer = this.trace = this.drag = null;
+    this.context = this.buffer = this.bars = this.drag = null;
   }
 
   // 波形右上角同时承载选区时长和操作反馈，错误使用醒目的颜色。
@@ -221,23 +178,21 @@ export class AudioEditor {
     if (this.canvas.width !== pixelWidth || this.canvas.height !== pixelHeight) {
       this.canvas.width = pixelWidth;
       this.canvas.height = pixelHeight;
-      this.trace = null;
+      this.bars = null;
     }
     const ctx = this.canvas.getContext('2d');
     const duration = this.buffer.duration;
-    this.trace ??= waveformTrace(this.buffer, width, height);
+    this.bars ??= waveformBars(this.buffer, width, height);
     ctx.setTransform(pixelWidth / width, 0, 0, pixelHeight / height, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    // 整条波形只描一次细线，颜色在选区边界切换，拖动时复用原路径。
+    // 拖动只更新颜色，选区边界经过同一根柱时仍能精确地分出灰色与紫色。
     const ink = ctx.createLinearGradient(0, 0, width, 0);
-    ink.addColorStop(this.start / duration, '#acaabd');
-    ink.addColorStop(this.start / duration, '#7c6b9e');
-    ink.addColorStop(this.end / duration, '#7c6b9e');
-    ink.addColorStop(this.end / duration, '#acaabd');
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = 1.1;
-    ctx.lineJoin = ctx.lineCap = 'round';
-    ctx.stroke(this.trace);
+    ink.addColorStop(this.start / duration, '#bab8c6');
+    ink.addColorStop(this.start / duration, '#7561ad');
+    ink.addColorStop(this.end / duration, '#7561ad');
+    ink.addColorStop(this.end / duration, '#bab8c6');
+    ctx.fillStyle = ink;
+    ctx.fill(this.bars);
     const position = (time) => 100 * time / duration;
     const left = position(this.start), right = position(this.end);
     const selection = this.wave.querySelector('.wave-selection');
