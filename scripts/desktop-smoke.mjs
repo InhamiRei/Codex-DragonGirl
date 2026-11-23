@@ -30,7 +30,10 @@ async function until(check, message, timeout = 10000) {
 
 // 每次启动使用同一份隔离配置，重启用来检验真正的磁盘恢复。
 async function launch() {
-  const instance = await electron.launch({ args: [root], env: environment, timeout: 30000 });
+  const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
+  const instance = await electron.launch({
+    ...(executablePath ? { executablePath, args: [] } : { args: [root] }), env: environment, timeout: 30000,
+  });
   instance.on('window', page => {
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -441,6 +444,15 @@ try {
   // 后续拖动和翻转继续使用标准大小，同时覆盖两种角色比例。
   await application.evaluate(() => globalThis.__dragonGirlTest.setScale(1));
 
+  // 带着展开的气泡拖动也要坚持到松手，再从已收起的状态继续拖到屏幕边缘。
+  await application.evaluate(() => globalThis.__dragonGirlTest.showBubble('拖动开始前气泡展开', 'speech'));
+  await bubbleLayout('拖动开始前气泡展开');
+  await until(() => application.evaluate(() => globalThis.__dragonGirlTest.windows.get('bubble').isVisible()), '拖动前气泡尚未显示。');
+  const middle = { x: Math.round(workArea.x + workArea.width * .32), y: Math.round(workArea.y + workArea.height * .34) };
+  await dragTo(middle.x, middle.y);
+  const firstDrop = await snapshot();
+  assert.deepEqual([firstDrop.character.x, firstDrop.character.y], [middle.x, middle.y], '气泡收起时中断了角色拖动。');
+  assert.equal(firstDrop.bubbleVisible, false);
   await dragTo(workArea.x + 18, workArea.y + 18);
   const snapped = await snapshot();
   assert.equal(snapped.character.x, workArea.x);

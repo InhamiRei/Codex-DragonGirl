@@ -140,6 +140,21 @@ test('隐藏中拒绝迟到的命中通知，切换模式会取消拖动', async
   assert.equal(pet.gesture.active, null);
 });
 
+// 每个真正可见的窗口只收起一次，后续心跳和主动隐藏不能再次中断其他角色的拖动。
+test('气泡已收起和宿主连续消失时不重复调用原生隐藏', async (t) => {
+  const { pet } = await fixture(t);
+  const character = pet.windows.get('character'), bubble = pet.windows.get('bubble');
+  const hideCharacter = t.mock.method(character, 'hide'), hideBubble = t.mock.method(bubble, 'hide');
+  pet.hideBubble();
+  assert.equal(hideBubble.mock.callCount(), 0);
+  bubble.showInactive();
+  pet.followFrame(null);
+  pet.followFrame(null);
+  pet.hide();
+  assert.equal(hideCharacter.mock.callCount(), 1);
+  assert.equal(hideBubble.mock.callCount(), 1);
+});
+
 // 断开时原生桥可能还保留旧快照，只有宿主确实出现在主屏才可以跟过去。
 test('副屏断开时收起角色，恢复副屏或宿主真正移屏后继续跟随', async (t) => {
   const { pet, primary, secondary, host, offset, setDisplays } = await fixture(t);

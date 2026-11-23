@@ -206,7 +206,7 @@ export class Companion {
         this.contextMenu?.closePopup(window);
         this.cancelGesture();
         this.setInteractive(view, false);
-        window.hide();
+        this.hideWindow(view);
       }
       // 重新启动的气泡从关闭状态开始；角色的主动隐藏偏好由原来的用户操作决定。
       this.hideBubble();
@@ -663,12 +663,18 @@ export class Companion {
     window.webContents.send('dg:bubble', this.bubbleModel);
   }
 
+  // 已收起的窗口不重复向系统发隐藏命令，避免 AppKit 释放另一扇角色窗口正在使用的鼠标捕获。
+  hideWindow(view) {
+    const window = this.windows.get(view);
+    if (window && !window.isDestroyed() && window.isVisible()) window.hide();
+  }
+
   // 隐藏气泡时释放输入区域，震荡波开场可单独收起气泡。
   hideBubble({ keepWave = false } = {}) {
     clearTimeout(this.bubbleTimer);
     this.bubbleVisible = false;
     this.setInteractive('bubble', false);
-    this.windows.get('bubble')?.hide();
+    this.hideWindow('bubble');
     if (!keepWave) this.cancelPrayerWave();
     this.finishPrayerTyping(this.bubbleModel.typingId);
   }
@@ -914,7 +920,7 @@ export class Companion {
     this.visible = false;
     this.hideBubble();
     this.setInteractive('character', false);
-    this.windows.get('character')?.hide();
+    this.hideWindow('character');
     this.updateMenu();
   }
 
@@ -1050,7 +1056,7 @@ export class Companion {
     this.cancelGesture();
     this.hideBubble();
     this.setInteractive('character', false);
-    this.windows.get('character')?.hide();
+    this.hideWindow('character');
   }
 
   // 原生窗口快照和屏幕重排共用宿主坐标，不能回退到独立桌面的位置。
