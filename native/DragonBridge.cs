@@ -74,6 +74,12 @@ internal static class DragonBridge
     // 忽略隐藏窗口。
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr window);
+    // 模态文件框、确认框由系统禁用其宿主，桌宠在宿主重新启用之前收起。
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowEnabled(IntPtr window);
+    // 区分宿主与它拥有的非模态工具窗，并在用户要求聚焦时找到可用的模态窗口。
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr window, uint command);
     // 最小化窗口不显示关联角色。
     [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr window);
@@ -247,12 +253,17 @@ internal static class DragonBridge
         {
             uint owner;
             GetWindowThreadProcessId(window, out owner);
-            if (owner != (uint)pid || !IsWindowVisible(window) || (!includeMinimized && IsIconic(window))) return true;
+            if (owner != (uint)pid || !IsWindowVisible(window)) return true;
+            bool minimized = IsIconic(window);
+            if (!includeMinimized && minimized) return true;
+            IntPtr parent = GetWindow(window, 4); // GW_OWNER。
+            if ((GetWindowLongPtr(window, -20).ToInt64() & 0x80) != 0 // WS_EX_TOOLWINDOW。
+                || (parent != IntPtr.Zero && IsWindowVisible(parent))) return true;
             int cloaked;
             if (!includeMinimized && DwmGetWindowAttribute(window, 14, out cloaked, 4) == 0 && cloaked != 0) return true;
             Rect rect;
             if (!GetWindowRect(window, out rect)) return true;
-            if (!includeMinimized && (rect.Right - rect.Left < 400 || rect.Bottom - rect.Top < 300)) return true;
+            if (!minimized && (rect.Right - rect.Left < 400 || rect.Bottom - rect.Top < 300)) return true;
             if (GetClassName(window, className, className.Capacity) > 0 && className.ToString() == "#32768") return true;
             long id = window.ToInt64();
             if (frames != null) frames[id] = rect;
@@ -304,11 +315,15 @@ internal static class DragonBridge
         List<Dictionary<string, object>> rows = new List<Dictionary<string, object>>();
         Dictionary<long, Rect> frames = new Dictionary<long, Rect>();
         foreach (ProcessRow row in processes)
+        {
+            List<Dictionary<string, object>> hosts = Windows(row.Pid, false, frames);
+            bool blocked = hosts.Count > 0 && !IsWindowEnabled(new IntPtr((long)hosts[0]["id"]));
             rows.Add(new Dictionary<string, object> {
                 { "pid", row.Pid }, { "appPath", row.AppPath }, { "home", row.Home },
                 { "networkEnv", row.Network }, { "frontmost", front == (uint)row.Pid },
-                { "coordinateSpace", "physical" }, { "windows", Windows(row.Pid, false, frames) }
+                { "coordinateSpace", "physical" }, { "windows", hosts }, { "modalOpen", blocked }
             });
+        }
         if (HostFramesChanged(frames))
         {
             lastHostFrames = frames;
@@ -335,10 +350,17 @@ internal static class DragonBridge
         using (Process process = Process.GetProcessById(pid))
         {
             if (!IsTarget(process)) return 1;
-            List<Dictionary<string, object>> windows = Windows(pid, true);
+            List<Dictionary<string, object>> windows = Windows(pid, false);
+            if (windows.Count == 0) windows = Windows(pid, true);
             if (windows.Count == 0) return 1;
             IntPtr window = new IntPtr((long)windows[0]["id"]);
-            ShowWindow(window, 9);
+            if (IsIconic(window)) ShowWindow(window, 9); // SW_RESTORE 也会取消最大化，仅用于最小化窗口。
+            if (!IsWindowEnabled(window))
+            {
+                IntPtr popup = GetWindow(window, 6); // GW_ENABLEDPOPUP。
+                if (popup == IntPtr.Zero || !IsWindowVisible(popup) || !IsWindowEnabled(popup)) return 1;
+                window = popup;
+            }
             return SetForegroundWindow(window) ? 0 : 1;
         }
     }
@@ -389,7 +411,7 @@ internal static class DragonBridge
             return;
         }
         uint hostPid;
-        if (GetWindowThreadProcessId(host, out hostPid) == 0 || !IsWindowVisible(host) || IsIconic(host)) return;
+        if (GetWindowThreadProcessId(host, out hostPid) == 0 || !IsWindowVisible(host) || IsIconic(host) || !IsWindowEnabled(host)) return;
         using (Process process = Process.GetProcessById((int)hostPid)) if (!IsTarget(process)) return;
         List<ScreenWindow> visible = VisibleWindows();
         int hostIndex = visible.FindIndex(w => w.Handle == host);

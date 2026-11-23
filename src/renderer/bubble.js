@@ -20,6 +20,7 @@ const PRAYER_START_MS = 100;
 const PRAYER_END_MS = 400;
 const PRAYER_BEATS = { '，': 1.28, '、': 1.28, '；': 1.28, '：': 1.28, '。': 1.65, '！': 1.65, '？': 1.65, '\n': 1.55, ' ': 0.5 };
 let lastInteractive = null;
+let lastCursor = null;
 let renderedRevision = -1;
 let renderedShowId = -1;
 let animatedShowId = -1;
@@ -294,6 +295,8 @@ function render(model) {
   const measured = model.measuredRevision === model.revision;
   const ready = keepVisible || measured;
   document.body.dataset.ready = String(ready);
+  // 原生坐标可能先于排版回执到达；椭圆就绪或方向改变后用原地鼠标再做一次真实路径命中。
+  if (ready && lastCursor) routeCursor(lastCursor, !keepVisible);
   if (ready && model.typingId != null && !sameTyping) startPrayerTyping(model);
   if (!measured || animatedShowId === showId) return;
   animatedShowId = showId;
@@ -303,12 +306,13 @@ function render(model) {
 }
 
 // 直接按完整椭圆命中，移除凸点后的空白与两颗独立小泡都继续穿透。
-function routeCursor(point) {
+function routeCursor(point, refresh = false) {
+  lastCursor = point;
   const matrix = outlinePath.getScreenCTM();
   const local = matrix && new DOMPoint(point.x, point.y).matrixTransform(matrix.inverse());
   const enabled = document.body.dataset.ready === 'true' && !!local &&
     (outlinePath.isPointInFill(local) || outlinePath.isPointInStroke(local));
-  if (enabled === lastInteractive) return;
+  if (enabled === lastInteractive && !refresh) return;
   lastInteractive = enabled;
   bridge.interactive(enabled);
 }
@@ -318,7 +322,7 @@ async function start() {
   await document.fonts.ready;
   bridge.onBubble(render);
   render(await bridge.bootstrap());
-  bridge.onCursor(routeCursor);
+  bridge.onCursor(point => routeCursor(point, point.refresh === true));
   bridge.onInputState((enabled) => {
     lastInteractive = enabled;
   });

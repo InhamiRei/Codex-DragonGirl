@@ -1,3 +1,5 @@
+import { containsPoint } from './geometry.js';
+
 // 无辅助功能权限时，根据系统 sheet 的居中覆盖关系识别临时面板，不依赖标题语言。
 function coversParentAsSheet(panel, parent) {
   const centered = Math.abs(panel.x + panel.width / 2 - parent.x - parent.width / 2) <= 12;
@@ -19,6 +21,50 @@ export function followWindowFrame(process) {
   return windows[0];
 }
 
+// 同一账户有多个进程时，切走前台应用后仍保留上次使用的进程；进程退出才改选可见宿主。
+export function followProcess(processes, home, previousPid) {
+  const hosts = processes.filter(p => p.home === home);
+  return hosts.find(p => p.frontmost) || hosts.find(p => p.pid === previousPid)
+    || hosts.find(p => followWindowFrame(p)) || hosts[0];
+}
+
+// 求宿主真正占用的显示区域，边缘相接不算落在该屏。
+function intersectionArea(a, b) {
+  return Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x))
+    * Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+}
+
+// 按角色锚点选显示器。Windows 跨不同 DPI 时，以目标屏原点投影原生矩形，避免拿主屏比例计算副屏位置。
+export function followDisplayFrame(frame, offset, screen) {
+  const physical = frame.physicalBounds;
+  const source = physical || frame;
+  const point = {
+    x: Math.round(source.x + (source.width - 1) * offset.x),
+    y: Math.round(source.y + (source.height - 1) * offset.y),
+  };
+  // 只有 Windows 物理帧需要转换显示器边界。
+  const screenBounds = display => physical ? screen.dipToScreenRect(null, display.bounds) : display.bounds;
+  let display = screen.getDisplayNearestPoint(physical ? screen.screenToDipPoint(point) : point);
+  let bounds = screenBounds(display);
+  // 锚点可能已移出桌面或落在错排列屏之间，余下仍可见的屏幕按实际交集选取。
+  if (!containsPoint(bounds, point)) {
+    let largest = 0;
+    for (const candidate of screen.getAllDisplays()) {
+      const next = screenBounds(candidate);
+      const area = intersectionArea(source, next);
+      if (area && containsPoint(next, point)) { largest = area; display = candidate; bounds = next; break; }
+      if (area > largest) { largest = area; display = candidate; bounds = next; }
+    }
+    if (!largest) return null;
+  }
+  if (!physical) return { display, frame };
+  const scale = display.scaleFactor;
+  return { display, frame: { ...frame,
+    x: display.bounds.x + (source.x - bounds.x) / scale, y: display.bounds.y + (source.y - bounds.y) / scale,
+    width: source.width / scale, height: source.height / scale,
+  } };
+}
+
 // macOS 按角色与气泡的实际区域判断遮挡；盖住宿主其他位置的窗口不能让仍露出的角色反复切换层级。
 export function followWindowFloating(normalWindows, host, overlays, regions = []) {
   const owned = new Set(overlays.map(String));
@@ -26,8 +72,7 @@ export function followWindowFloating(normalWindows, host, overlays, regions = []
   for (const window of normalWindows || []) {
     if (String(window.id) === String(host.id)) return true;
     if (owned.has(String(window.id))) continue;
-    if (areas.some((area) => window.x < area.x + area.width && window.x + window.width > area.x
-      && window.y < area.y + area.height && window.y + window.height > area.y)) return false;
+    if (areas.some((area) => intersectionArea(window, area) > 0)) return false;
   }
   return false;
 }

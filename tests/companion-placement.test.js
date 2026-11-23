@@ -50,9 +50,11 @@ async function fixture(t) {
   screen.getAllDisplays = () => displays;
   screen.getPrimaryDisplay = () => primary;
   screen.getDisplayMatching = (frame) => displays.includes(secondary) && frame.x >= secondary.bounds.x ? secondary : primary;
+  screen.getDisplayNearestPoint = screen.getDisplayMatching;
   const pet = new Companion('placement-test', { secondary: true, initiallySuppressed: true });
   t.after(() => pet.stop());
   pet.store.load = async () => ({ scale: 1, placement: null });
+  pet.store.save = async () => {};
   pet.store.flush = async () => {};
   pet.registerIpc = () => {};
   pet.pollCursor = () => {};
@@ -97,6 +99,45 @@ test('跟随副屏时，工作区变化和唤醒不会移动角色或翻转朝�
   assert.equal(pet.facingLeft, original.facing);
   pet.followFrame({ ...host, x: host.x + 80 }, offset);
   assert.equal(pet.character.x, original.character.x + 80, '另一份副屏窗口快照仍能更新位置');
+});
+
+// 在另一块屏幕上跟随时，大小和“回到右下角”都以宿主为准，桌面停靠位置单独保留。
+test('跟随时调整大小、回到右下角不会改写独立桌面锚点', async (t) => {
+  const { pet, secondary, host, offset } = await fixture(t);
+  const desktop = { displayId: '1', horizontal: { edge: 'start', ratio: 0 }, vertical: { edge: 'end', ratio: 1 } };
+  pet.state.placement = desktop;
+  pet.setScale(.6);
+  assert.deepEqual(pet.state.placement, desktop);
+  assert.equal(pet.character.x, Math.round(host.x + (host.width - pet.character.width) * offset.x));
+  pet.resetPosition();
+  assert.equal(pet.display.id, secondary.id);
+  assert.equal(pet.character.x + pet.character.width, host.x + host.width);
+  assert.equal(pet.character.y + pet.character.height, host.y + host.height);
+  assert.deepEqual(pet.state.placement, desktop);
+});
+
+// 宿主大半在主屏，锚点已进入副屏。恰好贴到分界线时仍应留在宿主占用的一侧。
+test('跨两屏的宿主按角色锚点选屏，边界点不会跳到相邻屏幕', async (t) => {
+  const { pet, primary, secondary } = await fixture(t);
+  pet.followFrame({ x: 600, y: 75, width: 1250, height: 750 });
+  assert.equal(pet.display.id, secondary.id);
+  assert.equal(pet.character.x + pet.character.width, 1850);
+  pet.followFrame({ x: 600, y: 75, width: 840, height: 750 });
+  assert.equal(pet.display.id, primary.id);
+  assert.equal(pet.character.x + pet.character.width, 1440);
+});
+
+// 隐藏后的旧命中请求不能打开透明窗口输入；新模式也不能继承旧模式的拖动。
+test('隐藏中拒绝迟到的命中通知，切换模式会取消拖动', async (t) => {
+  const { pet } = await fixture(t);
+  pet.hide();
+  pet.setInteractive('character', true);
+  pet.setInteractive('bubble', true);
+  assert.deepEqual([...pet.interactive.values()], [false, false]);
+  pet.show();
+  pet.gesture.begin({ x: pet.character.x, y: pet.character.y }, pet.character);
+  pet.setFollowMode(false);
+  assert.equal(pet.gesture.active, null);
 });
 
 // 断开时原生桥可能还保留旧快照，只有宿主确实出现在主屏才可以跟过去。

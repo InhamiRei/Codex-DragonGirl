@@ -222,6 +222,104 @@ async function checkWindowsSwitching(host, cover) {
     await expectPixels(petColor, petColor);
     await sizeCover(hostX + Math.round(hostWidth / 2));
   }
+  // 从透明角落点到底下的宿主，再在脸部点开气泡。两次都实际发送系统鼠标事件。
+  await application.evaluate(() => globalThis.__dragonGirlApp.companion.hideBubble());
+  const probes = await application.evaluate(({ screen }) => {
+    const rect = globalThis.__dragonGirlApp.companion.character;
+    return [{ x: rect.x + 3, y: rect.y + 3 },
+      { x: Math.round(rect.x + rect.width * .5), y: Math.round(rect.y + rect.height * .72) }].map(point => screen.dipToScreenPoint(point));
+  });
+  // 从宿主消息循环读取实际抵达客户区的点击数。
+  const count = async () => {
+    await send(host, 'input-count');
+    return Number(await fs.readFile(path.join(host.directory, 'input-count'), 'utf8'));
+  };
+  const before = await count();
+  try {
+    for (const [index, point] of probes.entries()) {
+      await send(host, `hover-input ${point.x} ${point.y}`);
+      await until(() => application.evaluate((_, valid) => globalThis.__dragonGirlApp.companion.interactive.get('character') === valid, index === 1),
+        '真实鼠标移入后没有切换角色命中');
+      await send(host, `click-input ${ids.character}`);
+      if (index === 0) await until(async () => (await count()) === before + 1, '透明角落拦截了宿主的实际点击');
+      else await until(async () => (await companionState()).windows.bubble.visible, '真实点击脸部未打开气泡');
+    }
+    assert.equal(await count(), before + 1, '角色的不透明部分也把点击交给了宿主');
+  } finally { await send(host, 'end-input'); }
+}
+
+// 管理页与桌宠属于同一个应用；它遮住角色时也必须排在整组前面，并保持可输入。
+async function checkDashboardCover(host) {
+  const dashboardId = await application.evaluate(async () => {
+    const { dashboard, companion } = globalThis.__dragonGirlApp;
+    companion.showBubble('管理页遮挡验收', 'speech');
+    const { width, height } = dashboard.window.getBounds(), area = companion.display.workArea, rect = companion.character;
+    const x = Math.max(area.x, Math.min(rect.x + (rect.width - width) / 2, area.x + area.width - width));
+    const y = Math.max(area.y, Math.min(rect.y + (rect.height - height) / 2, area.y + area.height - height));
+    dashboard.window.setPosition(Math.round(x), Math.round(y));
+    await dashboard.open();
+    return dashboard.window.getMediaSourceId().split(':')[1];
+  });
+  await until(async () => {
+    const { order } = systemState(host.child.pid);
+    const sequence = [dashboardId, ids.bubble, ids.character, host.id].map(id => order.indexOf(id));
+    return sequence.every((value, i) => value >= 0 && (!i || value > sequence[i - 1]))
+      && await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.window.isFocused());
+  }, '管理页未保持在桌宠前方或失去键盘焦点');
+  await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.window.hide());
+}
+
+// 非模态面板继续正常遮挡角色；模态框禁用宿主时收起，且聚焦最大化窗口应保留其大小。
+async function checkWindowsPanels(host) {
+  for (const command of ['owned-panel', 'modal-panel']) {
+    await send(host, command);
+    const panel = await fs.readFile(path.join(host.directory, 'panel-id'), 'utf8');
+    await until(() => {
+      const state = systemState(host.child.pid);
+      return state.order.includes(panel) && String(state.host?.windows[0]?.id) === host.id
+        && state.host.modalOpen === (command === 'modal-panel');
+    }, command + ' 面板被错误选为宿主或未识别被禁用的主窗口');
+    await until(async () => {
+      const state = await companionState();
+      return command === 'modal-panel' ? !state.windows.character.visible && !state.windows.bubble.visible
+        : state.windows.character.visible && String(state.follow.frame?.id) === host.id;
+    }, command + ' 的原生显隐不正确');
+    await send(host, 'close-panel');
+    await until(async () => (await companionState()).windows.character.visible, '关闭面板后角色没有自动回到主窗口');
+  }
+  // 同一进程的第二个独立聊天窗口必须仍然可选，关闭后重新跟回原窗口。
+  await send(host, 'independent-window');
+  const other = await fs.readFile(path.join(host.directory, 'panel-id'), 'utf8');
+  await until(async () => String((await companionState()).follow.frame?.id) === other, '未跟随新打开的独立聊天窗口');
+  await send(host, 'close-panel');
+  await until(async () => String((await companionState()).follow.frame?.id) === host.id, '关闭独立聊天窗口后未恢复原宿主');
+  await send(host, 'maximize');
+  // 与管理页“切换到实例”使用相同的桥命令，Windows 可以拒绝抢焦点，但不应把最大化取消。
+  spawnSync(bridge, ['--focus', String(host.child.pid)], { windowsHide: true, timeout: 10000 });
+  await send(host, 'window-state');
+  assert.equal(await fs.readFile(path.join(host.directory, 'window-state'), 'utf8'), 'Maximized');
+  await send(host, 'restore');
+}
+
+// 中断本次测试应用的监控桥；在没有实时窗口信息的间隙，角色和气泡必须立即退出屏幕。
+async function checkBridgeRecovery(host) {
+  await application.evaluate(() => globalThis.__dragonGirlApp.companion.showBubble('连接中断测试', 'speech'));
+  await until(async () => (await companionState()).windows.bubble.visible, '中断前没有显示气泡');
+  const oldPid = await application.evaluate(() => {
+    const bridge = globalThis.__dragonGirlApp.monitor.native;
+    bridge.kill();
+    return bridge.pid;
+  });
+  await until(() => application.evaluate(() => {
+    const { companion, monitor } = globalThis.__dragonGirlApp;
+    return !monitor.native && !companion.followTarget && !companion.windows.get('character').isVisible()
+      && !companion.windows.get('bubble').isVisible() && !companion.interactive.get('character') && !companion.interactive.get('bubble');
+  }), '窗口桥中断后仍在按旧快照显示角色或接收鼠标');
+  await until(() => application.evaluate((_, { oldPid, hostId }) => {
+    const { companion, monitor } = globalThis.__dragonGirlApp;
+    return monitor.native?.pid !== oldPid && String(companion.followTarget?.id) === hostId
+      && companion.windows.get('character').isVisible() && !companion.windows.get('bubble').isVisible();
+  }, { oldPid, hostId: host.id }), '窗口桥自动重连后未按实时宿主恢复');
 }
 
 // 使用真实跟随宿主，跳到气泡播完的时刻以独立验收原生窗口和波前。
@@ -260,7 +358,7 @@ try {
       const processes = state.processes.filter((row) => row.pid === pid);
       if (!isMac) return receive({ ...state, processes }, bridge);
       // 祈祷特效按需创建，每份快照也要纳入新出现的测试窗口。
-      const overlays = [...companion.windows.values(), companion.prayerWave?.window];
+      const overlays = [...companion.windows.values(), companion.prayerWave?.window, dashboard.window];
       // 宿主的保存面板也要保留在真实层级中，避免因测试过滤掉窗口而误判桌宠已正确避让。
       const fixtureIds = new Set([hostId, coverId, ...processes.flatMap((row) => row.windows.map((window) => String(window.id))),
         ...overlays.filter((win) => win && !win.isDestroyed())
@@ -469,6 +567,32 @@ try {
   assert.equal(desktop.windows.character.visible, true);
   assert.equal(desktop.windows.character.topmost, true);
   assert.equal(desktop.windows.bubble.topmost, true);
+  // 独立桌面也可以在 Codex 上播放波纹；把测试角色移到波纹实际经过的位置，检查其保持在特效上方。
+  await send(host, 'restore');
+  await raise(host, cover);
+  await until(() => application.evaluate(() => {
+    const { companion, dashboard } = globalThis.__dragonGirlApp;
+    const frame = dashboard.prayerWaveTarget(companion)?.frame;
+    if (!frame) return false;
+    companion.character = { ...companion.character, x: frame.x + 70, y: frame.y + 60 };
+    companion.applyCharacter();
+    return true;
+  }), '独立桌面没有找到恢复的测试宿主');
+  await releasePrayerWave();
+  const desktopWave = await until(() => application.evaluate(() => {
+    const wave = globalThis.__dragonGirlApp.companion.prayerWave;
+    return wave?.started && wave.window.getMediaSourceId().split(':')[1];
+  }), '独立桌面的波纹没有启动');
+  await until(() => {
+    const { order } = systemState(host.child.pid);
+    return order.indexOf(ids.character) >= 0 && order.indexOf(ids.character) < order.indexOf(desktopWave)
+      && order.indexOf(desktopWave) < order.indexOf(host.id);
+  }, '独立桌面的特效盖住角色或藏在宿主背后');
+  await send(host, 'minimize');
+  await until(() => application.evaluate(() => {
+    const pet = globalThis.__dragonGirlApp.companion;
+    return !pet.prayerWave && pet.windows.get('character').isVisible();
+  }), '宿主最小化后独立桌面的波纹或角色状态不正确');
   await application.evaluate(async () => {
     const { monitor, dashboard } = globalThis.__dragonGirlApp;
     monitor.settings.mode = 'follow';
@@ -511,6 +635,8 @@ try {
     return wave?.started && c.prayerWave === wave && !c.bubbleVisible && !c.windows.get('bubble').isVisible();
   }), '后台任务通知打断了震荡波');
   const waveStack = systemState(host.child.pid);
+  assert.ok(waveStack.order.indexOf(ids.character) >= 0 && waveStack.order.indexOf(ids.character) < waveStack.order.indexOf(wave.id),
+    '透明特效窗口盖在角色前面');
   assert.ok(waveStack.order.includes(wave.id) && waveStack.order.indexOf(wave.id) < waveStack.order.indexOf(host.id),
     '震荡波窗口没有叠在宿主上');
   assert.equal(waveStack.host.frontmost, frontBeforeWave, '震荡波改变了前台应用');
@@ -567,12 +693,24 @@ try {
     const c = globalThis.__dragonGirlApp.companion;
     return !c.prayerWave && !c.bubbleVisible && !c.windows.get('character').isVisible();
   }), '宿主最小化后仍留下震荡波');
-  if (!isMac) await checkWindowsSwitching(host, cover);
+  if (!isMac) {
+    await checkWindowsSwitching(host, cover);
+    await checkWindowsPanels(host);
+  } else {
+    await send(host, 'restore');
+    await raise(host, cover);
+    await expectStack(host, cover, false, false);
+  }
+  await checkBridgeRecovery(host);
+  await checkDashboardCover(host);
   const report = { passed: true, platform: process.platform, checks: ['真实跨应用层级', '仅层级变化触发快照', '完全遮挡', '部分遮挡仍显示', '后台气泡层级', '恢复原位且不抢焦点', '最小化与恢复', '保留主动隐藏', '独立桌面仍置顶', '切回跟随恢复层级', ...(isMac ? ['连续置前 12 次、全程 8ms 采样无闪烁'] : ['真实标题栏往返拖动 4 次、拖动及松手后连续采样无遮挡', '拖动全程不抢焦点', '系统置顶窗口仍正常遮挡角色'])] };
   report.checks.push('连续移动及时跟随', '菜单展开时跟随主窗口且角色和气泡留在菜单之后');
   if (isMac) report.checks.push('保存视频期间角色与气泡收起，取消后回到聊天主窗口原位');
   else report.checks.push('气泡收起和打开时真实点击切换两窗，屏幕像素验证角色露出、半遮挡、完全遮挡与切回');
   report.checks.push('震荡波放出时收起气泡、渐变波纹扫过宿主远角、鼠标穿透、结束和最小化清理');
+  report.checks.push('特效位于角色后方、窗口桥中断立即收起并在自动重连后恢复');
+  report.checks.push('同进程管理页遮挡角色与气泡并保留焦点');
+  if (!isMac) report.checks.push('Windows 大型非模态面板、阻塞对话框与最大化宿主聚焦', '真实点击透明角落交给宿主、脸部打开气泡');
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
   await fs.writeFile(path.join(root, '.artifacts/follow-report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));

@@ -177,7 +177,11 @@ internal static class WindowFixture
         string directory = args.Length == 2 && args[0] == "--controlled" ? args[1] : null;
         string previous = "";
         Point? restoreCursor = null;
+        Point? probeCursor = null;
+        int clientClicks = 0;
+        form.MouseDown += delegate { clientClicks++; };
         ContextMenuStrip menu = null;
+        Form panel = null;
         Timer timer = new Timer { Interval = 50 };
         // 控制文件只影响自建测试窗口，所有命令都在窗口线程执行。
         timer.Tick += delegate {
@@ -219,6 +223,24 @@ internal static class WindowFixture
                 case "foreground":
                     File.WriteAllText(Path.Combine(directory, "foreground"), GetForegroundWindow().ToInt64().ToString());
                     break;
+                // 对本夹具客户区内的固定点验收真实穿透。只有夹具自身或测试传入的角色句柄允许接收点击。
+                case "hover-input":
+                    Point input = new Point(int.Parse(parts[1]), int.Parse(parts[2]));
+                    if (!form.RectangleToScreen(form.ClientRectangle).Contains(input)) break;
+                    if (!probeCursor.HasValue) probeCursor = Cursor.Position;
+                    Cursor.Position = input;
+                    break;
+                case "click-input":
+                    IntPtr hit = GetAncestor(WindowFromPoint(Cursor.Position), 2);
+                    if (probeCursor.HasValue && form.RectangleToScreen(form.ClientRectangle).Contains(Cursor.Position)
+                        && (hit == form.Handle || hit.ToInt64() == long.Parse(parts[1])))
+                    {
+                        mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
+                        mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+                    }
+                    break;
+                case "input-count": File.WriteAllText(Path.Combine(directory, "input-count"), clientClicks.ToString()); break;
+                case "end-input": if (probeCursor.HasValue) Cursor.Position = probeCursor.Value; probeCursor = null; break;
                 case "sample":
                     File.WriteAllText(Path.Combine(directory, "pixels"), Pixel(form, int.Parse(parts[1]), int.Parse(parts[2]))
                         + " " + Pixel(form, int.Parse(parts[3]), int.Parse(parts[4])));
@@ -237,6 +259,20 @@ internal static class WindowFixture
                 case "glide": GlideHost(form, directory); break;
                 case "open-floating-menu": menu = OpenContextMenu(form, directory); break;
                 case "close-floating-menu": if (menu != null) menu.Dispose(); menu = null; break;
+                // 同一宿主分别打开足够大的普通工具面板和真正禁用所有者的模态框，便于区分跟随目标。
+                case "owned-panel":
+                case "modal-panel":
+                case "independent-window":
+                    panel = new Form { Width = 560, Height = 380, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = command == "independent-window" };
+                    Form opened = panel;
+                    File.WriteAllText(Path.Combine(directory, "panel-id"), opened.Handle.ToInt64().ToString());
+                    if (command == "modal-panel") form.BeginInvoke(new MethodInvoker(delegate { opened.ShowDialog(form); }));
+                    else if (command == "independent-window") { opened.Show(); opened.Activate(); }
+                    else opened.Show(form);
+                    break;
+                case "close-panel": if (panel != null) { panel.Close(); panel.Dispose(); panel = null; } break;
+                case "maximize": form.WindowState = FormWindowState.Maximized; break;
+                case "window-state": File.WriteAllText(Path.Combine(directory, "window-state"), form.WindowState.ToString()); break;
                 case "partial": form.Width = 550; SetWindowPos(form.Handle, IntPtr.Zero, 0, 0, 0, 0, 0x13); break;
                 case "full": form.Width = 1100; SetWindowPos(form.Handle, IntPtr.Zero, 0, 0, 0, 0, 0x13); break;
                 case "topmost": form.TopMost = true; break;
@@ -259,8 +295,10 @@ internal static class WindowFixture
         form.FormClosed += delegate {
             stopping = true;
             if (menu != null) menu.Dispose();
+            if (panel != null) panel.Dispose();
             if (dragThread != null) dragThread.Join(1500);
             if (restoreCursor.HasValue) Cursor.Position = restoreCursor.Value;
+            if (probeCursor.HasValue) Cursor.Position = probeCursor.Value;
         };
         timer.Start();
         Application.Run(form);

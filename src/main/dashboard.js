@@ -9,7 +9,9 @@ import { randomBytes } from 'node:crypto';
 import { DEFAULT_SETTINGS, normalizeSettings } from '../core/settings.js';
 import { planLabel, instanceLabel, quotaAvailableWindows, quotaDisplayWindows } from '../shared/presentation.js';
 import { Companion, companionAppearance } from './companion.js';
-import { followWindowFrame } from '../shared/follow-window.js';
+import { followWindowFrame, followProcess } from '../shared/follow-window.js';
+import { clamp } from '../shared/geometry.js';
+import { recoverWindowRenderer } from './window-recovery.js';
 import { AccountTests } from '../core/account-tests.js';
 import { extractTestHtml } from '../shared/account-tests.js';
 import { CHARACTERS } from '../shared/characters.js';
@@ -38,7 +40,7 @@ async function* audioChunks(port, signal) {
 function codexWindowFrame(codexProcess) {
   const frame = followWindowFrame(codexProcess);
   if (frame && codexProcess.coordinateSpace === 'physical' && process.platform === 'win32')
-    return { ...frame, ...screen.screenToDipRect(null, frame) };
+    return { ...frame, ...screen.screenToDipRect(null, frame), physicalBounds: frame };
   return frame;
 }
 
@@ -53,6 +55,7 @@ export class Dashboard {
     // 独立推送更新进度，关闭面板时由主进程继续管理下载。
     updates?.on('change', (state) => this.sendUpdateState(state));
     this.pets = new Map();
+    this.pendingFollowOffsets = new Map();
     this.assetDirectory = path.join(monitor.directory, 'assets');
     this.bundledAudioDirectory = path.join(ROOT, 'assets/audio');
     this.soundDirectory = path.join(monitor.directory, 'sound-library');
@@ -72,7 +75,7 @@ export class Dashboard {
       openDashboard: () => this.open(),
       refresh: () => void monitor.refreshAll().catch(() => {}),
       bubbleFor: (c) => this.bubbleFor(c),
-      onDrag: (c) => this.onDrag(c),
+      saveFollowOffset: (c, offset) => this.saveFollowOffset(c, offset),
       stackWindows: (host, overlays, owned) => monitor.stackWindows(host, overlays, owned),
       prayerWaveTarget: (c) => this.prayerWaveTarget(c),
       selectCharacter: (id) => this.selectCharacter(id),
@@ -123,27 +126,49 @@ export class Dashboard {
       if (notice.system && Notification.isSupported()) {
         const n = new Notification({ title: `GPT龙娘 · ${notice.name}`, body: text, silent: true });
         n.on('click', () => {
-          monitor.focus(notice.home);
+          monitor.focus(notice.home, pet.followPID);
           this.open();
         });
         n.show();
       }
     });
   }
-  // 设置与详情需要可聚焦的正常窗口，不改变桌宠的鼠标穿透策略。
+  // 工作区缩小或所在显示器断开时，让标题栏和底部操作都留在可访问范围内。
+  fitWindow(window) {
+    if (window.isDestroyed() || window.isMinimized() || window.isMaximized() || window.isFullScreen()) return;
+    const bounds = window.getBounds();
+    const area = screen.getDisplayMatching(bounds).workArea;
+    const minWidth = Math.min(880, area.width), minHeight = Math.min(660, area.height);
+    const [oldWidth, oldHeight] = window.getMinimumSize();
+    if (oldWidth !== minWidth || oldHeight !== minHeight) window.setMinimumSize(minWidth, minHeight);
+    // 用户横跨两屏摆放的窗口仍有可见标题栏时，保留其摆放意图。
+    const displays = screen.getAllDisplays().filter(({ workArea: a }) => bounds.x < a.x + a.width && bounds.x + bounds.width > a.x
+      && bounds.y < a.y + a.height && bounds.y + bounds.height > a.y);
+    if (displays.length > 1 && displays.some(({ workArea: a }) => bounds.y >= a.y && bounds.y + 32 <= a.y + a.height)) return;
+    const width = clamp(bounds.width, minWidth, area.width), height = clamp(bounds.height, minHeight, area.height);
+    const x = clamp(bounds.x, area.x, area.x + area.width - width), y = clamp(bounds.y, area.y, area.y + area.height - height);
+    if (x !== bounds.x || y !== bounds.y || width !== bounds.width || height !== bounds.height)
+      window.setBounds({ x, y, width, height });
+  }
+
+  // 连续点击托盘时共用一次页面加载；最小化的管理窗口先恢复，再请求键盘焦点。
   async open() {
     if (this.stopping) return;
     this.startup?.retain();
     if (this.window && !this.window.isDestroyed()) {
+      if (this.opening) return this.opening;
+      if (this.window.isMinimized()) this.window.restore();
+      this.fitWindow(this.window);
       this.window.show();
       this.window.focus();
       return;
     }
-    this.window = new BrowserWindow({
-      width: 1160,
-      height: 820,
-      minWidth: 880,
-      minHeight: 660,
+    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const area = display.workArea;
+    const width = Math.min(1160, area.width), height = Math.min(820, area.height);
+    const window = this.window = new BrowserWindow({
+      x: area.x + Math.round((area.width - width) / 2), y: area.y + Math.round((area.height - height) / 2),
+      width, height, minWidth: Math.min(880, area.width), minHeight: Math.min(660, area.height),
       title: 'GPT龙娘 · 用量管理',
       backgroundColor: '#f5f4fa',
       show: false,
@@ -154,15 +179,39 @@ export class Dashboard {
         nodeIntegration: false,
       },
     });
-    this.window.setMenuBarVisibility(false);
-    this.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    this.window.webContents.on('will-navigate', (event) => event.preventDefault());
+    window.setMenuBarVisibility(false);
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    window.webContents.on('will-navigate', (event) => event.preventDefault());
     // 生成页面只能在受限预览协议内导航，脚本和链接不能跳到网络或本地文件。
-    this.window.webContents.on('will-frame-navigate', (event) => {
+    window.webContents.on('will-frame-navigate', (event) => {
       if (event.isMainFrame || !event.url.startsWith('dragon-preview://test/')) event.preventDefault();
     });
-    await this.window.loadURL(DASHBOARD_URL);
-    if (!this.stopping && !this.window.isDestroyed()) this.window.show();
+    // 最小化、最大化或全屏期间推迟的工作区调整，在恢复常规窗口时补做。
+    const fit = () => this.fitWindow(window);
+    for (const event of ['restore', 'unmaximize', 'leave-full-screen']) window.on(event, fit);
+    let displayId = display.id;
+    window.on('moved', () => {
+      const next = screen.getDisplayMatching(window.getBounds()).id;
+      if (next !== displayId) { displayId = next; fit(); }
+    });
+    screen.on('display-removed', fit);
+    screen.on('display-metrics-changed', fit);
+    window.once('closed', () => {
+      screen.removeListener('display-removed', fit);
+      screen.removeListener('display-metrics-changed', fit);
+      if (this.window === window) { this.window = null; this.opening = null; }
+    });
+    this.opening = window.loadURL(DASHBOARD_URL).then(() => {
+      if (!this.stopping && !window.isDestroyed()) {
+        recoverWindowRenderer(window, DASHBOARD_URL, () => this.stopping);
+        window.show();
+      }
+    }).catch(error => {
+      if (!window.isDestroyed()) { window.destroy(); throw error; }
+    }).finally(() => {
+      if (this.window === window) this.opening = null;
+    });
+    return this.opening;
   }
   // 选定目录优先；未固定时跟随当前前台 Codex，切到其他应用时保留最近实例。
   selected() {
@@ -254,9 +303,8 @@ export class Dashboard {
     this.primary.instanceId = selected?.id;
     this.primary.instanceName = selected ? instanceLabel(selected, settings) : undefined;
     this.primary.home = selected?.home;
-    const primaryProcess =
-      this.monitor.processes.find((p) => p.home === selected?.home && p.frontmost) ||
-      this.monitor.processes.find((p) => p.home === selected?.home);
+    // 共用账户目录的多个进程失去前台时，继续跟随刚才使用的那一个。
+    const primaryProcess = followProcess(this.monitor.processes, selected?.home, this.primary.followPID);
     this.primary.followPID = primaryProcess?.pid;
     const extra =
       settings.multiplePets && settings.mode === 'follow'
@@ -285,7 +333,9 @@ export class Dashboard {
         pet.home = i.home;
         pet.followPID = process.pid;
         this.pets.set(process.pid, pet);
-        await pet.start();
+        // 附属角色只完成一半加载时回收已创建的窗口，下次同步仍可重新创建该实例。
+        try { await pet.start(); }
+        catch (error) { this.pets.delete(process.pid); await pet.stop(); throw error; }
       }
     if (this.stopping || this.monitor.stopped) return;
     for (const pet of [this.primary, ...this.pets.values()]) {
@@ -340,6 +390,7 @@ export class Dashboard {
     const settings = this.monitor.settings;
     if (!settings) return;
     for (const pet of [this.primary, ...this.pets.values()]) {
+      if (pet.stopping) continue;
       pet.setFollowMode(settings.mode === 'follow');
       if (settings.mode === 'desktop') {
         if (pet.suppressedByFollow || pet.followTarget) {
@@ -353,30 +404,25 @@ export class Dashboard {
         continue;
       }
       const frame = codexWindowFrame(this.monitor.processes.find((p) => p.pid === pet.followPID));
-      pet.followFrame(frame, settings.followOffsets[pet.home] || { x: 1, y: 1 }, {
+      pet.followFrame(frame, this.pendingFollowOffsets.get(pet.home) || settings.followOffsets[pet.home] || { x: 1, y: 1 }, {
         order: this.monitor.windowOrder, topmost: this.monitor.topmostWindows, normalWindows: this.monitor.normalWindows,
       });
       pet.syncPrayerWave();
     }
   }
-  // 跟随模式中的拖拽保存窗口内相对锚点，屏幕缩放不会破坏用户意图。
-  onDrag(pet) {
-    const frame = pet.followTarget;
-    if (this.monitor.stopped || this.monitor.settings.mode !== 'follow' || !frame || !pet.home) return;
+  // 磁盘队列可能被表单保存占用；快照优先使用最新操作，较早完成的写入不能撤销后一次拖动。
+  saveFollowOffset(pet, offset) {
+    if (this.monitor.stopped || this.monitor.settings.mode !== 'follow' || !pet.home) return;
     const home = pet.home;
-    const x = Math.max(
-        0,
-        Math.min(1, (pet.character.x - frame.x) / Math.max(1, frame.width - pet.character.width)),
-      ),
-      y = Math.max(
-        0,
-        Math.min(1, (pet.character.y - frame.y) / Math.max(1, frame.height - pet.character.height)),
-      );
+    this.pendingFollowOffsets.set(home, offset);
     void this.monitor
       .saveSettings((current) => ({
         ...current,
-        followOffsets: { ...current.followOffsets, [home]: { x, y } },
-      }))
+        followOffsets: { ...current.followOffsets, [home]: offset },
+      }), { refreshUsage: false })
+      .then(() => {
+        if (this.pendingFollowOffsets.get(home) === offset) this.pendingFollowOffsets.delete(home);
+      })
       .catch(() => {
         this.monitor.nativeError = '跟随位置暂未保存，请检查应用数据目录';
         this.monitor.publish();
@@ -504,7 +550,7 @@ export class Dashboard {
     if (command === 'refresh') return this.monitor.refreshAll();
     if (command === 'report') return this.monitor.request('report', { filter: value || {} });
     if (command === 'focus') {
-      this.monitor.focus(value);
+      this.monitor.focus(value, this.primary.followPID);
       return true;
     }
     if (command === 'permission') {

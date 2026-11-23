@@ -13,6 +13,7 @@ import { normalizeQuota, AlertTracker } from '../core/quota.js';
 import { dayKey, midnight, nextDay } from '../shared/time.js';
 import { digest } from '../core/usage-parser.js';
 import { nativeBridgePath } from '../core/platform.js';
+import { followProcess } from '../shared/follow-window.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const QUOTA_FRESH_MS = 120000;
 // 缺少本地程序时只重查安装状态，避免套用远端请求的分钟级退避。
@@ -101,7 +102,8 @@ export class Monitor extends EventEmitter {
   }
   // Native 桥只发送几何与必要连接信息，stderr 不保存潜在进程环境。
   startNative() {
-    if (this.stopped) return;
+    if (this.stopped || this.native) return;
+    clearTimeout(this.nativeRetry);
     this.native = spawn(nativeBridgePath(ROOT), process.platform === 'win32' ? ['--owner', String(process.pid)] : [], {
       windowsHide: true,
       stdio: [process.platform === 'win32' ? 'pipe' : 'ignore', 'pipe', 'ignore'],
@@ -128,16 +130,21 @@ export class Monitor extends EventEmitter {
         } catch {}
       }
     });
-    this.native.on('error', () => {
-      this.nativeError = '窗口桥不可用，统计仍可使用';
+    // 启动失败可能只发 error 和 close，已经运行的桥则会退出；对同一条连接只收起和重连一次。
+    const disconnected = () => {
+      if (this.stopped || this.native !== bridge) return;
+      this.native = null;
+      this.nativeError = '窗口桥暂不可用，正在恢复';
+      this.processes = this.processes.map(row => ({ ...row, windows: [], frontmost: false }));
+      this.windowOrder = [];
+      this.topmostWindows = [];
+      this.normalWindows = [];
+      this.emit('windows', { processes: this.processes, windowOrder: [], topmostWindows: [], normalWindows: [] });
       this.publish();
-    });
-    this.native.on('exit', () => {
-      if (!this.stopped) {
-        this.nativeError = '窗口桥已退出，正在恢复';
-        this.nativeRetry = setTimeout(() => this.startNative(), 5000);
-      }
-    });
+      this.nativeRetry = setTimeout(() => this.startNative(), 5000);
+    };
+    bridge.once('error', disconnected);
+    bridge.once('close', disconnected);
   }
   // 层级请求复用原生桥管道，编号由原生端再次核对所属进程；断线或背压时等下一份心跳重试。
   stackWindows(host, overlays, owned) {
@@ -721,9 +728,9 @@ export class Monitor extends EventEmitter {
     return this.settings;
   }
   // 聚焦通过 PID 进行，不依据易变化的窗口标题。
-  focus(id) {
+  focus(id, previousPid) {
     const instance = this.instances.find((i) => i.id === id);
-    const proc = this.processes.find((p) => p.home === instance?.home);
+    const proc = instance && followProcess(this.processes, instance.home, previousPid);
     if (proc)
       spawn(nativeBridgePath(ROOT), ['--focus', String(proc.pid)], {
         windowsHide: true,

@@ -1,9 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { followWindowFrame, followWindowStack, followWindowFloating } from '../src/shared/follow-window.js';
+import { followWindowFrame, followWindowStack, followWindowFloating, followDisplayFrame } from '../src/shared/follow-window.js';
 
 const main = { id: 1, x: 200, y: 125, width: 1100, height: 792 };
 const picker = { id: 2, x: 310, y: 297, width: 880, height: 448 };
+
+// 两块模拟显示器分别为 125% 和 200%，包含负坐标以及物理窗口跨过屏幕边界的情况。
+test('Windows 跨 DPI 按目标屏原点投影视窗，移出所有显示器后失效', () => {
+  const left = { scaleFactor: 1.25, bounds: { x: -1280, y: 0, width: 1280, height: 800 } };
+  const right = { scaleFactor: 2, bounds: { x: 0, y: 0, width: 1440, height: 900 } };
+  const screen = {
+    getAllDisplays: () => [left, right],
+    getDisplayNearestPoint: ({x}) => x < 0 ? left : right,
+    screenToDipPoint: ({x, y}) => ({ x: Math.round(x / (x < 0 ? 1.25 : 2)), y: Math.round(y / (x < 0 ? 1.25 : 2)) }),
+    dipToScreenRect: (_, rect) => rect === left.bounds ? { x: -1600, y: 0, width: 1600, height: 1000 } : { x: 0, y: 0, width: 2880, height: 1800 },
+  };
+  const frame = { id: 11, physicalBounds: { x: -1100, y: 100, width: 1750, height: 800 } };
+  const start = followDisplayFrame(frame, { x: 0, y: 0 }, screen);
+  const end = followDisplayFrame(frame, { x: 1, y: 1 }, screen);
+  assert.equal(start.display, left);
+  assert.equal(start.frame.x, -880);
+  assert.equal(end.display, right);
+  assert.equal(end.frame.x + end.frame.width, 325);
+  assert.equal(end.frame.y + end.frame.height, 450);
+  assert.equal(followDisplayFrame({ ...frame, physicalBounds: { ...frame.physicalBounds, y: 2000 } }, { x: 1, y: 1 }, screen), null);
+});
 
 // 前台宿主不再依赖每次点击后的补偿排序；角色自身及其他实例角色不能改变前台判断。
 test('macOS 未被遮挡的宿主保持浮动层，跨屏窗口与角色自身不触发层级切换', () => {
