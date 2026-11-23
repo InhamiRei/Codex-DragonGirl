@@ -559,9 +559,11 @@
                   </div>
                 </article>
                 <article class="panel settings-panel">
-                  <div class="panel-heading sound-library-heading">
+                  <div class="panel-heading">
                     <div><h2>音效库</h2><p>从本地音频裁剪片段，供任意事件使用。</p></div>
-                    <button id="import-audio" type="button" class="primary">导入音效</button>
+                    <div class="setting-control">
+                      <button id="import-audio" type="button" class="primary">导入音效</button>
+                    </div>
                   </div>
                   <details class="sound-catalog" id="sound-catalog">
                     <summary>浏览全部音效 <span id="sound-library-count"></span></summary>
@@ -869,7 +871,7 @@
                       <label for="price-flex">弹性模式倍率</label
                       ><input id="price-flex" type="number" min="0" step="0.1" value="1" />
                     </div>
-                    <div class="price-submit span-two">
+                    <div class="setting-control price-submit span-two">
                       <button type="button" id="save-price">添加或更新价格</button>
                     </div>
                   </div>
@@ -887,7 +889,9 @@
                       <h2>实例管理</h2>
                       <p>设置显示名称和可见性，不修改原应用的数据。</p>
                     </div>
-                    <button type="button" id="settings-add-home">添加目录</button>
+                    <div class="setting-control">
+                      <button type="button" id="settings-add-home">添加目录</button>
+                    </div>
                   </div>
                   <div class="instance-table-heading">
                     <span>实例与目录</span><span>显示名称</span><span>操作</span>

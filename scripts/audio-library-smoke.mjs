@@ -277,16 +277,18 @@ try {
   assert.ok(full.tail, '三分钟事件音效没有播放到末尾');
   await assert.rejects(page.evaluate((id) => window.dragonGirl.command('remove-audio-clip', id), id), /正在使用/);
 
-  // 在界面最窄和常规尺寸检查修复行的间距，以及与总音量控件列的水平对齐。
+  // 库内有滚动条时，内置与导入行的首个按钮仍与卡片操作及总音量从同一列开始。
   for (const width of [880, 1160]) {
     await application.evaluate((_, width) => globalThis.__dragonGirlApp.dashboard.window.setSize(width, 750), width);
     await page.waitForFunction((width) => Math.abs(window.innerWidth - width) < 4, width);
     const aligned = await page.evaluate(() => {
       const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
-      const repair = rect('#install-audio'), text = rect('#audio-library-status'), master = rect('#sound-volume');
-      return Math.abs(repair.left - master.left) < 1 && repair.left - text.right >= 20;
+      const master = rect('#sound-volume'), text = rect('#audio-library-status');
+      const controls = ['#import-audio', '#install-audio', 'li[data-clip-id="ya1"] button', 'li[data-clip-id^="clip-"] button'];
+      return controls.every((selector) => Math.abs(rect(selector).left - master.left) < 1)
+        && rect('#install-audio').left - text.right >= 20;
     });
-    assert.ok(aligned, '修复按钮未对齐或与说明挤在一起');
+    assert.ok(aligned, '音效库的操作按钮未对齐或与说明挤在一起');
   }
   await page.locator('#import-audio').scrollIntoViewIfNeeded();
   await page.locator('#import-audio').locator('xpath=ancestor::article').screenshot({ path: path.join(root, '.artifacts/sound-library.png') });

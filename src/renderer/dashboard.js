@@ -950,7 +950,10 @@ function renderInstanceSettings() {
       markDirty();
       toast('保存后重新发现隐藏实例');
     };
-    box.append(reset);
+    // 恢复操作与标题里的「添加目录」共用偏好设置的操作列。
+    const actions = node('div', 'setting-control');
+    actions.append(reset);
+    box.append(actions);
   }
 }
 // 价格只按明确填写的模型匹配，不将未知内部模型猜成其他公开模型。
@@ -966,9 +969,12 @@ function renderPrices() {
       markDirty();
       renderPrices();
     };
+    // 价格列表的操作与上方提交按钮从同一列开始。
+    const actions = node('div', 'setting-control');
+    actions.append(remove);
     row.append(
       node('span', '', `${model} · 输入 ${p.input} / 缓存 ${p.cached} / 输出 ${p.output}`),
-      remove,
+      actions,
     );
     box.append(row);
   }

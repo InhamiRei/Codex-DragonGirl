@@ -1050,7 +1050,9 @@ td:nth-child(6) {
 }
 .setting-control {
   min-width: 0;
-  width: 100%;
+  width: min(100%, var(--control-width));
+  margin-inline-start: auto;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -1230,9 +1232,7 @@ input[type='range']::-webkit-slider-thumb {
   grid-column: span 2;
 }
 .price-submit {
-  display: flex;
-  align-items: flex-end;
-  justify-content: flex-end;
+  align-self: end;
 }
 .price-item {
   display: flex;
@@ -1259,9 +1259,11 @@ input[type='range']::-webkit-slider-thumb {
 }
 .instance-table-heading,
 .instance-setting {
+  --instance-action-width: 64px;
+  --instance-gap: 16px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 180px 64px;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) calc(var(--control-width) - var(--instance-action-width) - var(--instance-gap)) var(--instance-action-width);
+  gap: var(--instance-gap);
   align-items: center;
 }
 .instance-table-heading {
@@ -1297,11 +1299,11 @@ input[type='range']::-webkit-slider-thumb {
   font-size: 13px;
 }
 .instance-setting button {
-  width: 64px;
+  width: 100%;
   padding-inline: 8px;
   font-size: 12px;
 }
-#instance-settings > button {
+#instance-settings > .setting-control {
   margin-top: 20px;
 }
 .save-bar {

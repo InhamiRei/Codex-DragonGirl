@@ -16,7 +16,12 @@ await fs.mkdir(data, { recursive: true });
 // 用旧版已保存的默认模板启动，验证覆盖安装后能直接迁移用量单位。
 await fs.writeFile(
   path.join(data, 'settings.json'),
-  JSON.stringify({ bubbleTemplate: '{实例} · {套餐}\n{额度}\n今日 {今日用量} 词元 · {任务状态}' }),
+  JSON.stringify({
+    bubbleTemplate: '{实例} · {套餐}\n{额度}\n今日 {今日用量} 词元 · {任务状态}',
+    // 加入隐藏目录和自定义价格，覆盖有数据时才显示的操作。
+    hiddenHomes: [path.join(user, 'hidden-instance')],
+    prices: { '对齐测试模型': { input: 1, cached: 0.1, output: 2 } },
+  }),
 );
 const homes = [
   path.join(user, '.codex'),
@@ -102,6 +107,31 @@ async function choose(selector, choice) {
   assert.equal(await popup.isVisible(), false);
 }
 
+// 用「导出设置」实测的左边缘核对各分类按钮，双按钮行以整组首个按钮为准。
+async function verifySettingsActionColumn(width) {
+  await page.locator('[data-settings-tab="data"]').click();
+  const actionLeft = (await page.locator('#export-settings').boundingBox()).x;
+  for (const [tab, names] of Object.entries({
+    data: ['备份账本', '备份并重建', '导出诊断'],
+    sound: ['导入音效', '修复原声音效'],
+    instances: ['添加目录', '恢复隐藏实例'],
+    statistics: ['添加或更新价格', '移除'],
+    appearance: ['导入图片', '检查窗口权限'],
+  })) {
+    await page.locator(`[data-settings-tab="${tab}"]`).click();
+    const pane = page.locator(`[data-settings-pane="${tab}"]`);
+    for (const name of names) {
+      const button = await pane.getByRole('button', { name, exact: true }).boundingBox();
+      assert.ok(button && Math.abs(button.x - actionLeft) < 1,
+        `${width}px 窗口中「${name}」的左缘为 ${button?.x}，应与操作列的 ${actionLeft} 对齐`);
+    }
+    if (tab === 'instances') {
+      const alias = await pane.locator('.instance-setting input').first().boundingBox();
+      assert.ok(Math.abs(alias.x - actionLeft) < 1, '实例别名与隐藏按钮组成的操作组未对齐');
+    }
+  }
+}
+
 // 在宽窄窗口中检查导航、设置行与弹层，覆盖用户反馈的对齐和定位问题。
 async function verifyLayout() {
   await page.locator('.main-nav [data-tab="settings"]').click();
@@ -118,6 +148,7 @@ async function verifyLayout() {
       () => page.evaluate((width) => Math.abs(window.innerWidth - width) < 4, size[0]),
       '窗口没有调整到验收尺寸',
     );
+    await verifySettingsActionColumn(size[0]);
     await page.locator('[data-settings-tab="appearance"]').click();
     const geometry = await page.evaluate(() => {
       const nav = [...document.querySelectorAll('.main-nav button')].map((b) => ({
