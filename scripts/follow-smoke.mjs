@@ -145,6 +145,40 @@ async function expectStack(host, cover, covered, bubble = true, raised = !covere
   catch (error) { throw new Error(`${error.message}\n${JSON.stringify(last)}`); }
 }
 
+// 让同一 Codex 进程的置顶工具窗覆盖真实桌宠，工具窗在屏幕上仍可见时也只能恢复主窗口。
+async function checkWindowsToolWindow(host, expectPixels) {
+  await send(host, 'topmost-tool');
+  const tool = JSON.parse(await fs.readFile(path.join(host.directory, 'tool-window.json'), 'utf8'));
+  assert.ok(tool.extendedStyle & 0x80, '夹具必须具有真实的 WS_EX_TOOLWINDOW 样式');
+  assert.equal(tool.visibleOwner, false, '工具窗不能靠可见的所有者被排除');
+  assert.ok(tool.width >= 400 && tool.height >= 300, '工具窗必须达到宿主候选的尺寸门槛');
+  const layers = [tool.id, ids.bubble, ids.character, host.id];
+  await until(() => {
+    const state = systemState(host.child.pid);
+    const order = state.order.filter(id => layers.includes(id));
+    return state.host?.windows.length === 1 && String(state.host.windows[0].id) === host.id
+      && state.raised.includes(tool.id) && !state.raised.includes(host.id)
+      && layers.every((id, i) => order[i] === id);
+  }, '同进程工具窗应盖住气泡和角色，普通主窗仍应是唯一跟随目标');
+  await expectPixels('FF8C00', 'FF8C00');
+
+  // 只剩工具窗可见时先收起桌宠；聚焦入口要从最小化恢复主窗，即使系统拒绝抢占键盘焦点。
+  await send(host, 'minimize');
+  await until(async () => {
+    const state = systemState(host.child.pid);
+    const { windows } = await companionState();
+    return state.order.includes(tool.id) && state.host?.windows.length === 0
+      && !windows.character.visible && !windows.bubble.visible;
+  }, '主窗最小化后龙娘仍跟随工具窗');
+  const focus = spawnSync(bridge, ['--focus', String(host.child.pid)], { windowsHide: true, timeout: 10000 });
+  assert.ifError(focus.error);
+  await until(async () => {
+    const state = await companionState();
+    return state.windows.character.visible && String(state.follow.frame?.id) === host.id;
+  }, '聚焦实例时未从工具窗恢复到原来的主窗');
+  await send(host, 'close-panel');
+}
+
 // 两个夹具始终各露出一部分，复现用户直接点击切换。取两个合成后的屏幕像素验证半遮挡。
 async function checkWindowsSwitching(host, cover) {
   const area = await application.evaluate(({ screen }) => screen.dipToScreenRect(null, screen.getPrimaryDisplay().workArea));
@@ -222,6 +256,8 @@ async function checkWindowsSwitching(host, cover) {
     await expectPixels(petColor, petColor);
     await sizeCover(hostX + Math.round(hostWidth / 2));
   }
+  await checkWindowsToolWindow(host, expectPixels);
+  await expectPixels(petColor, petColor);
   // 从透明角落点到底下的宿主，再在脸部点开气泡。两次都实际发送系统鼠标事件。
   await application.evaluate(() => globalThis.__dragonGirlApp.companion.hideBubble());
   const probes = await application.evaluate(({ screen }) => {
@@ -378,8 +414,13 @@ try {
   await raise(host, cover);
   // Windows 用真实输入激活宿主，覆盖普通窗口置前权限限制，不能只验收后台窗口之间的排序。
   if (!isMac) {
+    // 先让标题栏露出，真实点击完成后回到普通层，从这里开始验证跟随和遮挡。
+    await send(host, 'topmost');
+    await until(() => systemState(host.child.pid).raised.includes(host.id), '测试宿主未进入置顶组');
     await send(host, 'click');
     await until(() => systemState(host.child.pid).host?.frontmost, '标题栏点击没有实际激活测试宿主');
+    await send(host, 'normal');
+    await until(() => !systemState(host.child.pid).raised.includes(host.id), '测试宿主未恢复普通层级');
   }
   await expectStack(host, cover, false);
   // 连续真实拖动并在松手后继续采样，不能只等最终恢复，也不能靠抢占键盘焦点来通过。
@@ -710,7 +751,8 @@ try {
   report.checks.push('震荡波放出时收起气泡、渐变波纹扫过宿主远角、鼠标穿透、结束和最小化清理');
   report.checks.push('特效位于角色后方、窗口桥中断立即收起并在自动重连后恢复');
   report.checks.push('同进程管理页遮挡角色与气泡并保留焦点');
-  if (!isMac) report.checks.push('Windows 大型非模态面板、阻塞对话框与最大化宿主聚焦', '真实点击透明角落交给宿主、脸部打开气泡');
+  if (!isMac) report.checks.push('Windows 大型非模态面板、阻塞对话框与最大化宿主聚焦', '真实点击透明角落交给宿主、脸部打开气泡',
+    '同进程置顶工具窗实际遮挡角色与气泡，主窗最小化时收起，聚焦恢复原主窗');
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
   await fs.writeFile(path.join(root, '.artifacts/follow-report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
