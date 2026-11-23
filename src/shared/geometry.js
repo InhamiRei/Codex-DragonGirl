@@ -134,50 +134,61 @@ export function bubbleDimensions(characterWidth = CHARACTER_WIDTH, workArea) {
   };
 }
 
-// 气泡中心靠近头侧；边缘空间不足时镜像或翻到下方。原生坐标、泡链边距都使用逻辑像素。
+// 按上方摆放的设计坐标计算椭圆与泡链。下方摆放沿画布垂直镜像，主进程与绘制端共用同一个弧线落点。
+export function bubbleOutline({ width, height }, tailX) {
+  const { inset, stroke, thoughtGap } = BUBBLE_FRAME;
+  const centerX = width / 2, centerY = inset + (height - BUBBLE_FRAME.height) / 2;
+  const radiusX = Math.max(1, (width - BUBBLE_FRAME.width - stroke) / 2);
+  const radiusY = Math.max(1, (height - BUBBLE_FRAME.height - stroke) / 2);
+  const span = Math.max(0, radiusX - 20);
+  const anchorX = clamp(tailX, centerX - span, centerX + span);
+  const arc = radiusY * Math.sqrt(Math.max(0, 1 - ((anchorX - centerX) / radiusX) ** 2));
+  const tailTop = centerY + arc + stroke / 2 + thoughtGap;
+  return { centerX, centerY, radiusX, radiusY, anchorX, tailTop };
+}
+
+// 小圆泡的末端指向头侧，反推泡链在椭圆上的起点；桌面边缘夹紧窗口后也要重新换算。
+function bubbleTailX(character, horizontal, x, width, scale) {
+  const right = horizontal === 'right';
+  const tip = character.x + character.width * (right ? 2 / 3 : 1 / 3);
+  const reach = (BUBBLE_FRAME.thoughtWidth - BUBBLE_FRAME.thoughtRoot) * scale;
+  const margin = (BUBBLE_FRAME.inset + BUBBLE_FRAME.stroke / 2 + 20) * scale;
+  const outerMargin = Math.max(margin, reach);
+  return clamp(tip - x + (right ? reach : -reach), right ? outerMargin : margin, width - (right ? margin : outerMargin));
+}
+
+// 优先把气泡贴近头像上方，空间不足时依次考虑下方和侧面，给两颗小泡以及角色回弹留出净空。
 export function placeBubble(character, workArea, size = bubbleDimensions(character.width, workArea)) {
   const width = Math.min(size.width, Math.max(1, workArea.width - 8));
   const height = Math.min(size.height, Math.max(1, workArea.height - 8));
   const scale = size.scale ?? 1;
   const minimumX = workArea.x + 4;
   const maximumX = workArea.x + workArea.width - width - 4;
-  const leftAnchor = character.x - character.width * .12;
-  const rightAnchor = character.x + character.width * 1.12;
-  const horizontal = leftAnchor - width / 2 < minimumX && rightAnchor - width / 2 <= maximumX
-    ? 'right' : 'left';
-  const anchor = horizontal === 'left' ? leftAnchor : rightAnchor;
-  // 主体更偏向头部左侧，独立思绪泡继续指向头部。
-  const above = character.y - height + BUBBLE_FRAME.thoughtSpace * scale + character.height * .07;
-  const below = character.y + character.height * .93 - BUBBLE_FRAME.thoughtSpace * scale;
-  const side = above >= workArea.y + 4 ? 'above' : 'below';
-  const x = Math.round(
-    clamp(
-      anchor - width / 2,
-      minimumX,
-      maximumX,
-    ),
-  );
-  const y = Math.round(
-    clamp(
-      side === 'above' ? above : below,
-      workArea.y + 4,
-      workArea.y + workArea.height - height - 4,
-    ),
-  );
-  // 小泡单独锚定头部附近，向头部靠近时不受主体横移影响。
-  const thoughtAnchor = horizontal === 'left'
-    ? character.x + character.width * .08 : character.x + character.width * .92;
-  const anchorMargin = (BUBBLE_FRAME.inset + BUBBLE_FRAME.stroke / 2 + 20) * scale;
-  // 短句的窗口更窄，额外限制泡链靠外的一侧，避免最小圆泡被原生窗口裁掉。
-  const thoughtReach = (BUBBLE_FRAME.thoughtWidth - BUBBLE_FRAME.thoughtRoot) * scale;
-  const minimumTail = horizontal === 'right' ? Math.max(anchorMargin, thoughtReach) : anchorMargin;
-  const maximumTail = horizontal === 'left' ? Math.min(width - anchorMargin, width - thoughtReach) : width - anchorMargin;
-  return {
-    bounds: { x, y, width, height },
-    side,
-    horizontal,
-    tailX: clamp(thoughtAnchor - x, minimumTail, maximumTail),
-  };
+  const minimumY = workArea.y + 4;
+  const maximumY = workArea.y + workArea.height - height - 4;
+  const leftRoom = character.x - minimumX;
+  const rightRoom = maximumX + width - character.x - character.width;
+  let horizontal = leftRoom < width / 2 + character.width * .12 && rightRoom > leftRoom ? 'right' : 'left';
+  const anchor = character.x + character.width * (horizontal === 'left' ? -.12 : 1.12);
+  let x = Math.round(clamp(anchor - width / 2, minimumX, maximumX));
+  let tailX = bubbleTailX(character, horizontal, x, width, scale);
+
+  // 按实际描边的最远端留白。缩小档的气泡和角色使用不同缩放曲线，不能用角色高度估算泡尾长度。
+  const outline = bubbleOutline({ width: width / scale, height: height / scale }, tailX / scale);
+  const paintedBottom = Math.max(height - BUBBLE_FRAME.thoughtSpace * scale, (outline.tailTop + BUBBLE_FRAME.thoughtHeight) * scale);
+  const gap = Math.max(4, 6 * scale);
+  const above = Math.floor(character.y - paintedBottom - gap);
+  const below = Math.ceil(character.y + character.height + gap - (height - paintedBottom));
+  let side = above >= minimumY ? 'above' : 'below';
+  if (above < minimumY && below > maximumY) {
+    // 上下都放不下时，把完整气泡移向余量较大的一侧，避免窗口夹紧后反压到头部。
+    horizontal = rightRoom > leftRoom ? 'right' : 'left';
+    x = Math.round(clamp(horizontal === 'left' ? character.x - width - gap : character.x + character.width + gap, minimumX, maximumX));
+    tailX = bubbleTailX(character, horizontal, x, width, scale);
+    side = character.y - minimumY > maximumY + height - character.y - character.height ? 'above' : 'below';
+  }
+  const y = clamp(side === 'above' ? above : below, minimumY, maximumY);
+  return { bounds: { x, y, width, height }, side, horizontal, tailX };
 }
 
 // 原生光标轮询也使用同一个矩形判定，兼容负坐标的副显示器。

@@ -1,4 +1,4 @@
-import { BUBBLE_FRAME, BUBBLE_SIZE } from '../shared/geometry.js';
+import { BUBBLE_FRAME, BUBBLE_SIZE, bubbleOutline } from '../shared/geometry.js';
 import { quotaResetTime } from '../shared/time.js';
 import { tokenDisplayParts } from '../shared/presentation.js';
 
@@ -237,16 +237,12 @@ function scrollFromKeyboard(event) {
   return true;
 }
 
-// 主体只绘制完整椭圆，两颗独立小泡沿下缘定位，保持原有位置和间距。
+// 用原生摆放时同一份椭圆和泡链几何绘制，上下翻转时整套轮廓一起镜像。
 function drawOutline(model) {
-  const style = getComputedStyle(bubble);
-  const width = Number.parseFloat(style.width);
-  const height = Number.parseFloat(style.height);
-  const stroke = BUBBLE_FRAME.stroke;
-  const centerX = bubble.offsetLeft + width / 2;
-  const centerY = bubble.offsetTop + height / 2;
-  const radiusX = width / 2 - stroke / 2;
-  const radiusY = height / 2 - stroke / 2;
+  const shape = bubbleOutline(BUBBLE_SIZE, model.tailX / model.scale);
+  const { centerX, radiusX, radiusY, anchorX, tailTop } = shape;
+  const below = model.side === 'below';
+  const centerY = below ? BUBBLE_SIZE.height - shape.centerY : shape.centerY;
   outlinePath.setAttribute('d', [
     `M ${centerX} ${centerY - radiusY}`,
     `A ${radiusX} ${radiusY} 0 0 1 ${centerX + radiusX} ${centerY}`,
@@ -255,16 +251,9 @@ function drawOutline(model) {
     `A ${radiusX} ${radiusY} 0 0 1 ${centerX} ${centerY - radiusY} Z`,
   ].join(' '));
   outlinePath.removeAttribute('transform');
-  // 主进程传来逻辑像素，先还原到设计画布坐标，思绪泡只随外层缩放一次。
-  const anchorX = Math.max(centerX - radiusX + 20, Math.min(centerX + radiusX - 20, model.tailX / model.scale));
-  const arc = radiusY * Math.sqrt(Math.max(0, 1 - ((anchorX - centerX) / radiusX) ** 2));
-  const below = model.side === 'below';
-  const edge = centerY + (below ? -arc : arc);
   const rightSide = model.horizontal === 'right';
   tail.style.left = `${rightSide ? anchorX + BUBBLE_FRAME.thoughtRoot - BUBBLE_FRAME.thoughtWidth : anchorX - BUBBLE_FRAME.thoughtRoot}px`;
-  tail.style.top = `${below
-    ? edge - stroke / 2 - BUBBLE_FRAME.thoughtGap - BUBBLE_FRAME.thoughtHeight
-    : edge + stroke / 2 + BUBBLE_FRAME.thoughtGap}px`;
+  tail.style.top = `${below ? BUBBLE_SIZE.height - tailTop - BUBBLE_FRAME.thoughtHeight : tailTop}px`;
 }
 
 // 内容版本只负责排版，显示轮次才负责入场动画；可见内容刷新始终在原位完成。

@@ -12,6 +12,7 @@ const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-bubble-'));
 const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
 let application, page;
 const results = [];
+const clearances = [];
 const fixtureNow = Date.parse('2026-11-05T10:00:00+08:00');
 
 // 测量回传完成后再检查，避免透明首帧被误认为内容没有溢出。
@@ -43,6 +44,29 @@ async function launch(scale) {
     const companion = globalThis.__dragonGirlTest;
     clearTimeout(companion.cursorTimer);
     companion.pollCursor = () => {};
+  });
+}
+
+// 从两个隔离窗口的透明截图读取实际着色边界，包含龙角、椭圆描边和两颗小泡。
+async function paintedGap() {
+  return application.evaluate(async ({ nativeImage }) => {
+    const windows = globalThis.__dragonGirlTest.windows;
+    const [dragon, bubble] = await Promise.all(['character', 'bubble'].map(async view => {
+      const win = windows.get(view), bounds = win.getContentBounds();
+      // 以图片实际像素取样，再映射回窗口的逻辑坐标，同一断言也适用于高 DPI。
+      const image = nativeImage.createFromBuffer((await win.capturePage()).toPNG());
+      const { width, height } = image.getSize(), pixels = image.toBitmap();
+      let left = width, top = height, right = -1, bottom = -1;
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        if (pixels[(y * width + x) * 4 + 3] < 32) continue;
+        left = Math.min(left, x); right = Math.max(right, x);
+        top = Math.min(top, y); bottom = Math.max(bottom, y);
+      }
+      if (right < left || bottom < top) throw new Error(view + ' 窗口没有可见像素');
+      return { left: bounds.x + left * bounds.width / width, right: bounds.x + (right + 1) * bounds.width / width,
+        top: bounds.y + top * bounds.height / height, bottom: bounds.y + (bottom + 1) * bounds.height / height };
+    }));
+    return Math.max(dragon.top - bubble.bottom, bubble.top - dragon.bottom, dragon.left - bubble.right, bubble.left - dragon.right);
   });
 }
 
@@ -258,7 +282,7 @@ try {
     const sentence = '今天也一起工作吧。';
     await show({ text: sentence });
     let previousLayout;
-    for (const petScale of [.5, .75, 1, 1.25, 1.5]) {
+    for (const petScale of [.5, .6, .75, 1, 1.25, 1.5]) {
       const target = await application.evaluate((_, value) => {
         const c = globalThis.__dragonGirlTest;
         c.setScale(value);
@@ -288,11 +312,27 @@ try {
       if (previousLayout) assert.ok(layout.width > previousLayout.width && layout.text > previousLayout.text
         && layout.inset > previousLayout.inset, '角色变大时气泡、字号和内边距没有同步放大');
       previousLayout = layout;
+      // 两侧屏幕边缘都复现小头像，150% 系统缩放放在顶部，检查气泡翻到角色下方时的净空。
+      if (scale !== 1 && petScale > .75) continue;
+      const atTop = scale === 1.5;
+      for (const edge of ['right', 'left']) {
+        await application.evaluate((_, { edge, atTop }) => {
+          const c = globalThis.__dragonGirlTest, area = c.display.workArea;
+          c.character.x = edge === 'left' ? area.x : area.x + area.width - c.character.width;
+          c.character.y = atTop ? area.y : area.y + area.height - c.character.height;
+          c.applyCharacter();
+        }, { edge, atTop });
+        const direction = edge === 'right' ? 'left' : 'right';
+        await page.waitForFunction(direction => document.body.dataset.horizontal === direction, direction);
+        const gap = await paintedGap();
+        assert.ok(gap >= 3, `气泡或泡尾进入龙娘轮廓：系统缩放 ${scale}，角色 ${petScale}，${edge}，描边间距 ${gap}`);
+        clearances.push({ scale, petScale, edge, atTop, gap });
+      }
     }
     await application.close(); application = null;
   }
-  await fs.writeFile(path.join(root, '.artifacts/bubble-scrollbar-report.json'), JSON.stringify({ passed: true, results }, null, 2));
-  console.log('气泡验证通过：四档显示比例、三组字体配置、双额度完整展示、无原生滚动条、长内容可滚动，语录重新计时、常驻与渲染层 Esc 处理。');
+  await fs.writeFile(path.join(root, '.artifacts/bubble-scrollbar-report.json'), JSON.stringify({ passed: true, results, clearances }, null, 2));
+  console.log(`气泡验收通过：${clearances.length} 组截图中角色与泡尾均有净空，四档显示比例、文字排版、滚动、计时与收起正常。`);
 } finally {
   if (application) await application.close().catch(() => {});
   await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

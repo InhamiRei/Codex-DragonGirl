@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { snapCharacter, constrainCharacter, capturePlacement, restorePlacement, characterSize,
-  resizeCharacter, placeBubble, bubbleDimensions, stageBounds, EDGE_MARGIN, BUBBLE_FRAME } from '../src/shared/geometry.js';
+  resizeCharacter, placeBubble, bubbleDimensions, bubbleOutline, stageBounds, EDGE_MARGIN, BUBBLE_FRAME } from '../src/shared/geometry.js';
 import { normalizeState } from '../src/shared/state.js';
 
 const display = { id: 1, workArea: { x: 0, y: 25, width: 1440, height: 850 } };
@@ -65,15 +65,28 @@ test('气泡默认靠近角色左上角，靠左边时镜像避让', () => {
   assert.equal(layout.side, 'above');
   assert.equal(layout.horizontal, 'left');
   assert.ok(Math.abs(layout.bounds.x + bubble.width / 2 - (character.x - character.width * .12)) < 1, '气泡中心应靠近头侧');
-  const thoughtAnchor = character.x + character.width * .08;
-  assert.ok(Math.abs(layout.bounds.x + layout.tailX - thoughtAnchor) < 1, '独立小泡应向右靠近头部');
-  const visibleBottom = layout.bounds.y + bubble.height - BUBBLE_FRAME.thoughtSpace;
-  const expectedBottom = character.y + character.height * .07;
-  assert.ok(Math.abs(visibleBottom - expectedBottom) < 1, '主体应整体向上微调');
+  const tip = layout.bounds.x + layout.tailX + BUBBLE_FRAME.thoughtWidth - BUBBLE_FRAME.thoughtRoot;
+  assert.ok(tip >= character.x + character.width / 4 && tip <= character.x + character.width / 3 + 1, '泡链末端应指向头侧');
+  const { tailTop } = bubbleOutline(bubble, layout.tailX);
+  const visibleBottom = layout.bounds.y + Math.max(bubble.height - BUBBLE_FRAME.thoughtSpace, tailTop + BUBBLE_FRAME.thoughtHeight);
+  assert.ok(character.y - visibleBottom >= 6 && character.y - visibleBottom < 7, '最靠近头部的描边应留出紧凑的净空');
   const mirrored = placeBubble({ ...character, x: 0 }, display.workArea, bubble);
   assert.equal(mirrored.horizontal, 'right');
   assert.ok(mirrored.bounds.x + bubble.width / 2 > character.width);
   assert.ok(mirrored.bounds.x >= 4 && mirrored.bounds.x + bubble.width <= 1436);
+});
+
+// 低矮副屏上方和下方都放不下时，两种镜像方向都能把气泡放到角色旁边。
+test('上下空间不足时选能容纳气泡的一侧，窗口夹紧后也不碰角色', () => {
+  const area = { x: -1180, y: -310, width: 1000, height: 320 };
+  for (const offset of [80, 640]) {
+    const character = { ...size, x: area.x + offset, y: area.y + 45 };
+    const { bounds, horizontal } = placeBubble(character, area);
+    assert.equal(horizontal, offset === 80 ? 'right' : 'left');
+    const gap = horizontal === 'right' ? bounds.x - (character.x + character.width) : character.x - (bounds.x + bounds.width);
+    assert.ok(gap >= 6 && gap <= 7);
+    assert.ok(bounds.y >= area.y + 4 && bounds.y + bounds.height <= area.y + area.height - 4);
+  }
 });
 
 // 角色在各个大小下使用统一比例缩放气泡；小屏幕按短边限制，不挤扁轮廓或裁掉尾巴。
