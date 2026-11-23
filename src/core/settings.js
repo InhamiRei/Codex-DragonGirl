@@ -1,4 +1,4 @@
-import { AUDIO_GROUPS, DEFAULT_EVENT_SOUNDS, audioFile } from '../shared/audio-library.js';
+import { DEFAULT_EVENT_SOUNDS, eventAudioId } from '../shared/audio-library.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { characterById } from '../shared/characters.js';
@@ -24,7 +24,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
   subagentNotifications: false,
   soundEnabled: true,
   volume: 0.35,
-  soundTheme: 'duck',
   eventVolumes: {
     press: 1,
     release: 1,
@@ -115,7 +114,6 @@ export function normalizeSettings(value = {}) {
   ])
     d[key] = number(v[key], d[key], low, high);
   if (['desktop', 'follow'].includes(v.mode)) d.mode = v.mode;
-  if (AUDIO_GROUPS.some((group) => group.id === v.soundTheme)) d.soundTheme = v.soundTheme;
   if (['USD', 'CNY'].includes(v.currency)) d.currency = v.currency;
   for (const key of ['selectedHome', 'characterAsset', 'bubbleTemplate'])
     if (typeof v[key] === 'string') d[key] = v[key].slice(0, 2000);
@@ -165,8 +163,7 @@ export function normalizeSettings(value = {}) {
   );
   for (const key of SOUND_EVENTS) {
     d.eventVolumes[key] = number(v.eventVolumes?.[key], d.eventVolumes[key], 0, 1);
-    if (key !== 'press' && key !== 'release' && audioFile(v.eventSounds?.[key]))
-      d.eventSounds[key] = v.eventSounds[key];
+    d.eventSounds[key] = eventAudioId(key, v);
   }
   // 升级旧默认音色时采用原声的成对等音量设置，保留用户其他音量偏好。
   if (

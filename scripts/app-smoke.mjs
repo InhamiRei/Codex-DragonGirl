@@ -614,13 +614,15 @@ async function verifyDashboard() {
   await page.locator('input[name="multiplePets"]').check();
   await page.locator('[data-settings-tab="sound"]').click();
   await until(async () => /应用已内置原声音效/.test(await page.locator('#audio-library-status').textContent()), '新安装未显示内置音效已就绪');
-  await choose('select[name="soundTheme"]', 'fx1');
+  await choose('#event-audio-press', 'd1');
+  await choose('#event-audio-release', 'ya2');
   await page.locator('#save-settings').click();
   await until(
-    () => application.evaluate(() => globalThis.__dragonGirlApp.monitor.settings.soundTheme === 'fx1'),
+    () => application.evaluate(() => globalThis.__dragonGirlApp.monitor.settings.eventSounds.press === 'd1'),
     '设置保存失败',
   );
-  assert.equal(await page.locator('select[name="soundTheme"] option').count(), 2);
+  assert.equal(await page.locator('#event-audio-release').inputValue(), 'ya2');
+  assert.equal(await page.locator('#sound-rows select').count(), 7);
   assert.equal(await page.locator('#event-audio-complete option').count(), 9);
   await choose('#event-audio-complete', 'exp_orb');
   const picker = page.locator('[data-select="event-audio-complete"]');
@@ -641,10 +643,10 @@ async function verifyDashboard() {
     '重建设置后存在重复下拉菜单',
   );
 
-  await page.locator('#sound-rows button').first().click();
-  await choose('select[name="soundTheme"]', 'duck');
+  await page.locator('#sound-rows').getByRole('button', { name: '试听' }).first().click();
+  await choose('#event-audio-press', 'ya1');
   await page.locator('#cancel-settings').click();
-  assert.equal(await page.locator('select[name="soundTheme"]').inputValue(), 'fx1');
+  assert.equal(await page.locator('#event-audio-press').inputValue(), 'd1');
   // 从真实设置控件保存自动朝向、视线、眨眼与表情，确认草稿、磁盘和角色保持一致。
   await page.locator('[data-settings-tab="appearance"]').click();
   assert.equal(await page.locator('#eye-tracking').isChecked(), true);

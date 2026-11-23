@@ -106,11 +106,14 @@ export const AUDIO_FILES = Object.freeze([
     localFile: 'b46fbb0e63b0808755cf8cbeebd1a1dd.wav',
   },
 ]);
+// 旧版本保存的是点击音效组，迁移旧偏好和衔接原版录音时仍需识别这两对文件。
 export const AUDIO_GROUPS = Object.freeze([
   { id: 'duck', label: '小黄鸭', press: 'ya1', release: 'ya2' },
   { id: 'fx1', label: '音效一', press: 'd1', release: 'd2' },
 ]);
 export const DEFAULT_EVENT_SOUNDS = Object.freeze({
+  press: 'ya1',
+  release: 'ya2',
   complete: 'cost_a',
   error: 'end_a',
   question: 'ask_a',
@@ -118,17 +121,33 @@ export const DEFAULT_EVENT_SOUNDS = Object.freeze({
   quota: 'exp_orb',
 });
 export const RELEASE_LEAD_SECONDS = 0.04;
+export const MAX_CLIP_SECONDS = 15;
 
 // 只允许音效清单中的标识，禁止将任意路径作为音频地址。
 export function audioFile(id) {
   return AUDIO_FILES.find((file) => file.id === id) || null;
 }
 
-// 按下与松开始终使用成对原声，其他事件可在现有九段音频中选择。
+// 自定义编号由主进程分配，设置中始终只保存编号，文件名与用户输入的名称无关。
+export function isCustomAudioId(id) {
+  return typeof id === 'string' && /^clip-[a-f0-9]{32}$/.test(id);
+}
+
+// 播放器只接受清单内的原声或固定格式的本机片段。
+export function audioUrl(id) {
+  if (isCustomAudioId(id)) return `dragon://app/sound-library/${id}.wav`;
+  const file = audioFile(id);
+  return file ? `dragon://app/user-assets/${file.localFile}` : null;
+}
+
+// 独立选择优先；缺少选择的旧设置逐个事件继承原来的点击组或提醒音。
 export function eventAudioId(event, settings) {
-  const group = AUDIO_GROUPS.find((g) => g.id === settings.soundTheme) || AUDIO_GROUPS[0];
-  if (event === 'press' || event === 'release') return group[event];
-  return audioFile(settings.eventSounds?.[event])
-    ? settings.eventSounds[event]
-    : DEFAULT_EVENT_SOUNDS[event] || null;
+  if (!Object.hasOwn(DEFAULT_EVENT_SOUNDS, event)) return null;
+  const selected = settings.eventSounds?.[event];
+  if (isCustomAudioId(selected) || audioFile(selected)) return selected;
+  if (event === 'press' || event === 'release') {
+    const group = AUDIO_GROUPS.find((item) => item.id === settings.soundTheme);
+    if (group) return group[event];
+  }
+  return DEFAULT_EVENT_SOUNDS[event];
 }

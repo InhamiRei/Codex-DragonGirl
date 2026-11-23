@@ -102,23 +102,41 @@ test('音效库只有原项目的两组点击和九个原文件', async () => {
   }
 });
 
-// 旧版自制音色自动迁移到小黄鸭，其他偏好与用户非默认音量保留。
-test('旧音色迁移为原声且没有额外音频选项', () => {
+// 旧版配对迁移到独立事件，已有的单项覆盖与非默认音量保留。
+test('旧音色与两组点击音迁移成独立的事件分配', () => {
   const settings = normalizeSettings({
     soundTheme: 'crystal',
     volume: 0.22,
     eventVolumes: { press: 0.65, release: 0.5, complete: 0.8 },
   });
-  assert.equal(settings.soundTheme, 'duck');
   assert.equal(settings.volume, 0.22);
   assert.equal(settings.eventVolumes.press, 1);
   assert.equal(settings.eventVolumes.release, 1);
   assert.equal(eventAudioId('press', settings), 'ya1');
-  assert.equal(eventAudioId('release', { ...settings, soundTheme: 'fx1' }), 'd2');
+  assert.equal(settings.eventSounds.release, 'ya2');
+  const migrated = normalizeSettings({ soundTheme: 'fx1', eventSounds: { complete: 'exp_orb' } });
+  assert.deepEqual([migrated.eventSounds.press, migrated.eventSounds.release, migrated.eventSounds.complete], ['d1', 'd2', 'exp_orb']);
+  assert.deepEqual(normalizeSettings(migrated), migrated);
+  assert.equal(normalizeSettings({ soundTheme: 'fx1', eventSounds: { press: 'ya2' } }).eventSounds.press, 'ya2');
   assert.equal(
     normalizeSettings({ eventSounds: { complete: 'not-a-clip' } }).eventSounds.complete,
     'cost_a',
   );
+});
+
+// 自选松开片段按真实手势时间播放，不被较长的按下片段推迟。
+test('自选按下和松开在真实事件时刻独立起播', async () => {
+  const { engine, context, tick } = player();
+  const custom = 'clip-' + 'a'.repeat(32);
+  engine.settings = normalizeSettings({ eventSounds: { press: custom, release: 'exp_orb', approval: custom } });
+  engine.buffers.set(custom, { duration: 12 });
+  await engine.play('press');
+  tick(0.06);
+  await engine.play('release');
+  assert.deepEqual([...engine.active].map((voice) => voice.id), [custom, 'exp_orb']);
+  assert.equal(context.sources[1].starts[0], 0.06);
+  await engine.play('approval');
+  assert.equal([...engine.active].at(-1).id, custom);
 });
 
 // 暖缓存的按下同步起播；短点击松开音提前四十毫秒进入，而不是截断前半段。

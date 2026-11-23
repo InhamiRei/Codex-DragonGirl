@@ -1,4 +1,5 @@
-import { AUDIO_FILES, audioFile, eventAudioId } from '../shared/audio-library.js';
+import { eventAudioId } from '../shared/audio-library.js';
+import { SoundLibraryView } from './sound-library.js';
 import { enhanceSelects, syncSelects, closeSelects, destroySelects } from './select.js';
 import { planLabel, instanceLabel, originLabel, quotaAvailableWindows } from '../shared/presentation.js';
 import { SoundEngine } from './audio.js';
@@ -28,7 +29,7 @@ let state,
   tooltipTarget;
 const THREAD_PAGE_SIZE = 20;
 const accountCards = new Map();
-let accountTests, companionConfig;
+let accountTests, companionConfig, soundLibrary;
 let indexedReport, threadChildren;
 const $ = (selector) => document.querySelector(selector);
 const names = {
@@ -827,6 +828,7 @@ function fillSettings(settings) {
     ? '已获得窗口信息权限。'
     : '跟随异常时可检查权限，统计功能仍可使用。';
   renderSoundSettings();
+  void soundLibrary.refresh().catch(() => {});
   void refreshAudioStatus();
   void refreshStartupStatus();
   renderInstanceSettings();
@@ -854,7 +856,7 @@ function readDraft() {
   }
   return draft;
 }
-// 点击使用成对原声，其他事件仅从原项目现有的九段音频中选择。
+// 所有事件分别选择库中的任意音效，暂时缺失的片段也保留其原编号。
 function renderSoundSettings() {
   const box = $('#sound-rows');
   destroySelects(box);
@@ -877,27 +879,27 @@ function renderSoundSettings() {
       updateRange(slider);
       markDirty();
     };
-    let selection;
-    if (key === 'press' || key === 'release') {
-      selection = node('span', 'sound-original', audioFile(eventAudioId(key, draft)).label);
-      selection.title = '跟随上方选择的点击音效组';
-    } else {
-      selection = node('select');
-      selection.id = `event-audio-${key}`;
-      selection.setAttribute('aria-label', `${label}原声音效`);
-      selection.append(...AUDIO_FILES.map((file) => new Option(file.label, file.id)));
-      selection.value = eventAudioId(key, draft);
-      selection.onchange = () => {
-        draft.eventSounds[key] = selection.value;
-        markDirty();
-      };
+    const selection = node('select'), selectedId = eventAudioId(key, draft);
+    selection.id = `event-audio-${key}`;
+    selection.setAttribute('aria-label', `${label}音效`);
+    for (const file of soundLibrary.files) {
+      const option = new Option(file.label, file.id);
+      option.disabled = file.available === false;
+      selection.add(option);
     }
+    if (![...selection.options].some((option) => option.value === selectedId))
+      selection.add(new Option('未找到的导入片段', selectedId));
+    selection.value = selectedId;
+    selection.onchange = () => {
+      draft.eventSounds[key] = selection.value;
+      markDirty();
+    };
     const preview = node('button', '', '试听');
     preview.type = 'button';
     preview.onclick = async () => {
       sound.configure(readDraft());
-      await sound.play(key, true);
-      if (sound.lastError) toast(sound.lastError);
+      const played = await sound.play(key, true);
+      if (!played && sound.lastError) toast(sound.lastError);
     };
     row.append(node('span', '', label), selection, slider, value, preview);
     box.append(row);
@@ -910,9 +912,9 @@ async function refreshAudioStatus() {
   try {
     const status = await call('audio-status');
     $('#audio-library-status').textContent = status.complete
-      ? `${status.bundled ? '应用已内置原声音效' : '本机原声音效已就绪'}：两组点击音效，共九段原声，离线可用。`
-      : `原声音效库已就绪 ${status.installed} / ${status.total} 段，可点击下方按钮修复。`;
-  } catch {}
+      ? `${status.bundled ? '应用已内置原声音效' : '本机原声音效已就绪'}，${status.total} 段均可离线播放。`
+      : `已就绪 ${status.installed} / ${status.total} 段，可以修复缺失的原声。`;
+  } catch { $('#audio-library-status').textContent = '读取原声音效状态失败。'; }
 }
 // 别名和显示隐藏仅属于龙娘，不改变 Cockpit 的实例注册表。
 function renderInstanceSettings() {
@@ -988,6 +990,8 @@ async function start() {
   // 共享侧栏读取实际运行版本，使五个页面上的显示一致。
   $('#app-version').textContent = `v${state.appVersion}`;
   bindAppUpdates(bridge, call);
+  soundLibrary = new SoundLibraryView({ call, toast, engine: sound, settings: readDraft,
+    change: () => { if (draft) renderSoundSettings(); } });
   accountTests = new AccountTestsView({ call, toast, getState: () => state });
   companionConfig = new CompanionConfigView($('#dragon-config'), {
     // 角色切换只同步偏好草稿中未修改的角色字段。
@@ -1110,10 +1114,6 @@ async function start() {
     });
   $('#settings-form').addEventListener('input', (event) => {
     markDirty();
-    if (event.target.name === 'soundTheme') {
-      readDraft();
-      renderSoundSettings();
-    }
     if (event.target.type === 'range') updateRange(event.target);
   });
   $('#settings-form').addEventListener('submit', async (event) => {

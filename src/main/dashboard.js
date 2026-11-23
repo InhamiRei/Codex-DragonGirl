@@ -1,5 +1,6 @@
 import { verifyAudioLibrary, downloadAudioLibrary } from '../core/audio-library-store.js';
-import { BrowserWindow, ipcMain, dialog, app, Notification, nativeImage, screen, powerMonitor } from 'electron';
+import { BrowserWindow, ipcMain, dialog, app, Notification, nativeImage, screen, powerMonitor, shell } from 'electron';
+import { importAudioClip, listAudioClips, renameAudioClip, resolveCustomAudio } from '../core/custom-audio-store.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +37,7 @@ export class Dashboard {
     this.pets = new Map();
     this.assetDirectory = path.join(monitor.directory, 'assets');
     this.bundledAudioDirectory = path.join(ROOT, 'assets/audio');
+    this.soundDirectory = path.join(monitor.directory, 'sound-library');
     this.tests = new AccountTests(monitor.directory, {
       getInstances: () => monitor.snapshot().instances,
       getSettings: () => monitor.settings,
@@ -514,6 +516,11 @@ export class Dashboard {
       return true;
     }
     if (command === 'import-character') return this.importCharacter();
+    // 音效库独立于设置草稿，导入、重命名和升级都沿用同一个片段编号。
+    if (command === 'list-audio-clips') return listAudioClips(this.soundDirectory);
+    if (command === 'import-audio-clip') return importAudioClip(this.soundDirectory, value);
+    if (command === 'rename-audio-clip') return renameAudioClip(this.soundDirectory, value.id, value.label);
+    if (command === 'remove-audio-clip') return this.removeAudioClip(value);
     if (command === 'audio-status')
       return verifyAudioLibrary(this.assetDirectory, this.bundledAudioDirectory);
     // 离线优先修复，完成后通知所有播放器重新预热，用户无需重启或重新保存设置。
@@ -592,6 +599,22 @@ export class Dashboard {
     }
     throw new Error('不支持的操作');
   }
+  // 只把用户确认的闲置片段移入系统废纸篓，已分配的片段须先在事件表里换掉。
+  async removeAudioClip(id) {
+    const file = await resolveCustomAudio(this.soundDirectory, id);
+    if (!file) throw new Error('找不到要移除的音效。');
+    const inUse = () => Object.values(this.monitor.settings.eventSounds).includes(id);
+    if (inUse()) throw new Error('此音效正在使用，请先更换对应事件的音效并保存。');
+    const result = await dialog.showMessageBox(this.window, {
+      type: 'question', buttons: ['取消', '移除音效'], defaultId: 0, cancelId: 0,
+      message: '将这个片段移到系统回收站？', detail: '原始音频文件会保留在原位置。',
+    });
+    if (result.response !== 1) return false;
+    if (inUse()) throw new Error('此音效已分配给事件，请先更换并保存。');
+    await shell.trashItem(path.dirname(file));
+    return true;
+  }
+
   // 退出前关闭所有附属角色，取消后台窗口资源。
   async stop() {
     this.stopping = true;

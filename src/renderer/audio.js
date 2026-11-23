@@ -1,6 +1,8 @@
-import { AUDIO_FILES, audioFile, eventAudioId, RELEASE_LEAD_SECONDS } from '../shared/audio-library.js';
+import {
+  AUDIO_FILES, AUDIO_GROUPS, audioUrl, eventAudioId, isCustomAudioId, MAX_CLIP_SECONDS, RELEASE_LEAD_SECONDS,
+} from '../shared/audio-library.js';
 
-// 播放原项目的九段原声；不变调、不叠加合成音，也不改变录音自身的音量包络。
+// 原声和自选片段共用播放路径，保留录音的速度与音量包络。
 export class SoundEngine {
   // 音频设备和时钟可替换，便于验证同步起播、取消和音频线程排期。
   constructor({
@@ -21,12 +23,15 @@ export class SoundEngine {
     this.interaction = null;
   }
 
-  // 选项变化时废弃旧排期，预热只下载并解码清单中已有的原音频。
+  // 更换事件分配时撤销旧排期，只常驻缓存仍被事件引用的自定义片段。
   configure(settings) {
     const signature = JSON.stringify([settings.soundTheme, settings.eventSounds]);
     if (this.signature !== undefined && this.signature !== signature) this.stop();
     this.signature = signature;
     this.settings = settings;
+    this.assignedClips = new Set(Object.values(settings.eventSounds || {}).filter(isCustomAudioId));
+    for (const id of this.buffers.keys())
+      if (isCustomAudioId(id) && !this.assignedClips.has(id)) this.buffers.delete(id);
     if (!settings.soundEnabled || settings.volume === 0) {
       this.stop();
       return Promise.resolve(false);
@@ -39,20 +44,22 @@ export class SoundEngine {
 
   // 独立缓存加载中的承诺，连续点击或多个配置更新不会重复读取相同文件。
   load(id) {
-    const file = audioFile(id);
-    if (!file) return Promise.reject(new Error('音频不在原声音效库中'));
+    const url = audioUrl(id);
+    if (!url) return Promise.reject(new Error('音频不在音效库中'));
     if (this.buffers.has(id)) return Promise.resolve(this.buffers.get(id));
     if (this.pending.has(id)) return this.pending.get(id);
-    const loading = this.fetchFile(`dragon://app/user-assets/${file.localFile}`)
+    const loading = this.fetchFile(url)
       .then((response) => {
-        if (!response.ok) throw new Error('本机原声音效文件缺失');
+        if (!response.ok) throw new Error('本机音效文件缺失');
         return response.arrayBuffer();
       })
       .then((bytes) => this.context(false).decodeAudioData(bytes))
       .then((buffer) => {
-        if (!Number.isFinite(buffer.duration) || buffer.duration <= 0 || buffer.duration > 15)
-          throw new Error('原声音频格式无效');
-        this.buffers.set(id, buffer);
+        // 设备重采样可能令末帧相差一个采样周期。
+        if (!Number.isFinite(buffer.duration) || buffer.duration <= 0 ||
+            buffer.duration > MAX_CLIP_SECONDS + 1 / (buffer.sampleRate || 48000))
+          throw new Error('音效片段时长无效');
+        if (!isCustomAudioId(id) || this.assignedClips?.has(id)) this.buffers.set(id, buffer);
         this.lastError = null;
         return buffer;
       })
@@ -61,19 +68,22 @@ export class SoundEngine {
     return loading;
   }
 
-  // 预热全部九段音频；失败会留下明确状态，绝不回退成其他电子音。
+  // 九段原声与已分配的片段提前解码，配置切换期间也会立即预热新选择。
   warm() {
-    if (this.warming) return this.warming;
-    this.warming = Promise.all(AUDIO_FILES.map((file) => this.load(file.id)))
+    if (this.warming && this.warmSignature === this.signature) return this.warming;
+    this.warmSignature = this.signature;
+    const ids = [...AUDIO_FILES.map((file) => file.id), ...(this.assignedClips || [])];
+    const warming = Promise.all(ids.map((id) => this.load(id)))
       .then(() => true)
       .catch(() => {
-        this.lastError = '原声音效未就绪，请检查本机音效库';
+        if (this.warming === warming) this.lastError = '有音效未就绪，请检查本机音效库';
         return false;
       })
       .finally(() => {
-        this.warming = null;
+        if (this.warming === warming) this.warming = null;
       });
-    return this.warming;
+    this.warming = warming;
+    return warming;
   }
 
   // 只有播放时恢复设备，空闲时主动交还系统音频资源。
@@ -107,16 +117,16 @@ export class SoundEngine {
     }
     return this.load(id)
       .then((buffer) => {
-        if (!valid() || this.now() - requestedAt > 250) return false;
+        if (!valid() || (requestedAt !== null && this.now() - requestedAt > 250)) return false;
         return start(buffer);
       })
       .catch(() => {
-        this.lastError = '原声音效无法播放，请检查本机音效库';
+        this.lastError = '音效无法播放，请检查本机音效库';
         return false;
       });
   }
 
-  // 开始新的按压时取消上一轮声音，只保留当前手势的成对原声。
+  // 新的按压锁定本次手势的两个选择，只有原来配套的短音保留提前衔接。
   beginPress() {
     this.cancelInteraction();
     const session = {
@@ -130,9 +140,11 @@ export class SoundEngine {
       ready: false,
     };
     this.interaction = session;
+    session.paired = AUDIO_GROUPS.some((group) => group.press === session.press && group.release === session.release);
     this.context();
     const valid = () =>
       this.interaction === session &&
+      (session.paired || !session.released) &&
       this.generation === session.generation &&
       !!this.settings.soundEnabled;
     return this.readyBuffer(session.press, session.requestedAt, valid, (buffer) => {
@@ -147,19 +159,26 @@ export class SoundEngine {
         );
       if (session.released) void this.scheduleRelease(session);
       return true;
+    }).then((played) => {
+      // 按下音缺失时仍允许这次手势的松开音独立起播。
+      if (!played && this.interaction === session) {
+        session.ready = true;
+        if (session.released) void this.scheduleRelease(session);
+      }
+      return played;
     });
   }
 
-  // 松开音在按压音结束前四十毫秒衔接；长按超过录音长度后则立即播放。
+  // 原版配对按时间轴衔接，自选组合在实际松开时播放，即使按下片段很长也能及时反馈。
   scheduleRelease(session) {
-    if (!session.ready || session.releaseScheduled || this.interaction !== session)
+    if ((session.paired && !session.ready) || session.releaseScheduled || this.interaction !== session)
       return Promise.resolve(false);
     session.releaseScheduled = true;
     if (this.volume('release') === 0) return Promise.resolve(false);
     const requestedAt = this.now();
     const startAt = Math.max(
       this.ctx.currentTime,
-      (session.voice?.endsAt ?? this.ctx.currentTime) - RELEASE_LEAD_SECONDS,
+      session.paired ? (session.voice?.endsAt ?? this.ctx.currentTime) - RELEASE_LEAD_SECONDS : 0,
     );
     const valid = () =>
       this.interaction === session &&
@@ -177,9 +196,8 @@ export class SoundEngine {
   }
 
   // 点击交互、提示和试听使用独立通道，拖动不会打断正在播放的任务提示。
-  play(event, preview = false) {
+  play(event, preview = false, id = eventAudioId(event, this.settings)) {
     if (!this.settings.soundEnabled && !preview) return Promise.resolve(false);
-    const id = eventAudioId(event, this.settings);
     if (!id) return Promise.resolve(false);
     if (!preview && event === 'press') return this.beginPress();
     if (!preview && event === 'release') {
@@ -193,7 +211,7 @@ export class SoundEngine {
     this.stopChannel(channel);
     const generation = this.generation,
       request = ++this.sequence,
-      at = this.now();
+      at = preview ? null : this.now();
     this[channel + 'Request'] = request;
     this.context();
     return this.readyBuffer(

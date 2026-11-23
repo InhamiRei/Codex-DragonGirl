@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GPT龙娘 · 用量管理</title>
     <link rel="stylesheet" href="dashboard.css" />
+    <link rel="stylesheet" href="sound-library.css" />
     <link rel="stylesheet" href="account-tests.css" />
     <link rel="stylesheet" href="dragon-config.css" />
     <link rel="stylesheet" href="app-updates.css" />
@@ -522,8 +523,7 @@
                 <article class="panel settings-panel">
                   <div class="panel-heading">
                     <div>
-                      <h2>声音与通知</h2>
-                      <p>调整原声音效、音量与安静时间。</p>
+                      <h2>声音</h2>
                     </div>
                   </div>
                   <div class="setting-row">
@@ -543,18 +543,6 @@
                   </div>
                   <div class="setting-row">
                     <div class="setting-copy">
-                      <label for="sound-theme">点击音效组</label>
-                      <p>采用原项目成对的按下与松开音频。</p>
-                    </div>
-                    <div class="setting-control">
-                      <select name="soundTheme" id="sound-theme">
-                        <option value="duck">小黄鸭</option>
-                        <option value="fx1">音效一</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div class="setting-row">
-                    <div class="setting-copy">
                       <label for="sound-volume">总音量</label>
                       <p>统一控制所有音效的播放音量。</p>
                     </div>
@@ -569,6 +557,37 @@
                       /><output id="volume-label" for="sound-volume">35%</output>
                     </div>
                   </div>
+                </article>
+                <article class="panel settings-panel">
+                  <div class="panel-heading sound-library-heading">
+                    <div><h2>音效库</h2><p>从本地音频裁剪片段，供任意事件使用。</p></div>
+                    <button id="import-audio" type="button" class="primary">导入音效</button>
+                  </div>
+                  <details class="sound-catalog" id="sound-catalog">
+                    <summary>浏览全部音效 <span id="sound-library-count"></span></summary>
+                    <ul id="sound-library-list" aria-label="音效库"></ul>
+                  </details>
+                  <div class="setting-row">
+                    <div class="setting-copy">
+                      <span class="setting-label">内置原声</span>
+                      <p id="audio-library-status" role="status">正在检查本机原声音效库…</p>
+                    </div>
+                    <div class="setting-control">
+                      <button id="install-audio" type="button">修复原声音效</button>
+                    </div>
+                  </div>
+                </article>
+                <article class="panel">
+                  <div class="panel-heading">
+                    <div><h2>事件音效</h2><p>为每个事件选择声音和音量，保存后生效。</p></div>
+                  </div>
+                  <div class="sound-table-heading">
+                    <span>事件</span><span>音效</span><span>音量</span><span></span><span>操作</span>
+                  </div>
+                  <div id="sound-rows" class="sound-rows"></div>
+                </article>
+                <article class="panel settings-panel">
+                  <div class="panel-heading"><h2>通知与免打扰</h2></div>
                   <div class="setting-row">
                     <div class="setting-copy">
                       <label for="system-notifications">系统通知</label>
@@ -620,21 +639,6 @@
                       </div>
                     </div>
                   </div>
-                </article>
-                <article class="panel">
-                  <div class="panel-heading">
-                    <div>
-                      <h2>事件音效</h2>
-                      <p>小黄鸭、音效一与五段事件提示音。</p>
-                    </div>
-                  </div>
-                  <div class="sound-table-heading">
-                    <span>事件</span><span>原声音效</span><span>音量</span><span></span><span>操作</span>
-                  </div>
-                  <div id="sound-rows" class="sound-rows"></div>
-                  <p class="panel-note" id="audio-library-status">正在检查本机原声音效库…</p>
-                  <button id="install-audio" class="button" type="button">修复原声音效</button>
-                  <p class="panel-note">点击后从小鲸鱼原项目下载九段音频到本机。音频来源及权利说明见 README。</p>
                 </article>
               </section>
               <section class="settings-pane" data-settings-pane="bubble" hidden>
@@ -969,6 +973,52 @@
       </div>
     </main>
     <!-- 原生模态弹窗处理焦点约束与 Escape，关闭窗口不会取消后台下载。 -->
+    <!-- 文件选择与编辑独立于设置表单，导入音效无需先提交其他偏好。 -->
+    <input id="audio-source-file" type="file" accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.flac,.aif,.aiff,.opus,.webm" hidden />
+    <dialog id="audio-editor" class="sound-dialog" aria-labelledby="audio-editor-title">
+      <header class="sound-dialog-head">
+        <div><h2 id="audio-editor-title">裁剪音效</h2><p id="audio-source-name"></p></div>
+        <button id="audio-editor-close" type="button" aria-label="关闭裁剪器">×</button>
+      </header>
+      <div class="sound-dialog-body">
+        <div class="wave-heading"><span>音频波形</span><output id="audio-selection-length"></output></div>
+        <div id="audio-wave" class="audio-wave">
+          <canvas aria-hidden="true"></canvas>
+          <div class="wave-selection"></div>
+          <button type="button" class="wave-handle" data-edge="start" role="slider" aria-label="选区起点"></button>
+          <button type="button" class="wave-handle" data-edge="end" role="slider" aria-label="选区终点"></button>
+          <div class="wave-playhead" hidden></div>
+        </div>
+        <div class="wave-ruler" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="wave-tools">
+          <span>拖动波形选取片段，拖动两端微调。</span>
+          <label for="audio-zoom">缩放</label><input id="audio-zoom" type="range" min="0" max="6" step=".25" value="0" />
+          <output for="audio-zoom" id="audio-zoom-value">1×</output>
+        </div>
+        <label id="audio-pan-row" hidden>可视位置<input id="audio-pan" type="range" min="0" max="1" step="any" value="0" /></label>
+        <div class="clip-times">
+          <label>开始（秒）<input id="audio-start" type="number" min="0" step=".001" /></label>
+          <label>结束（秒）<input id="audio-end" type="number" min="0" step=".001" /></label>
+        </div>
+        <label class="clip-name" for="audio-clip-name">音效名称</label>
+        <input id="audio-clip-name" type="text" maxlength="80" autocomplete="off" />
+        <p id="audio-editor-message" role="status"></p>
+      </div>
+      <footer class="sound-dialog-footer">
+        <button type="button" id="audio-preview">试听选区</button>
+        <div><button type="button" id="audio-cancel">取消</button>
+          <button type="button" id="audio-save" class="primary">保存到音效库</button></div>
+      </footer>
+    </dialog>
+    <dialog id="audio-rename" class="sound-dialog" aria-labelledby="audio-rename-title">
+      <form method="dialog">
+        <div class="sound-dialog-body"><h2 id="audio-rename-title">重命名音效</h2>
+          <label class="clip-name" for="audio-new-name">音效名称</label>
+          <input type="text" id="audio-new-name" maxlength="80" required /></div>
+        <footer class="sound-dialog-footer"><button id="audio-rename-cancel" type="button">取消</button>
+          <button class="primary" type="submit">保存名称</button></footer>
+      </form>
+    </dialog>
     <dialog id="app-update-dialog" aria-labelledby="update-heading">
       <header class="update-hero">
         <div class="update-hero-copy">

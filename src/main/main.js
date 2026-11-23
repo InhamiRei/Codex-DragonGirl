@@ -8,6 +8,7 @@ import { Companion, companionAppearance } from './companion.js';
 import { resolveResourcePath } from './resources.js';
 import { createLaunchReporter } from './launcher-status.js';
 import { resolveAudioPath } from '../core/audio-library-store.js';
+import { resolveCustomAudio } from '../core/custom-audio-store.js';
 import { accountTestPreview } from './test-preview.js';
 import { StartupController } from './startup.js';
 import { startupReason } from '../core/startup-policy.js';
@@ -101,6 +102,9 @@ if (!hasLock) {
         const userAsset = /^dragon:\/\/app\/user-assets\/([a-f0-9]{32}\.(png|webp|wav|mp3|ogg))$/.exec(
           request.url,
         );
+        // 用户音效从应用包外的稳定目录解析，修复原声使用另一份白名单。
+        const clip = /^dragon:\/\/app\/sound-library\/(clip-[a-f0-9]{32})\.wav$/.exec(request.url);
+        if (clip) resolved = await resolveCustomAudio(path.join(app.getPath('userData'), 'sound-library'), clip[1]);
         if (userAsset) {
           const directory = path.join(app.getPath('userData'), 'assets');
           // 原声地址兼容旧版已安装的文件，新电脑则直接读取安装包内经过校验的副本。
@@ -111,7 +115,7 @@ if (!hasLock) {
         if (!resolved) return new Response('Not found', { status: 404 });
         const source = await net.fetch(pathToFileURL(resolved).href);
         const headers = new Headers(source.headers);
-        if (userAsset) headers.set('Cache-Control', 'no-store');
+        if (userAsset || clip) headers.set('Cache-Control', 'no-store');
         headers.set(
           'Content-Security-Policy',
           "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; media-src 'self'; frame-src dragon-preview:; base-uri 'none'; form-action 'none'",

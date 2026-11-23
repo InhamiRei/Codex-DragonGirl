@@ -6,6 +6,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 import { verifyReleasePayload } from './release-payload.mjs';
+import { importAudioClip, listAudioClips, resolveCustomAudio } from '../src/core/custom-audio-store.js';
+import { audioFile } from '../src/shared/audio-library.js';
 
 // 这项用例真实安装和卸载产品，只在工作流的一次性 Windows 虚拟机内运行。
 if (process.platform !== 'win32' || process.env.RUNNER_ENVIRONMENT !== 'github-hosted')
@@ -21,7 +23,8 @@ const metadata = path.join(installed, 'resources/app/package.json');
 const user = path.join(process.env.APPDATA, 'Codex DragonGirl'), profile = path.join(temp, 'test-home');
 const sentinel = path.join(user, 'update-sentinel-' + path.basename(temp));
 const runtimeFile = path.join(user, 'startup/runtime.json');
-let application;
+let application, importedClip;
+const soundDirectory = path.join(user, 'sound-library');
 
 // 复用主程序的原子心跳文件；启动编号区分新旧进程，路径按文件系统实际长路径核对。
 async function readRuntime() {
@@ -38,6 +41,9 @@ try {
   await fs.mkdir(path.join(profile, '.codex/sessions'), { recursive: true });
   await fs.mkdir(user, { recursive: true });
   await fs.writeFile(sentinel, '本地数据', { flag: 'wx' });
+  // 把真实片段存入当前用户音效库，升级完成后逐字节检查，连同名称和分配一起验收。
+  const sample = await fs.readFile(path.join(root, 'assets/audio', audioFile('end_a').localFile));
+  importedClip = await importAudioClip(soundDirectory, { label: '升级保留测试', bytes: sample });
   const env = { ...process.env, DRAGONGIRL_TEST: '1', DRAGONGIRL_MONITOR_TEST: '1',
     DRAGONGIRL_DATA_DIR: user, DRAGONGIRL_FIXTURE_HOME: profile };
   delete env.ELECTRON_RUN_AS_NODE;
@@ -50,6 +56,11 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   await page.waitForFunction(() => document.querySelector('#app-version')?.textContent === 'v0.0.1');
+  // 从旧版的真实设置入口分配音效，覆盖安装必须沿用这个编号。
+  await page.evaluate(async (id) => {
+    const { settings } = await window.dragonGirl.command('snapshot');
+    await window.dragonGirl.command('settings', { ...settings, eventSounds: { ...settings.eventSounds, press: id } });
+  }, importedClip.id);
   const previousRuntime = await readRuntime();
   assert.equal(previousRuntime?.pid, await application.evaluate(() => process.pid));
   await application.evaluate(async (_electron, { name, size, digest, version, source }) => {
@@ -86,6 +97,9 @@ try {
   assert.equal((await fs.realpath(restarted.executable)).toLowerCase(), (await fs.realpath(executable)).toLowerCase());
   process.kill(restarted.pid, 0);
   await verifyReleasePayload(root, path.join(installed, 'resources/app'), manifest.version, '.exe');
+  assert.deepEqual(await fs.readFile(await resolveCustomAudio(soundDirectory, importedClip.id)), sample);
+  assert.equal((await listAudioClips(soundDirectory)).find((clip) => clip.id === importedClip.id)?.label, importedClip.label);
+  assert.equal(JSON.parse(await fs.readFile(path.join(user, 'settings.json'), 'utf8')).eventSounds.press, importedClip.id);
   assert.equal(await fs.readFile(sentinel, 'utf8'), '本地数据');
   console.log('已验证 NSIS 正式安装、应用内完整下载、重启替换和用户数据保留');
 } finally {
@@ -97,5 +111,6 @@ try {
   const uninstall = path.join(installed, 'Uninstall DragonGirl.exe');
   if (await fs.stat(uninstall).catch(() => null)) execFileSync(uninstall, ['/S'], { timeout: 90000 });
   await fs.rm(sentinel, { force: true });
+  if (importedClip) await fs.rm(path.join(soundDirectory, importedClip.id), { recursive: true, force: true });
   await fs.rm(temp, { recursive: true, force: true, maxRetries: 12, retryDelay: 300 });
 }

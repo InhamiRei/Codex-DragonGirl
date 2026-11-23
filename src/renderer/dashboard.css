@@ -1489,11 +1489,6 @@ input[type='range']::-webkit-slider-thumb {
   }
 }
 
-.sound-original {
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 20px;
-}
 .sound-row .select-trigger {
   width: 100%;
   padding: 0 38px 0 12px;
