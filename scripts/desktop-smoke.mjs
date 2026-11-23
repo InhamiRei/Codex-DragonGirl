@@ -382,9 +382,11 @@ try {
   assert.ok(usageBubble.scrollHeight <= usageBubble.clientHeight + 1, 'Pro 单额度不应裁切或需要滚动。');
   assert.ok(usageBubble.card.width < shortBubble.card.width && usageBubble.card.height < shortBubble.card.height, '缩小角色后气泡没有一起缩小。');
   const usageState = await snapshot();
-  assert.ok(Math.abs(usageState.windows.bubble.x + usageState.windows.bubble.width / 2
-    - (usageState.character.x - usageState.character.width * .12)) <= 1, '缩小后的气泡没有靠近头像。');
-  assert.ok(usageState.windows.bubble.y < usageState.character.y, '气泡没有贴在角色上方。');
+  // 用实际可见的椭圆边缘检查头侧位置，透明窗口边界和思绪泡不会顶高主体。
+  const cardRight = usageState.windows.bubble.x + usageBubble.card.x + usageBubble.card.width;
+  const cardBottom = usageState.windows.bubble.y + usageBubble.card.y + usageBubble.card.height;
+  assert.ok(cardRight >= usageState.character.x && cardRight <= usageState.character.x + usageState.character.width * .12, '缩小后的气泡没有落在头像侧边。');
+  assert.ok(cardBottom >= usageState.character.y && cardBottom <= usageState.character.y + usageState.character.height * .12, '缩小后的气泡仍悬在龙角上方。');
   assert.doesNotMatch(await bubble.locator('#bubble').innerText(), /工作中|任务完成|任务异常|状态待更新/, '默认用量气泡仍显示任务状态行。');
   await bubble.screenshot({ path: path.join(artifacts, 'bubble-comic-usage.png'), omitBackground: true });
   const taskPreview = await captureCompanionPreview();

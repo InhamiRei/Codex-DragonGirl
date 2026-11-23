@@ -47,7 +47,7 @@ async function launch(scale) {
   });
 }
 
-// 从两个隔离窗口的透明截图读取实际着色边界，包含龙角、椭圆描边和两颗小泡。
+// 逐行比较两个隔离窗口的实际着色像素，包含龙角、椭圆和两颗小泡；透明角落不会被算成碰撞。
 async function paintedGap() {
   return application.evaluate(async ({ nativeImage }) => {
     const windows = globalThis.__dragonGirlTest.windows;
@@ -56,17 +56,31 @@ async function paintedGap() {
       // 以图片实际像素取样，再映射回窗口的逻辑坐标，同一断言也适用于高 DPI。
       const image = nativeImage.createFromBuffer((await win.capturePage()).toPNG());
       const { width, height } = image.getSize(), pixels = image.toBitmap();
-      let left = width, top = height, right = -1, bottom = -1;
-      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-        if (pixels[(y * width + x) * 4 + 3] < 32) continue;
-        left = Math.min(left, x); right = Math.max(right, x);
-        top = Math.min(top, y); bottom = Math.max(bottom, y);
+      const runs = [], stepX = bounds.width / width, stepY = bounds.height / height;
+      for (let y = 0; y < height; y++) {
+        let start = -1;
+        for (let x = 0; x <= width; x++) {
+          if (x < width && pixels[(y * width + x) * 4 + 3] >= 32) {
+            if (start < 0) start = x;
+          } else if (start >= 0) {
+            runs.push({ left: bounds.x + start * stepX, right: bounds.x + x * stepX,
+              top: bounds.y + y * stepY, bottom: bounds.y + (y + 1) * stepY });
+            start = -1;
+          }
+        }
       }
-      if (right < left || bottom < top) throw new Error(view + ' 窗口没有可见像素');
-      return { left: bounds.x + left * bounds.width / width, right: bounds.x + (right + 1) * bounds.width / width,
-        top: bounds.y + top * bounds.height / height, bottom: bounds.y + (bottom + 1) * bounds.height / height };
+      if (!runs.length) throw new Error(view + ' 窗口没有可见像素');
+      return runs;
     }));
-    return Math.max(dragon.top - bubble.bottom, bubble.top - dragon.bottom, dragon.left - bubble.right, bubble.left - dragon.right);
+    // 每一段都按原生窗口的屏幕坐标比较，返回最近两处描边之间的逻辑像素距离。
+    let squaredGap = Infinity;
+    for (const a of dragon) for (const b of bubble) {
+      const dy = Math.max(0, a.top - b.bottom, b.top - a.bottom);
+      if (dy * dy >= squaredGap) continue;
+      const dx = Math.max(0, a.left - b.right, b.left - a.right);
+      squaredGap = Math.min(squaredGap, dx * dx + dy * dy);
+    }
+    return Math.sqrt(squaredGap);
   });
 }
 
@@ -324,6 +338,16 @@ try {
         }, { edge, atTop });
         const direction = edge === 'right' ? 'left' : 'right';
         await page.waitForFunction(direction => document.body.dataset.horizontal === direction, direction);
+        // 对照反馈中的半大小头像和红框中心，检查实际窗口与网页椭圆组合后的屏幕位置。
+        if (petScale === .5 && scale === 1 && edge === 'right') {
+          const { character, frame } = await application.evaluate(() => {
+            const c = globalThis.__dragonGirlTest;
+            return { character: c.character, frame: c.windows.get('bubble').getContentBounds() };
+          });
+          const card = await page.locator('#bubble').boundingBox();
+          assert.ok(Math.abs(frame.x + card.x + card.width / 2 - character.x + 81) <= 3, '半大小气泡横向偏离红框中心');
+          assert.ok(Math.abs(frame.y + card.y + card.height / 2 - character.y + 54) <= 3, '半大小气泡纵向偏离红框中心');
+        }
         const gap = await paintedGap();
         assert.ok(gap >= 3, `气泡或泡尾进入龙娘轮廓：系统缩放 ${scale}，角色 ${petScale}，${edge}，描边间距 ${gap}`);
         clearances.push({ scale, petScale, edge, atTop, gap });

@@ -148,16 +148,37 @@ export function bubbleOutline({ width, height }, tailX) {
 }
 
 // 小圆泡的末端指向头侧，反推泡链在椭圆上的起点；桌面边缘夹紧窗口后也要重新换算。
-function bubbleTailX(character, horizontal, x, width, scale) {
+function bubbleTailX(character, horizontal, x, width, scale, gap) {
   const right = horizontal === 'right';
-  const tip = character.x + character.width * (right ? 2 / 3 : 1 / 3);
+  const tip = right ? character.x + character.width + gap + 1 : character.x - gap - 1;
   const reach = (BUBBLE_FRAME.thoughtWidth - BUBBLE_FRAME.thoughtRoot) * scale;
   const margin = (BUBBLE_FRAME.inset + BUBBLE_FRAME.stroke / 2 + 20) * scale;
   const outerMargin = Math.max(margin, reach);
   return clamp(tip - x + (right ? reach : -reach), right ? outerMargin : margin, width - (right ? margin : outerMargin));
 }
 
-// 优先把气泡贴近头像上方，空间不足时依次考虑下方和侧面，给两颗小泡以及角色回弹留出净空。
+// 只检查与角色横向相遇的描边和泡链，椭圆空白的角落可以靠近头像。
+function bubbleHeadClearance(character, x, shape, scale, horizontal, gap) {
+  const center = x + shape.centerX * scale;
+  const distance = Math.max(0, character.x - center, center - character.x - character.width);
+  const stroke = BUBBLE_FRAME.stroke * scale / 2;
+  const normalizedX = Math.max(0, distance - gap - stroke) / (shape.radiusX * scale);
+  // 距离较近时，以椭圆弧在角色一侧的最低点决定所需空间，并计入描边厚度。
+  let rise = 0;
+  if (normalizedX < 1) {
+    const arc = shape.radiusY * Math.sqrt(1 - normalizedX ** 2);
+    rise = Math.max(rise, (shape.centerY + arc) * scale + stroke + gap);
+  }
+  // 泡链通常完全留在头侧；侧面空间太窄时才让它从上方或下方避开角色。
+  const reach = (BUBBLE_FRAME.thoughtWidth - BUBBLE_FRAME.thoughtRoot) * scale;
+  const anchor = x + shape.anchorX * scale;
+  const tailClear = horizontal === 'left' ? anchor + reach <= character.x - gap
+    : anchor - reach >= character.x + character.width + gap;
+  if (!tailClear) rise = Math.max(rise, (shape.tailTop + BUBBLE_FRAME.thoughtHeight) * scale + gap);
+  return rise;
+}
+
+// 优先放在头像左上侧。贴左时镜像，贴顶时翻到下方，上下都不够时使用空间较多的一侧。
 export function placeBubble(character, workArea, size = bubbleDimensions(character.width, workArea)) {
   const width = Math.min(size.width, Math.max(1, workArea.width - 8));
   const height = Math.min(size.height, Math.max(1, workArea.height - 8));
@@ -168,23 +189,27 @@ export function placeBubble(character, workArea, size = bubbleDimensions(charact
   const maximumY = workArea.y + workArea.height - height - 4;
   const leftRoom = character.x - minimumX;
   const rightRoom = maximumX + width - character.x - character.width;
-  let horizontal = leftRoom < width / 2 + character.width * .12 && rightRoom > leftRoom ? 'right' : 'left';
-  const anchor = character.x + character.width * (horizontal === 'left' ? -.12 : 1.12);
-  let x = Math.round(clamp(anchor - width / 2, minimumX, maximumX));
-  let tailX = bubbleTailX(character, horizontal, x, width, scale);
-
-  // 按实际描边的最远端留白。缩小档的气泡和角色使用不同缩放曲线，不能用角色高度估算泡尾长度。
-  const outline = bubbleOutline({ width: width / scale, height: height / scale }, tailX / scale);
-  const paintedBottom = Math.max(height - BUBBLE_FRAME.thoughtSpace * scale, (outline.tailTop + BUBBLE_FRAME.thoughtHeight) * scale);
   const gap = Math.max(4, 6 * scale);
-  const above = Math.floor(character.y - paintedBottom - gap);
-  const below = Math.ceil(character.y + character.height + gap - (height - paintedBottom));
+  // 定位的是看得见的椭圆，缩放时保持气泡内侧和头像顶角之间相同的视觉比例。
+  const cardWidth = width - BUBBLE_FRAME.width * scale, cardHeight = height - BUBBLE_FRAME.height * scale;
+  const overlap = Math.max(0, Math.min(character.width, character.height, cardWidth, cardHeight)) * .09;
+  const inset = BUBBLE_FRAME.inset * scale;
+  const neededRoom = width - inset - overlap;
+  let horizontal = leftRoom < neededRoom && rightRoom > leftRoom ? 'right' : 'left';
+  const preferredX = horizontal === 'left' ? character.x - neededRoom : character.x + character.width - inset - overlap;
+  let x = Math.round(clamp(preferredX, minimumX, maximumX));
+  let tailX = bubbleTailX(character, horizontal, x, width, scale, gap);
+  const shape = bubbleOutline({ width: width / scale, height: height / scale }, tailX / scale);
+  const rise = Math.max(height - BUBBLE_FRAME.thoughtSpace * scale - overlap,
+    bubbleHeadClearance(character, x, shape, scale, horizontal, gap));
+  const above = Math.floor(character.y - rise);
+  const below = Math.ceil(character.y + character.height + rise - height);
   let side = above >= minimumY ? 'above' : 'below';
   if (above < minimumY && below > maximumY) {
     // 上下都放不下时，把完整气泡移向余量较大的一侧，避免窗口夹紧后反压到头部。
     horizontal = rightRoom > leftRoom ? 'right' : 'left';
     x = Math.round(clamp(horizontal === 'left' ? character.x - width - gap : character.x + character.width + gap, minimumX, maximumX));
-    tailX = bubbleTailX(character, horizontal, x, width, scale);
+    tailX = bubbleTailX(character, horizontal, x, width, scale, gap);
     side = character.y - minimumY > maximumY + height - character.y - character.height ? 'above' : 'below';
   }
   const y = clamp(side === 'above' ? above : below, minimumY, maximumY);
