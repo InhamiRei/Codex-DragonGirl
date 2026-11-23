@@ -88,6 +88,25 @@ async function raise(target, other) {
   await send(target, 'raise');
 }
 
+// 后台恢复时运行器控制台也可能盖住宿主；只暂时露出夹具标题栏，实点取得前台后立即退回普通层。
+async function activateWindowsHost(host) {
+  await send(host, 'topmost');
+  try {
+    await until(() => systemState(host.child.pid).raised.includes(host.id), '测试宿主未进入置顶组');
+    await send(host, 'click');
+    await until(async () => {
+      await send(host, 'foreground');
+      return await fs.readFile(path.join(host.directory, 'foreground'), 'utf8') === host.id;
+    }, '真实标题栏点击未将聊天主窗口切到前台');
+  } finally {
+    await send(host, 'normal');
+  }
+  await until(() => {
+    const state = systemState(host.child.pid);
+    return !state.raised.includes(host.id) && state.host?.frontmost;
+  }, '测试主窗退回普通层级后未保持前台');
+}
+
 // 系统顺序独立于 Electron 的 isVisible，能发现窗口仍可见但错误浮在其他应用上方的问题。
 function systemState(pid) {
   const result = spawnSync(bridge, ['--once'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
@@ -265,8 +284,7 @@ async function checkWindowsSwitching(host, cover) {
   }
   await checkWindowsToolWindow(host, expectPixels);
   // 关闭独立工具窗后，系统可将前台交给其他应用。用户实际点回聊天窗后才应再看到两个角色色标。
-  await send(host, 'raise');
-  await clickWindow(host);
+  await activateWindowsHost(host);
   await expectStack(host, cover, false, false);
   await expectPixels(petColor, petColor);
   // 从透明角落点到底下的宿主，再在脸部点开气泡。两次都实际发送系统鼠标事件。
@@ -424,15 +442,7 @@ try {
   const original = (await companionState()).character;
   await raise(host, cover);
   // Windows 用真实输入激活宿主，覆盖普通窗口置前权限限制，不能只验收后台窗口之间的排序。
-  if (!isMac) {
-    // 先让标题栏露出，真实点击完成后回到普通层，从这里开始验证跟随和遮挡。
-    await send(host, 'topmost');
-    await until(() => systemState(host.child.pid).raised.includes(host.id), '测试宿主未进入置顶组');
-    await send(host, 'click');
-    await until(() => systemState(host.child.pid).host?.frontmost, '标题栏点击没有实际激活测试宿主');
-    await send(host, 'normal');
-    await until(() => !systemState(host.child.pid).raised.includes(host.id), '测试宿主未恢复普通层级');
-  }
+  if (!isMac) await activateWindowsHost(host);
   await expectStack(host, cover, false);
   // 连续真实拖动并在松手后继续采样，不能只等最终恢复，也不能靠抢占键盘焦点来通过。
   if (!isMac) {
