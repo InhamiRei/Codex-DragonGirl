@@ -103,6 +103,13 @@ export class SoundEngine {
     return warming;
   }
 
+  // 磁盘原声修复后等旧预热结束，再按当前设置补全缺失缓存。
+  async recheckLibrary() {
+    await this.warming;
+    this.warming = null;
+    return this.configure(this.settings);
+  }
+
   // 只有播放时恢复设备，空闲时主动交还系统音频资源。
   context(activate = true) {
     this.ctx ??= this.createContext();

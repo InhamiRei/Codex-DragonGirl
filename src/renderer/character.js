@@ -542,7 +542,7 @@ async function start() {
   bridge.onExpression(showExpression);
   // 手动修复后立即重新读取原声，不依赖其他布局或设置变化才能恢复播放。
   bridge.onAudioReady(() => {
-    void sound.configure(sound.settings);
+    void sound.recheckLibrary();
   });
   bridge.onLayout(applyLayout);
   bridge.onCursor(routeCursor);

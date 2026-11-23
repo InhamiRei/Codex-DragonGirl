@@ -1027,7 +1027,7 @@ async function start() {
   bridge.onMonitor(receive);
   // 修复后的试听与角色播放同步恢复，设置草稿保持当前内容。
   bridge.onAudioReady((status) => {
-    void sound.configure(sound.settings);
+    void sound.recheckLibrary();
     showAudioStatus(status);
   });
   for (const b of document.querySelectorAll('.main-nav button'))

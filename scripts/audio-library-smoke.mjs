@@ -268,8 +268,13 @@ try {
   await choose('question', id);
   await choose('complete', longId);
   await saveSettings();
+  // 清空已经预热的真实角色缓存，修复通知应让角色立即重新核对并解码。
+  const firstCharacter = application.windows().find((window) => window.url().endsWith('/character.html'));
+  await firstCharacter.waitForFunction((id) => window.__soundEngine.buffers.has(id), id);
+  await firstCharacter.evaluate(() => window.__soundEngine.buffers.clear());
   await page.locator('#install-audio').click();
   await page.waitForFunction(() => document.querySelector('#audio-library-status').textContent.includes('本机原声音效已就绪'));
+  await firstCharacter.waitForFunction((ids) => ids.every((id) => window.__soundEngine.buffers.has(id)), [id, ...AUDIO_FILES.map((clip) => clip.id)]);
   assert.equal(createHash('sha256').update(await fs.readFile(file)).digest('hex'), digest);
   await fs.unlink(original);
   await application.close();
