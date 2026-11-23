@@ -1,7 +1,8 @@
 import { verifyAudioLibrary, downloadAudioLibrary } from '../core/audio-library-store.js';
 import { BrowserWindow, ipcMain, dialog, app, Notification, nativeImage, screen, powerMonitor, shell } from 'electron';
-import { importAudioClip, listAudioClips, renameAudioClip, resolveCustomAudio } from '../core/custom-audio-store.js';
+import { importAudioClip, listAudioClips, renameAudioClip, resolveClipFolder } from '../core/custom-audio-store.js';
 import fs from 'node:fs/promises';
+import { on } from 'node:events';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
@@ -15,6 +16,23 @@ import { CHARACTERS } from '../shared/characters.js';
 import { DRAGON_GEAR, parseDragonEyeColor } from '../shared/dragon-gear.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const DASHBOARD_URL = 'dragon://app/src/renderer/dashboard.html';
+
+// 文件写完当前块后才向界面要下一块，提前关闭端口会触发导入回滚。
+async function* audioChunks(port, signal) {
+  const messages = on(port, 'message', { close: ['close'], signal });
+  port.start();
+  try {
+    port.postMessage('next');
+    for await (const [message] of messages) {
+      if (message.data === null) return;
+      yield message.data;
+      port.postMessage('next');
+    }
+    throw new Error('音效传输已中断。');
+  } finally {
+    await messages.return();
+  }
+}
 
 // 角色跟随与祈祷特效共用宿主几何，Windows 的物理坐标只在这里转成逻辑坐标。
 function codexWindowFrame(codexProcess) {
@@ -60,16 +78,30 @@ export class Dashboard {
       selectCharacter: (id) => this.selectCharacter(id),
     };
     primary.delegate = this.delegate;
+    // 普通命令与分块导入都只接受管理窗口的主文档。
+    const fromDashboard = (event) => this.window && !this.window.isDestroyed()
+      && event.sender === this.window.webContents && event.senderFrame === event.sender.mainFrame
+      && event.senderFrame.url === DASHBOARD_URL;
     ipcMain.handle('dg:command', (event, command, value) => {
-      if (
-        !this.window ||
-        event.sender !== this.window.webContents ||
-        event.senderFrame !== this.window.webContents.mainFrame ||
-        event.senderFrame.url !== DASHBOARD_URL
-      )
-        throw new Error('无效的界面来源');
+      if (!fromDashboard(event)) throw new Error('无效的界面来源');
       return this.command(command, value);
     });
+    this.imports = new Set();
+    this.abortImports = new AbortController();
+    this.onImportAudio = (event, label) => {
+      const [port] = event.ports;
+      if (!port) return;
+      if (this.stopping || !fromDashboard(event)) {
+        port.postMessage({ error: '无效的界面来源' });
+        port.close();
+        return;
+      }
+      const job = importAudioClip(this.soundDirectory, { label, chunks: audioChunks(port, this.abortImports.signal) })
+        .then((clip) => port.postMessage({ clip }), (error) => port.postMessage({ error: error.message }))
+        .finally(() => { port.close(); this.imports.delete(job); });
+      this.imports.add(job);
+    };
+    ipcMain.on('dg:import-audio', this.onImportAudio);
     monitor.on('update', (snapshot) => {
       this.latest = snapshot;
       if (this.window && !this.window.isDestroyed())
@@ -518,7 +550,6 @@ export class Dashboard {
     if (command === 'import-character') return this.importCharacter();
     // 音效库独立于设置草稿，导入、重命名和升级都沿用同一个片段编号。
     if (command === 'list-audio-clips') return listAudioClips(this.soundDirectory);
-    if (command === 'import-audio-clip') return importAudioClip(this.soundDirectory, value);
     if (command === 'rename-audio-clip') return renameAudioClip(this.soundDirectory, value.id, value.label);
     if (command === 'remove-audio-clip') return this.removeAudioClip(value);
     if (command === 'audio-status')
@@ -533,7 +564,7 @@ export class Dashboard {
               ...[this.primary, ...this.pets.values()].map((pet) => pet.windows.get('character')),
             ];
             for (const window of windows)
-              if (window && !window.isDestroyed()) window.webContents.send('dg:audio-ready');
+              if (window && !window.isDestroyed()) window.webContents.send('dg:audio-ready', status);
             return status;
           })
           .finally(() => { this.audioInstall = null; });
@@ -601,8 +632,8 @@ export class Dashboard {
   }
   // 只把用户确认的闲置片段移入系统废纸篓，已分配的片段须先在事件表里换掉。
   async removeAudioClip(id) {
-    const file = await resolveCustomAudio(this.soundDirectory, id);
-    if (!file) throw new Error('找不到要移除的音效。');
+    const folder = await resolveClipFolder(this.soundDirectory, id);
+    if (!folder) throw new Error('找不到要移除的音效。');
     const inUse = () => Object.values(this.monitor.settings.eventSounds).includes(id);
     if (inUse()) throw new Error('此音效正在使用，请先更换对应事件的音效并保存。');
     const result = await dialog.showMessageBox(this.window, {
@@ -611,13 +642,16 @@ export class Dashboard {
     });
     if (result.response !== 1) return false;
     if (inUse()) throw new Error('此音效已分配给事件，请先更换并保存。');
-    await shell.trashItem(path.dirname(file));
+    await shell.trashItem(folder);
     return true;
   }
 
   // 退出前关闭所有附属角色，取消后台窗口资源。
   async stop() {
     this.stopping = true;
+    ipcMain.removeListener('dg:import-audio', this.onImportAudio);
+    this.abortImports.abort();
+    await Promise.allSettled(this.imports);
     await this.updates?.stop();
     powerMonitor.removeListener('resume', this.onResume);
     await this.petUpdate?.catch(() => {});

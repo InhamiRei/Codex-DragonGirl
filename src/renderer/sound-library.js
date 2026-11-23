@@ -10,6 +10,7 @@ function clipButton(label, clip, callback) {
   button.type = 'button';
   button.textContent = label;
   button.setAttribute('aria-label', label + ' ' + clip.label);
+  if (label === '试听') button.setAttribute('aria-pressed', 'false');
   button.onclick = () => void callback(button).catch(() => {});
   return button;
 }
@@ -17,20 +18,22 @@ function clipButton(label, clip, callback) {
 // 音效库独立保存片段，事件表单只订阅可选音效的变化。
 export class SoundLibraryView {
   // 文件输入放在偏好表单外，打开、试听和取消裁剪都不会弄脏设置草稿。
-  constructor({ call, toast, engine, settings, change }) {
+  constructor({ call, importClip, toast, engine, settings, change }) {
     this.call = call;
     this.toast = toast;
     this.engine = engine;
     this.settings = settings;
     this.change = change;
-    this.custom = [];
+    this.files = AUDIO_FILES;
     this.revision = 0;
+    const catalog = $('sound-catalog');
+    catalog.ontoggle = () => this.renderCatalog();
     this.editor = new AudioEditor({
       volume: () => this.settings().volume,
-      save: (clip) => this.call('import-audio-clip', clip),
+      save: importClip,
       saved: (clip) => {
-        this.update([clip, ...this.custom]);
-        $('sound-catalog').open = true;
+        catalog.open = true;
+        void this.refresh().catch(() => {});
         $('sound-library-list').scrollTop = 0;
         this.toast(`已将「${clip.label}」保存到音效库`);
       },
@@ -44,35 +47,40 @@ export class SoundLibraryView {
         this.toast('请选择大小在 64 MB 以内的非空音频文件。');
         return;
       }
-      this.engine.stop();
+      this.stopPreview();
       void this.editor.open(file.name.replace(/\.[^.]+$/, '') || '音效片段', () => file.arrayBuffer());
     };
     $('audio-rename-cancel').onclick = () => $('audio-rename').close();
+    $('audio-new-name').oninput = () => $('audio-new-name').setCustomValidity('');
     $('audio-rename').querySelector('form').onsubmit = (event) => {
       event.preventDefault();
       void this.saveName().catch(() => {});
     };
   }
 
-  // 同一份列表用于音效库、按下、松开以及所有提醒事件。
-  get files() {
-    return [...this.custom, ...AUDIO_FILES];
-  }
-
-  // 列表读取较慢时，不让旧结果覆盖刚刚导入或重命名的片段。
+  // 以磁盘为准刷新一次。首次载入和导入并发时，较慢的旧读数不会覆盖新记录。
   async refresh() {
     const revision = ++this.revision;
-    const clips = await this.call('list-audio-clips');
-    if (this.revision === revision) this.update(clips);
+    try {
+      const clips = await this.call('list-audio-clips');
+      if (this.revision === revision) this.files = [...clips, ...AUDIO_FILES];
+    } finally {
+      if (this.revision === revision) {
+        $('sound-library-count').textContent = `${AUDIO_FILES.length} 段内置 · ${this.files.length - AUDIO_FILES.length} 段导入`;
+        this.renderCatalog();
+        this.change();
+      }
+    }
   }
 
-  // 局部刷新保留音量、事件分配和其他设置草稿。
-  update(clips) {
-    this.revision++;
-    this.custom = clips;
-    $('sound-library-count').textContent = `${AUDIO_FILES.length} 段内置 · ${clips.length} 段导入`;
-    $('sound-library-list').replaceChildren(...this.files.map((clip) => this.row(clip)));
-    this.change();
+  // 展开时才生成音效行，收起时释放按钮与关联的回调。
+  renderCatalog() {
+    const list = $('sound-library-list');
+    const files = $('sound-catalog').open ? this.files : null;
+    if (this.displayedFiles === files) return;
+    if (this.previewSession && list.contains(this.previewSession.button)) this.stopPreview();
+    this.displayedFiles = files;
+    list.replaceChildren(...(files || []).map((clip) => this.row(clip)));
   }
 
   // 每段音效都可以试听或另存选区，已导入的片段还可维护名称和移除。
@@ -86,18 +94,21 @@ export class SoundLibraryView {
     info.append(name, detail);
     const actions = document.createElement('div');
     actions.className = 'sound-library-actions';
-    actions.append(clipButton('试听', clip, (button) => this.preview(clip, button)),
+    actions.append(clipButton('试听', clip, (button) => this.preview(button, 'library', clip.id)),
       clipButton('裁剪', clip, async () => {
-        this.engine.stop();
+        this.stopPreview();
         await this.editor.open(clip.label + ' · 片段', async () => {
           const result = await fetch(audioUrl(clip.id));
           if (!result.ok) throw new Error('读取音频失败。');
           return result.arrayBuffer();
         });
       }));
+    if (clip.available === false)
+      for (const button of actions.children) button.disabled = true;
     if (custom) {
       actions.append(clipButton('重命名', clip, async () => {
         this.renaming = clip.id;
+        $('audio-new-name').setCustomValidity('');
         $('audio-new-name').value = clip.label;
         $('audio-rename').showModal();
         $('audio-new-name').select();
@@ -107,8 +118,8 @@ export class SoundLibraryView {
           return;
         }
         if (await this.call('remove-audio-clip', clip.id)) {
-          this.engine.stop();
-          this.update(this.custom.filter((item) => item.id !== clip.id));
+          this.stopPreview();
+          await this.refresh();
           this.toast('片段已移到系统回收站');
         }
       }));
@@ -118,32 +129,66 @@ export class SoundLibraryView {
     return row;
   }
 
-  // 库内试听按总音量播放，正在播放的行可随时停止。
-  async preview(clip, button) {
-    if (button.textContent === '停止') {
-      this.engine.stop();
-      return;
-    }
+  // 事件表和音效库共用试听通道，解码尚未完成时也能取消，迟到的结束事件不会重置新按钮。
+  async preview(button, event, id) {
+    const togglingOff = this.previewSession?.button === button;
+    this.stopPreview();
+    if (togglingOff) return;
     const settings = this.settings();
     if (!settings.volume) { this.toast('当前总音量为零'); return; }
-    void this.engine.configure(settings);
-    const voice = await this.engine.play('library', true, clip.id);
-    if (!voice) { if (this.engine.lastError) this.toast(this.engine.lastError); return; }
+    const session = { button };
+    this.previewSession = session;
     button.textContent = '停止';
+    button.setAttribute('aria-pressed', 'true');
+    let voice;
+    try {
+      void this.engine.configure(settings);
+      voice = await this.engine.play(event, true, id);
+    } catch {
+      if (this.previewSession === session) {
+        this.stopPreview();
+        this.toast('无法试听，请检查音频输出设备。');
+      }
+      return;
+    }
+    if (this.previewSession !== session) return;
+    if (!voice) {
+      this.stopPreview();
+      if (this.engine.lastError) this.toast(this.engine.lastError);
+      return;
+    }
     const cleanup = voice.node.onended;
-    voice.node.onended = () => { cleanup(); button.textContent = '试听'; };
+    voice.node.onended = () => {
+      cleanup();
+      if (this.previewSession === session) this.stopPreview();
+    };
+  }
+
+  // 离开声音页或替换试听控件前收回播放，避免长录音失去停止入口。
+  stopPreview() {
+    if (!this.previewSession) return;
+    const { button } = this.previewSession;
+    this.previewSession = null;
+    button.textContent = '试听';
+    button.setAttribute('aria-pressed', 'false');
+    this.engine.stop();
   }
 
   // 重命名完成后更新选项文本，引用此片段的事件继续持有原编号。
   async saveName() {
     const dialog = $('audio-rename'), label = $('audio-new-name').value.trim();
     const id = this.renaming, submit = dialog.querySelector('[type=submit]');
-    if (!label || submit.disabled) return;
+    if (!label) {
+      $('audio-new-name').setCustomValidity('请输入音效名称');
+      $('audio-new-name').reportValidity();
+      return;
+    }
+    if (submit.disabled) return;
     submit.disabled = true;
     try {
       await this.call('rename-audio-clip', { id, label });
-      this.update(this.custom.map((clip) => clip.id === id ? { ...clip, label } : clip));
       dialog.close();
+      await this.refresh();
     } finally {
       submit.disabled = false;
     }

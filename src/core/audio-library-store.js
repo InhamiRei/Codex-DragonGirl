@@ -54,7 +54,6 @@ export async function verifyAudioLibrary(directory, bundledDirectory) {
   }
   return {
     total: AUDIO_FILES.length,
-    groups: 2,
     installed,
     bundled,
     missing,

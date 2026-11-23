@@ -43,7 +43,7 @@ try {
   await fs.writeFile(sentinel, '本地数据', { flag: 'wx' });
   // 把真实片段存入当前用户音效库，升级完成后逐字节检查，连同名称和分配一起验收。
   const sample = await fs.readFile(path.join(root, 'assets/audio', audioFile('end_a').localFile));
-  importedClip = await importAudioClip(soundDirectory, { label: '升级保留测试', bytes: sample });
+  importedClip = await importAudioClip(soundDirectory, { label: '升级保留测试', chunks: [sample] });
   const env = { ...process.env, DRAGONGIRL_TEST: '1', DRAGONGIRL_MONITOR_TEST: '1',
     DRAGONGIRL_DATA_DIR: user, DRAGONGIRL_FIXTURE_HOME: profile };
   delete env.ELECTRON_RUN_AS_NODE;

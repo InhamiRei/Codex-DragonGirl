@@ -7,11 +7,35 @@ function subscribe(channel, listener) {
   return () => ipcRenderer.removeListener(channel, callback);
 }
 
+// 每收到一次磁盘端的请求才编码和转交下一块，独立端口随渲染进程关闭。
+function importAudioClip(label, nextChunk) {
+  return new Promise((resolve, reject) => {
+    const { port1, port2 } = new MessageChannel();
+    port1.onmessage = ({ data }) => {
+      try {
+        if (data === 'next') {
+          // 主进程的 MessagePortMain 只接收序列化的音频块，传输列表只支持消息端口。
+          port1.postMessage(nextChunk());
+          return;
+        }
+        port1.close();
+        if (data.error) reject(new Error(data.error));
+        else resolve(data.clip);
+      } catch (error) {
+        port1.close();
+        reject(error);
+      }
+    };
+    ipcRenderer.postMessage('dg:import-audio', label, [port2]);
+  });
+}
+
 // 只暴露本轮交互需要的窄接口，角色和气泡共用这层受限桥接。
 contextBridge.exposeInMainWorld(
   'dragonGirl',
   Object.freeze({
     command: (command, value) => ipcRenderer.invoke('dg:command', command, value),
+    importAudioClip,
     onMonitor: (listener) => subscribe('dg:monitor', listener),
     // 更新窗口只订阅主进程已经筛选的发布状态。
     onAppUpdate: (listener) => subscribe('dg:update-state', listener),

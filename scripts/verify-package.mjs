@@ -65,7 +65,7 @@ try {
   }).trim());
   // 从解压后的真实安装包验证窗口遮挡、菜单、气泡时序与表情，避免只在源码目录中通过。
   for (const script of ['update-smoke.mjs', 'follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'account-tests-smoke.mjs', 'performance-smoke.mjs',
-    'character-smoke.mjs', 'dragon-config-smoke.mjs', 'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs',
+    'audio-library-smoke.mjs', 'character-smoke.mjs', 'dragon-config-smoke.mjs', 'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs',
     'kokkoro-interaction-smoke.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
@@ -84,6 +84,7 @@ try {
       '五实例完整界面测试',
       '原生启动助手完整性与静默联动入口',
       '位置保存与重启恢复、内置音效离线可用',
+      '三分钟音效导入、波形裁剪与播放、修复及升级后保留音效分配',
       '四档显示比例下双额度完整且无原生滚动条',
       '周额度耗尽时 5h 同步归零、按桶隔离并在恢复后回升，月日使用点号',
       '跟随窗口遮挡与最小化恢复、连续置前无闪烁',

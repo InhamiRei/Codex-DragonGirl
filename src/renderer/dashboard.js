@@ -138,6 +138,7 @@ function switchTab(tab) {
     'dragon-config': ['陪伴配置', '切换桌面角色并查看外观'],
   };
   if (!titles[tab]) return;
+  if (tab !== 'settings') soundLibrary?.stopPreview();
   closeSelects();
   activeTab = tab;
   hideChartTooltip();
@@ -169,6 +170,7 @@ function switchTab(tab) {
 // 设置分类使用固定行布局，同一份草稿在分类之间保留。
 function switchSettingsTab(tab) {
   closeSelects();
+  if (tab !== 'sound') soundLibrary.stopPreview();
   activeSettingsTab = tab;
   for (const pane of document.querySelectorAll('[data-settings-pane]'))
     pane.hidden = pane.dataset.settingsPane !== tab;
@@ -179,6 +181,11 @@ function switchSettingsTab(tab) {
     else button.removeAttribute('aria-current');
   }
   $('#content-scroll').scrollTop = 0;
+  // 进入声音页后再读取本机库及原声状态，其他分类无需构建七组音效选项。
+  if (tab === 'sound') {
+    void soundLibrary.refresh().catch(() => {});
+    void refreshAudioStatus();
+  }
 }
 
 // 所有修改通过同一入口标记，底部保存栏准确反映草稿状态。
@@ -827,9 +834,7 @@ function fillSettings(settings) {
   $('#permission-status').textContent = state.screenPermission
     ? '已获得窗口信息权限。'
     : '跟随异常时可检查权限，统计功能仍可使用。';
-  renderSoundSettings();
-  void soundLibrary.refresh().catch(() => {});
-  void refreshAudioStatus();
+  if (activeTab === 'settings' && activeSettingsTab === 'sound') renderSoundSettings();
   void refreshStartupStatus();
   renderInstanceSettings();
   renderPrices();
@@ -859,6 +864,8 @@ function readDraft() {
 // 所有事件分别选择库中的任意音效，暂时缺失的片段也保留其原编号。
 function renderSoundSettings() {
   const box = $('#sound-rows');
+  if (soundLibrary.previewSession && box.contains(soundLibrary.previewSession.button)) soundLibrary.stopPreview();
+  const files = soundLibrary.files, ids = new Set(files.map((file) => file.id));
   destroySelects(box);
   box.replaceChildren();
   for (const [key, label] of Object.entries(names)) {
@@ -872,22 +879,20 @@ function renderSoundSettings() {
     slider.value = draft.eventVolumes[key];
     slider.setAttribute('aria-label', `${label}音量`);
     value.textContent = `${Math.round(Number(slider.value) * 100)}%`;
-    updateRange(slider);
     slider.oninput = () => {
       draft.eventVolumes[key] = Number(slider.value);
       value.textContent = `${Math.round(Number(slider.value) * 100)}%`;
-      updateRange(slider);
-      markDirty();
     };
+    updateRange(slider);
     const selection = node('select'), selectedId = eventAudioId(key, draft);
     selection.id = `event-audio-${key}`;
     selection.setAttribute('aria-label', `${label}音效`);
-    for (const file of soundLibrary.files) {
+    for (const file of files) {
       const option = new Option(file.label, file.id);
       option.disabled = file.available === false;
       selection.add(option);
     }
-    if (![...selection.options].some((option) => option.value === selectedId))
+    if (!ids.has(selectedId))
       selection.add(new Option('未找到的导入片段', selectedId));
     selection.value = selectedId;
     selection.onchange = () => {
@@ -896,24 +901,26 @@ function renderSoundSettings() {
     };
     const preview = node('button', '', '试听');
     preview.type = 'button';
-    preview.onclick = async () => {
-      sound.configure(readDraft());
-      const played = await sound.play(key, true);
-      if (!played && sound.lastError) toast(sound.lastError);
-    };
+    preview.setAttribute('aria-label', `试听${label}音效`);
+    preview.setAttribute('aria-pressed', 'false');
+    preview.onclick = () => void soundLibrary.preview(preview, key);
     row.append(node('span', '', label), selection, slider, value, preview);
     box.append(row);
   }
   enhanceSelects(box);
 }
 
-// 内置原声与旧版本机原声均计入就绪状态，新安装直接显示可离线播放。
+// 检查结果同时用于首次进入和离线修复完成后的界面反馈。
+function showAudioStatus(status) {
+  $('#audio-library-status').textContent = status.complete
+    ? `${status.bundled ? '应用已内置原声音效' : '本机原声音效已就绪'}，${status.total} 段均可离线播放。`
+    : `已就绪 ${status.installed} / ${status.total} 段，可以修复缺失的原声。`;
+}
+
+// 首次或重新打开声音页时核对磁盘上的原声。
 async function refreshAudioStatus() {
   try {
-    const status = await call('audio-status');
-    $('#audio-library-status').textContent = status.complete
-      ? `${status.bundled ? '应用已内置原声音效' : '本机原声音效已就绪'}，${status.total} 段均可离线播放。`
-      : `已就绪 ${status.installed} / ${status.total} 段，可以修复缺失的原声。`;
+    showAudioStatus(await call('audio-status'));
   } catch { $('#audio-library-status').textContent = '读取原声音效状态失败。'; }
 }
 // 别名和显示隐藏仅属于龙娘，不改变 Cockpit 的实例注册表。
@@ -996,8 +1003,8 @@ async function start() {
   // 共享侧栏读取实际运行版本，使五个页面上的显示一致。
   $('#app-version').textContent = `v${state.appVersion}`;
   bindAppUpdates(bridge, call);
-  soundLibrary = new SoundLibraryView({ call, toast, engine: sound, settings: readDraft,
-    change: () => { if (draft) renderSoundSettings(); } });
+  soundLibrary = new SoundLibraryView({ call, importClip: bridge.importAudioClip, toast, engine: sound, settings: readDraft,
+    change: () => { if (draft && activeTab === 'settings' && activeSettingsTab === 'sound') renderSoundSettings(); } });
   accountTests = new AccountTestsView({ call, toast, getState: () => state });
   companionConfig = new CompanionConfigView($('#dragon-config'), {
     // 角色切换只同步偏好草稿中未修改的角色字段。
@@ -1019,9 +1026,9 @@ async function start() {
   receive(state);
   bridge.onMonitor(receive);
   // 修复后的试听与角色播放同步恢复，设置草稿保持当前内容。
-  bridge.onAudioReady(() => {
+  bridge.onAudioReady((status) => {
     void sound.configure(sound.settings);
-    void refreshAudioStatus();
+    showAudioStatus(status);
   });
   for (const b of document.querySelectorAll('.main-nav button'))
     b.addEventListener('click', () => switchTab(b.dataset.tab));
@@ -1154,7 +1161,6 @@ async function start() {
     button.textContent = '正在修复并校验…';
     try {
       await call('install-audio');
-      await refreshAudioStatus();
       toast('九段原声音效已就绪');
     } catch (error) {
       toast(error.message || '音效修复失败，请重试');

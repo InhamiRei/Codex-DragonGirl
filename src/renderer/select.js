@@ -78,11 +78,13 @@ export class SelectControl {
 
   // 程序更新选项或取消表单修改后，同步显示文本而不触发额外保存。
   sync() {
-    const options = [...this.select.options];
-    const chosen = options[this.select.selectedIndex];
+    const chosen = this.select.selectedOptions[0];
     this.value.textContent = chosen?.label || '请选择';
     this.trigger.title = chosen?.label || '';
-    this.trigger.disabled = this.select.disabled || !options.length;
+    this.trigger.disabled = this.select.disabled || !this.select.length;
+    // 折叠时只同步当前文字，打开哪个菜单才创建哪个菜单的选项和事件监听。
+    if (this.popup.hidden) return;
+    const options = [...this.select.options];
     const signature = JSON.stringify(options.map((o) => [o.value, o.label, o.disabled]));
     if (signature !== this.signature) {
       this.signature = signature;
@@ -118,10 +120,8 @@ export class SelectControl {
         String(Number(item.dataset.index) === this.select.selectedIndex),
       );
     if (!this.select.options[this.active]) this.active = Math.max(0, this.select.selectedIndex);
-    if (!this.popup.hidden) {
-      this.highlight(this.active ?? this.select.selectedIndex, false);
-      this.position();
-    }
+    this.highlight(this.active ?? this.select.selectedIndex, false);
+    this.position();
   }
 
   // 优先把控件滚动到有空间的位置，菜单始终出现在控件下方。
@@ -137,7 +137,6 @@ export class SelectControl {
     this.trigger.setAttribute('aria-expanded', 'true');
     this.active = Math.max(0, this.select.selectedIndex);
     this.sync();
-    this.position();
     this.highlight(this.active, true);
   }
 
@@ -163,6 +162,7 @@ export class SelectControl {
   // 关闭只撤销悬停选择，未确认的键盘移动不改表单值。
   close() {
     this.popup.hidden = true;
+    this.popup.children[this.active]?.classList.remove('active');
     this.trigger.setAttribute('aria-expanded', 'false');
     this.trigger.removeAttribute('aria-activedescendant');
     if (opened === this) opened = null;
@@ -182,9 +182,9 @@ export class SelectControl {
   // 活动选项只影响视觉焦点，原生值仍保留到确认时。
   highlight(index, scroll) {
     if (!this.popup.children[index]) return;
+    this.popup.children[this.active]?.classList.remove('active');
     this.active = index;
-    for (const item of this.popup.children)
-      item.classList.toggle('active', Number(item.dataset.index) === index);
+    this.popup.children[index].classList.add('active');
     this.trigger.setAttribute('aria-activedescendant', `${this.id}-option-${index}`);
     if (scroll) this.popup.children[index].scrollIntoView({ block: 'nearest' });
   }

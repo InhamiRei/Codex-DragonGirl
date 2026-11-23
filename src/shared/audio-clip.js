@@ -5,8 +5,8 @@ export function clipFrames(buffer, start, end) {
   return { first, last, duration: (last - first) / buffer.sampleRate };
 }
 
-// 写入标准的 16 位小端 WAV，逐帧交错保存左右声道。
-export function encodeClip(buffer, start, end) {
+// 先输出 WAV 文件头，随后按磁盘接收速度逐块编码，避免在界面线程额外分配一份完整录音。
+export function* encodeClipChunks(buffer, start, end) {
   const { first, last, duration } = clipFrames(buffer, start, end);
   const channels = buffer.numberOfChannels;
   if (!Number.isFinite(duration) || duration <= 0 || ![1, 2].includes(channels))
@@ -15,7 +15,7 @@ export function encodeClip(buffer, start, end) {
   const dataBytes = (last - first) * frameBytes;
   // 标准 RIFF 头用四字节记录长度，在分配内存前检查格式能否表示整个选区。
   if (dataBytes + 36 > 0xffffffff) throw new Error('所选音频超出 WAV 文件容量，请缩短选区。');
-  const bytes = new Uint8Array(44 + dataBytes);
+  const bytes = new Uint8Array(44);
   const view = new DataView(bytes.buffer);
   const encoder = new TextEncoder();
   bytes.set(encoder.encode('RIFF'), 0);
@@ -30,13 +30,20 @@ export function encodeClip(buffer, start, end) {
   view.setUint16(34, 16, true);
   bytes.set(encoder.encode('data'), 36);
   view.setUint32(40, dataBytes, true);
-  for (let channel = 0; channel < channels; channel++) {
-    const samples = buffer.getChannelData(channel);
-    let offset = 44 + channel * 2;
-    for (let frame = first; frame < last; frame++, offset += frameBytes) {
-      const sample = Math.max(-1, Math.min(1, samples[frame]));
-      view.setInt16(offset, Math.round(sample * (sample < 0 ? 32768 : 32767)), true);
+  yield bytes;
+  const planes = Array.from({ length: channels }, (_, index) => buffer.getChannelData(index));
+  const framesPerChunk = 1024 * 1024 / frameBytes;
+  for (let from = first; from < last; from += framesPerChunk) {
+    const to = Math.min(last, from + framesPerChunk);
+    const chunk = new Uint8Array((to - from) * frameBytes), pcm = new DataView(chunk.buffer);
+    for (let channel = 0; channel < channels; channel++) {
+      const samples = planes[channel];
+      let offset = channel * 2;
+      for (let frame = from; frame < to; frame++, offset += frameBytes) {
+        const sample = Math.max(-1, Math.min(1, samples[frame]));
+        pcm.setInt16(offset, Math.round(sample * (sample < 0 ? 32768 : 32767)), true);
+      }
     }
+    yield chunk;
   }
-  return bytes;
 }

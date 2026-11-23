@@ -1,4 +1,4 @@
-import { clipFrames, encodeClip } from '../shared/audio-clip.js';
+import { clipFrames, encodeClipChunks } from '../shared/audio-clip.js';
 
 // 通过固定编号取得裁剪器控件。
 const $ = (id) => document.getElementById(id);
@@ -63,10 +63,13 @@ export class AudioEditor {
     this.wave = $('audio-wave');
     this.canvas = this.wave.querySelector('canvas');
     this.handles = [...this.wave.querySelectorAll('[data-edge]')];
+    this.selection = this.wave.querySelector('.wave-selection');
+    this.playhead = this.wave.querySelector('.wave-playhead');
+    this.ticks = [...this.dialog.querySelectorAll('.wave-ruler span')];
     this.token = 0;
     for (const id of ['audio-cancel', 'audio-editor-close']) $(id).onclick = () => this.dialog.close();
     this.dialog.addEventListener('cancel', (event) => { if (this.saving) event.preventDefault(); });
-    this.dialog.addEventListener('close', () => this.release());
+    this.dialog.addEventListener('close', () => { if (!this.dialog.open) this.release(); });
     $('audio-preview').onclick = () => void this.preview().catch(() => {
       this.stopPreview();
       this.message('无法使用音频设备。', true);
@@ -79,7 +82,10 @@ export class AudioEditor {
     this.wave.onpointerup = (event) => this.endDrag(event);
     this.wave.onpointercancel = (event) => this.endDrag(event);
     for (const handle of this.handles) handle.onkeydown = (event) => this.moveHandle(event, handle.dataset.edge);
-    new ResizeObserver(() => { if (this.buffer) this.draw(); }).observe(this.wave);
+    new ResizeObserver(() => {
+      if (this.drag) this.drag.rect = this.wave.getBoundingClientRect();
+      if (this.buffer) this.draw();
+    }).observe(this.wave);
   }
 
   // 先显示载入状态，取消后迟到的解码结果不会写进下一次编辑。
@@ -91,7 +97,7 @@ export class AudioEditor {
     $('audio-clip-name').value = label.slice(0, 80);
     $('audio-start').value = $('audio-end').value = '';
     this.wave.dataset.ready = 'false';
-    for (const tick of this.dialog.querySelectorAll('.wave-ruler span')) tick.textContent = '';
+    for (const tick of this.ticks) tick.textContent = '';
     this.dialog.showModal();
     this.validate();
     this.message('正在读取音频…');
@@ -105,6 +111,9 @@ export class AudioEditor {
       // 打开文件或再次裁剪时默认选中整段，波形始终覆盖原录音的完整时长。
       this.start = 0;
       this.end = buffer.duration;
+      // 刻度和滑块范围随文件而定，拖动选区时只更新实际边界。
+      this.ticks.forEach((tick, i) => { tick.textContent = (buffer.duration * i / 2).toFixed(3) + ' s'; });
+      for (const handle of this.handles) handle.setAttribute('aria-valuemax', buffer.duration.toFixed(3));
       this.wave.dataset.ready = 'true';
       this.sync();
       $('audio-clip-name').focus();
@@ -117,6 +126,8 @@ export class AudioEditor {
   // 编辑器关闭时撤销试听、异步结果和大缓冲，即使用户在解码途中取消也可重新导入。
   release() {
     this.token++;
+    cancelAnimationFrame(this.dragPaint);
+    this.dragPaint = null;
     this.stopPreview();
     if (this.context) void this.context.close().catch(() => {});
     this.context = this.buffer = this.bars = this.drag = null;
@@ -173,16 +184,20 @@ export class AudioEditor {
   draw() {
     const width = this.wave.clientWidth, height = this.wave.clientHeight;
     if (!width || !height || !this.buffer) return;
+    const handleWidth = this.handles[0].offsetWidth;
     const dpr = window.devicePixelRatio;
     const pixelWidth = Math.round(width * dpr), pixelHeight = Math.round(height * dpr);
     if (this.canvas.width !== pixelWidth || this.canvas.height !== pixelHeight) {
       this.canvas.width = pixelWidth;
       this.canvas.height = pixelHeight;
-      this.bars = null;
     }
     const ctx = this.canvas.getContext('2d');
     const duration = this.buffer.duration;
-    this.bars ??= waveformBars(this.buffer, width, height);
+    if (!this.bars || this.barWidth !== width || this.barHeight !== height) {
+      this.bars = waveformBars(this.buffer, width, height);
+      this.barWidth = width;
+      this.barHeight = height;
+    }
     ctx.setTransform(pixelWidth / width, 0, 0, pixelHeight / height, 0, 0);
     ctx.clearRect(0, 0, width, height);
     // 拖动只更新颜色，选区边界经过同一根柱时仍能精确地分出灰色与紫色。
@@ -195,29 +210,21 @@ export class AudioEditor {
     ctx.fill(this.bars);
     const position = (time) => 100 * time / duration;
     const left = position(this.start), right = position(this.end);
-    const selection = this.wave.querySelector('.wave-selection');
-    selection.style.left = left + '%';
-    selection.style.width = (right - left) + '%';
+    this.selection.style.left = left + '%';
+    this.selection.style.width = (right - left) + '%';
     // 整首歌中的短选区可能窄于一个把手，此时上下错开，两个边界都可以点到。
-    const handleWidth = this.handles[0].offsetWidth;
     const handleX = (percent) => clamp(width * percent / 100, handleWidth / 2, width - handleWidth / 2);
     this.wave.classList.toggle('stacked-handles', handleX(right) - handleX(left) < handleWidth);
     for (const handle of this.handles) {
       const time = this[handle.dataset.edge], pos = position(time);
       handle.style.left = handleX(pos) + 'px';
-      handle.setAttribute('aria-valuemin', '0');
-      handle.setAttribute('aria-valuemax', this.buffer.duration.toFixed(3));
       handle.setAttribute('aria-valuenow', time.toFixed(3));
       handle.setAttribute('aria-valuetext', time.toFixed(3) + ' 秒');
     }
-    this.dialog.querySelectorAll('.wave-ruler span').forEach((tick, i) => {
-      tick.textContent = (duration * i / 2).toFixed(3) + ' s';
-    });
   }
 
   // 波形左右边缘分别对应原音频起点和终点。
-  timeAt(event) {
-    const rect = this.wave.getBoundingClientRect();
+  timeAt(event, rect) {
     return clamp((event.clientX - rect.left) / rect.width, 0, 1) * this.buffer.duration;
   }
 
@@ -225,30 +232,38 @@ export class AudioEditor {
   beginDrag(event) {
     if (event.button !== 0 || !this.buffer || this.saving || this.drag) return;
     this.stopPreview();
-    const edge = event.target.dataset.edge, anchor = this.timeAt(event);
-    this.drag = { id: event.pointerId, edge, anchor, offset: edge ? this[edge] - anchor : 0 };
+    const rect = this.wave.getBoundingClientRect(), edge = event.target.dataset.edge, anchor = this.timeAt(event, rect);
+    this.drag = { id: event.pointerId, rect, edge, anchor, downX: event.clientX, moved: false, offset: edge ? this[edge] - anchor : 0 };
     this.wave.setPointerCapture(event.pointerId);
   }
 
   // 捕获本次指针，离开波形仍可向两端拖到原录音边界。
   dragTo(event) {
     if (!this.drag || this.drag.id !== event.pointerId) return;
-    const time = this.timeAt(event);
+    const time = this.timeAt(event, this.drag.rect);
+    this.drag.moved = true;
     if (this.drag.edge) {
       // 从按住的位置连续移动边界，拖到波形两端时精确对齐文件的首尾。
       const atBoundary = time === 0 || time === this.buffer.duration;
       this.setEdge(this.drag.edge, atBoundary ? time : time + this.drag.offset);
-    }
-    else {
+    } else {
       this.start = Math.min(time, this.drag.anchor);
       this.end = Math.max(time, this.drag.anchor);
-      this.sync();
     }
+    // 保留每个指针事件的准确边界，同一显示帧只进行一次画布与表单绘制。
+    this.dragPaint ??= requestAnimationFrame(() => { this.dragPaint = null; this.sync(); });
   }
 
   // 指针释放后结束手势，保留最后一次明确选取的区间。
   endDrag(event) {
-    if (this.drag?.id === event.pointerId) this.drag = null;
+    if (this.drag?.id !== event.pointerId) return;
+    if (event.type === 'pointerup' && (this.drag.moved || event.clientX !== this.drag.downX)) this.dragTo(event);
+    if (this.dragPaint != null) {
+      cancelAnimationFrame(this.dragPaint);
+      this.dragPaint = null;
+      this.sync();
+    }
+    this.drag = null;
   }
 
   // 单个把手不可越过另一端，最小可选区间为一个采样帧。
@@ -256,7 +271,6 @@ export class AudioEditor {
     const step = 1 / this.buffer.sampleRate;
     if (edge === 'start') this.start = clamp(time, 0, Math.max(0, this.end - step));
     else this.end = clamp(time, Math.min(this.buffer.duration, this.start + step), this.buffer.duration);
-    this.sync();
   }
 
   // 方向键以毫秒移动，按住 Shift 可一次移动十分之一秒。
@@ -266,6 +280,7 @@ export class AudioEditor {
     const delta = (event.shiftKey ? 0.1 : 0.001) * (event.key === 'ArrowLeft' ? -1 : 1);
     const time = event.key === 'Home' ? 0 : event.key === 'End' ? this.buffer.duration : this[edge] + delta;
     this.setEdge(edge, time);
+    this.sync();
   }
 
   // 试听只播放将要保存的采样范围，使用总音量并实时标出播放位置。
@@ -274,14 +289,13 @@ export class AudioEditor {
     this.context ??= new AudioContext();
     const ctx = this.context, source = ctx.createBufferSource(), gain = ctx.createGain();
     this.source = source;
+    this.previewGain = gain;
     source.buffer = this.buffer;
     gain.gain.value = this.volume();
     source.connect(gain).connect(ctx.destination);
     const { first, duration } = clipFrames(this.buffer, this.start, this.end);
     const offset = first / this.buffer.sampleRate;
     source.onended = () => {
-      source.disconnect();
-      gain.disconnect();
       if (this.source === source) this.stopPreview();
     };
     await ctx.resume();
@@ -289,12 +303,11 @@ export class AudioEditor {
     const at = ctx.currentTime;
     source.start(at, offset, duration);
     $('audio-preview').textContent = '停止试听';
-    const head = this.wave.querySelector('.wave-playhead');
     // 用音频时钟把当前采样位置映射到整段录音的波形上。
     const tick = () => {
       const fraction = (offset + ctx.currentTime - at) / this.buffer.duration;
-      head.hidden = fraction < 0 || fraction > 1;
-      head.style.left = 100 * fraction + '%';
+      this.playhead.hidden = fraction < 0 || fraction > 1;
+      this.playhead.style.left = 100 * fraction + '%';
       this.animation = requestAnimationFrame(tick);
     };
     tick();
@@ -302,13 +315,14 @@ export class AudioEditor {
 
   // 取消、重新选择和保存均立即停止旧试听。
   stopPreview() {
+    if (!this.source) return;
     cancelAnimationFrame(this.animation);
-    if (this.source) {
-      const source = this.source;
-      this.source = null;
-      try { source.stop(); } catch {}
-    }
-    this.wave.querySelector('.wave-playhead').hidden = true;
+    this.source.onended = null;
+    try { this.source.stop(); } catch {}
+    this.source.disconnect();
+    this.previewGain.disconnect();
+    this.source = this.previewGain = null;
+    this.playhead.hidden = true;
     $('audio-preview').textContent = '试听选区';
   }
 
@@ -319,8 +333,8 @@ export class AudioEditor {
     this.saving = true;
     this.validate();
     try {
-      const bytes = encodeClip(this.buffer, this.start, this.end);
-      const clip = await this.save({ label: $('audio-clip-name').value.trim(), bytes });
+      const chunks = encodeClipChunks(this.buffer, this.start, this.end);
+      const clip = await this.save($('audio-clip-name').value.trim(), () => chunks.next().value ?? null);
       this.dialog.close();
       this.saved(clip);
     } catch (error) {

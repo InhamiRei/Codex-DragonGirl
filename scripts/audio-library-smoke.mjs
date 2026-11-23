@@ -110,7 +110,8 @@ async function openSettings(executablePath) {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.locator('[data-tab="settings"]').click();
   await page.locator('[data-settings-tab="sound"]').click();
-  await page.waitForFunction(() => document.querySelector('#sound-library-list li'));
+  await page.waitForFunction(() => document.querySelector('#event-audio-press option'));
+  assert.equal(await page.locator('#sound-library-list li').count(), 0, '折叠的音效库不需要建行');
 }
 
 // 操作和用户相同的自定义下拉菜单。
@@ -154,11 +155,42 @@ try {
   assert.equal(await editor.locator('input[type=range], #audio-source-name, #audio-editor-message').count(), 0);
   assert.doesNotMatch(await editor.innerText(), /拖动波形选取片段|片段最长|三分钟录音\.wav/);
   await page.locator('#audio-save').click();
-  await editor.waitFor({ state: 'hidden' });
+  await page.waitForFunction(() => !document.querySelector('#audio-editor').open ||
+    document.querySelector('#audio-selection-length').dataset.error === 'true');
+  assert.equal(await editor.isVisible(), false, await length.textContent());
   const longRow = page.locator('#sound-library-list li').filter({ hasText: '三分钟录音' });
   const longId = await longRow.getAttribute('data-clip-id');
-  const longFile = path.join(data, 'sound-library', longId, 'clip.wav');
+  const libraryDirectory = path.join(data, 'sound-library');
+  const longFile = path.join(libraryDirectory, longId, 'clip.wav');
   assert.equal((await fs.stat(longFile)).size, 44 + 180 * 48000 * 4);
+  // 使用真实导入通道中断第二块，确认磁盘回滚且前一次完成的导入仍在。
+  const headerFile = await fs.open(longFile);
+  const header = Buffer.alloc(44);
+  try { await headerFile.read(header, 0, header.length, 0); }
+  finally { await headerFile.close(); }
+  await assert.rejects(page.evaluate((bytes) => {
+    let sent = false;
+    return window.dragonGirl.importAudioClip('中断验证', () => {
+      if (sent) throw new Error('读取中断');
+      sent = true;
+      return Uint8Array.from(bytes);
+    });
+  }, [...header]), /读取中断/);
+  const deadline = Date.now() + 5000;
+  while ((await fs.readdir(libraryDirectory)).some((name) => name.startsWith('.import-'))) {
+    assert.ok(Date.now() < deadline, '导入中断后仍有临时音效文件');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  // 长片段的试听可以当场停止，离开声音页时也会停止。
+  const listen = longRow.getByRole('button', { name: /试听/ });
+  await listen.click();
+  assert.equal(await listen.getAttribute('aria-pressed'), 'true');
+  await listen.click();
+  assert.equal(await listen.getAttribute('aria-pressed'), 'false');
+  await listen.click();
+  await page.locator('[data-settings-tab="data"]').click();
+  assert.equal(await longRow.locator('button[aria-pressed]').getAttribute('aria-pressed'), 'false');
+  await page.locator('[data-settings-tab="sound"]').click();
 
   // 再次裁剪可拖选、移动手柄、输入起止时间；长选区保持有效，越界才提示。
   await longRow.getByRole('button', { name: /裁剪/ }).click();
@@ -290,7 +322,7 @@ try {
 
   // 库内有滚动条时，内置与导入行的首个按钮仍与卡片操作及总音量从同一列开始。
   for (const width of [880, 1160]) {
-    await application.evaluate((_, width) => globalThis.__dragonGirlApp.dashboard.window.setSize(width, 750), width);
+    await application.evaluate((_, width) => globalThis.__dragonGirlApp.dashboard.window.setContentSize(width, 750), width);
     await page.waitForFunction((width) => Math.abs(window.innerWidth - width) < 4, width);
     const aligned = await page.evaluate(() => {
       const rect = (selector) => document.querySelector(selector).getBoundingClientRect();

@@ -152,7 +152,10 @@ test('长提醒按需解码，只保留最近的提醒和点击音缓存', async
     tick(context.currentTime + 1);
     return { duration: 180 };
   };
-  await engine.configure(normalizeSettings({ eventSounds: { press: click, complete, error } }));
+  const settings = normalizeSettings({ eventSounds: { press: click, complete, error } });
+  const warm = engine.configure(settings);
+  await warm;
+  assert.equal(engine.configure(settings), warm, '重复配置应直接复用已完成的预热');
   assert.deepEqual(urls, [`dragon://app/sound-library/${click}.wav`]);
   const voice = await engine.play('complete');
   assert.equal(voice.endsAt - voice.startsAt, 180);
@@ -160,6 +163,11 @@ test('长提醒按需解码，只保留最近的提醒和点击音缓存', async
   assert.equal(engine.buffers.has(click), true);
   assert.equal(engine.buffers.has(complete), false);
   assert.equal(engine.buffers.has(error), true);
+  await engine.configure({ ...settings, soundEnabled: false });
+  assert.equal(engine.buffers.has(click), false);
+  assert.equal(engine.buffers.has(error), false);
+  await engine.configure(settings);
+  assert.equal(engine.buffers.has(click), true);
 });
 
 // 空闲计时不应打断仍在播放的三分钟音效，播完最后一段后才交还音频设备。

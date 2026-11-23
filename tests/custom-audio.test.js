@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { importAudioClip, listAudioClips, renameAudioClip, resolveCustomAudio } from '../src/core/custom-audio-store.js';
+import { importAudioClip, listAudioClips, renameAudioClip, resolveClipFolder, resolveCustomAudio } from '../src/core/custom-audio-store.js';
 import { downloadAudioLibrary } from '../src/core/audio-library-store.js';
 import { SettingsStore } from '../src/core/settings.js';
-import { encodeClip } from '../src/shared/audio-clip.js';
+import { encodeClipChunks } from '../src/shared/audio-clip.js';
 import { audioUrl } from '../src/shared/audio-library.js';
 
 // 两个声道在指定位置播放相反的样本，以检查裁剪边界、声道顺序和 PCM 精度。
@@ -15,8 +15,8 @@ function fixtureClip() {
   left[31] = 0.9;
   left[32] = 0.5;
   right[32] = -0.5;
-  return encodeClip({ sampleRate: 8000, length: 8000, numberOfChannels: 2,
-    getChannelData: (channel) => channel ? right : left }, 32 / 8000, 432 / 8000);
+  return Buffer.concat([...encodeClipChunks({ sampleRate: 8000, length: 8000, numberOfChannels: 2,
+    getChannelData: (channel) => channel ? right : left }, 32 / 8000, 432 / 8000)]);
 }
 
 // 每次验收都使用临时用户目录，可安全测试跨版本恢复及写入失败。
@@ -26,13 +26,30 @@ async function profile(t) {
   return root;
 }
 
+test('长选区分块编码，跨块的左右声道仍按原顺序和精度保存', () => {
+  const length = 300000, sampleRate = 48000;
+  const left = new Float32Array(length), right = new Float32Array(length);
+  const first = 7, boundary = first + 262144;
+  left[boundary - 1] = -1;
+  right[boundary] = 1;
+  const [header, a, b, extra] = encodeClipChunks({
+    length, sampleRate, numberOfChannels: 2, getChannelData: (channel) => channel ? right : left,
+  }, first / sampleRate, length / sampleRate);
+  assert.equal(header.byteLength, 44);
+  assert.equal(a.byteLength, 1024 * 1024);
+  assert.equal(b.byteLength, (length - boundary) * 4);
+  assert.equal(extra, undefined);
+  assert.equal(Buffer.from(a).readInt16LE(a.byteLength - 4), -32768);
+  assert.equal(Buffer.from(b).readInt16LE(2), 32767);
+});
+
 test('精确裁剪、并行同名导入、修复、迁移和重启保留片段及分配', async (t) => {
   const root = await profile(t), directory = path.join(root, 'sound-library');
   const bytes = fixtureClip(), wav = Buffer.from(bytes);
   assert.equal(wav.length, 44 + 400 * 4);
   assert.equal(wav.readInt16LE(44), 16384);
   assert.equal(wav.readInt16LE(46), -16384);
-  const [a, b] = await Promise.all([1, 2].map(() => importAudioClip(directory, { bytes, label: '同名片段' })));
+  const [a, b] = await Promise.all([1, 2].map(() => importAudioClip(directory, { chunks: [bytes], label: '同名片段' })));
   assert.notEqual(a.id, b.id);
   assert.equal(a.duration, 0.05);
   await renameAudioClip(directory, a.id, '轻声');
@@ -52,12 +69,20 @@ test('精确裁剪、并行同名导入、修复、迁移和重启保留片段�
 
 test('无效或中断的导入不会替换已保存的音效，单段说明损坏仍能恢复播放', async (t) => {
   const directory = await profile(t), bytes = fixtureClip();
-  const { id } = await importAudioClip(directory, { label: '保留', bytes });
-  await assert.rejects(importAudioClip(directory, { label: '无效', bytes: bytes.slice(0, 44) }));
-  const corrupt = bytes.slice();
+  const { id } = await importAudioClip(directory, { label: '保留', chunks: [bytes] });
+  await assert.rejects(importAudioClip(directory, { label: '无效', chunks: [bytes.subarray(0, 44)] }));
+  await assert.rejects(importAudioClip(directory, { label: '超长', chunks: [bytes, bytes.subarray(44)] }));
+  // 设备断开时回滚已经写入的样本，留下的只有此前提交的完整片段。
+  async function* interrupted() {
+    yield bytes.subarray(0, 50);
+    throw new Error('连接已断开');
+  }
+  await assert.rejects(importAudioClip(directory, { label: '中断', chunks: interrupted() }), /连接已断开/);
+  assert.deepEqual(await fs.readdir(directory), [id]);
+  const corrupt = Uint8Array.from(bytes);
   corrupt[20] = 3;
-  await assert.rejects(importAudioClip(directory, { label: '错误编码', bytes: corrupt }));
-  await assert.rejects(importAudioClip(directory, { label: '   ', bytes }));
+  await assert.rejects(importAudioClip(directory, { label: '错误编码', chunks: [corrupt] }));
+  await assert.rejects(importAudioClip(directory, { label: '   ', chunks: [bytes] }));
   await fs.mkdir(path.join(directory, '.import-interrupted'));
   await fs.writeFile(path.join(directory, id, 'info.json'), '{');
   const [clip] = await listAudioClips(directory);
@@ -71,4 +96,9 @@ test('无效或中断的导入不会替换已保存的音效，单段说明损�
     assert.equal(audioUrl(bad), null);
     assert.equal(await resolveCustomAudio(directory, bad), null);
   }
+  // 单独丢失声音文件的记录仍可定位并清理，其他片段无需重新导入。
+  await fs.unlink(path.join(directory, id, 'clip.wav'));
+  assert.equal((await listAudioClips(directory))[0].available, false);
+  assert.equal(await resolveCustomAudio(directory, id), null);
+  assert.equal(await resolveClipFolder(directory, id), path.join(directory, id));
 });

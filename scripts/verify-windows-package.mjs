@@ -47,7 +47,7 @@ try {
     'windows-smoke.mjs', 'update-smoke.mjs', 'app-smoke.mjs', 'startup-smoke.mjs', 'position-smoke.mjs', 'bubble-smoke.mjs',
     'follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs',
     'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs',
-    'account-tests-smoke.mjs', 'performance-smoke.mjs', 'character-smoke.mjs', 'dragon-config-smoke.mjs',
+    'account-tests-smoke.mjs', 'performance-smoke.mjs', 'audio-library-smoke.mjs', 'character-smoke.mjs', 'dragon-config-smoke.mjs',
     'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs', 'kokkoro-interaction-smoke.mjs',
   ];
   for (const script of scripts) {
@@ -69,6 +69,7 @@ try {
   report.checks.push('实际安装包侧栏版本、陪伴配置切换与原版部件、龙娘瞳色与重启恢复', '可可萝的完成、失败与任务台词', '账号测智界面与本地协议');
   report.checks.push('NSIS 安装包 SHA-256', '更新提示、下载校验、关闭弹窗后继续下载与安装操作');
   report.checks.push('重置卡悬停、滚动跟随、键盘访问、滚出视口与后台刷新');
+  report.checks.push('三分钟音效导入、波形裁剪与播放、修复及升级后保留音效分配');
   await fs.writeFile(path.join(output, 'verification-Windows-x64.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally {

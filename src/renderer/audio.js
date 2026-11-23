@@ -2,6 +2,9 @@ import {
   AUDIO_FILES, AUDIO_GROUPS, audioUrl, eventAudioId, isCustomAudioId, RELEASE_LEAD_SECONDS,
 } from '../shared/audio-library.js';
 
+// 内置清单固定，布局更新时复用编号数组。
+const originalIds = AUDIO_FILES.map((file) => file.id);
+
 // 原声和自选片段共用播放路径，保留录音的速度与音量包络。
 export class SoundEngine {
   // 音频设备和时钟可替换，便于验证同步起播、取消和音频线程排期。
@@ -16,6 +19,7 @@ export class SoundEngine {
     this.settings = {};
     this.buffers = new Map();
     this.pending = new Map();
+    this.warmIds = originalIds;
     this.active = new Set();
     this.generation = 0;
     this.sequence = 0;
@@ -29,14 +33,18 @@ export class SoundEngine {
     if (this.signature !== signature) {
       if (this.signature !== undefined) this.stop();
       this.signature = signature;
+      this.warming = null;
       // 按下和松开需要即时反馈；其余自定义提醒按需加载，避免同时解码多首长录音。
       this.clickClips = new Set(['press', 'release'].map((event) => eventAudioId(event, settings)).filter(isCustomAudioId));
+      this.warmIds = [...originalIds, ...this.clickClips];
       for (const id of this.buffers.keys())
         if (isCustomAudioId(id) && !this.clickClips.has(id)) this.buffers.delete(id);
     }
     this.settings = settings;
     if (!settings.soundEnabled || settings.volume === 0) {
       this.stop();
+      if (this.clickClips.size) this.warming = null;
+      for (const id of this.buffers.keys()) if (isCustomAudioId(id)) this.buffers.delete(id);
       return Promise.resolve(false);
     }
     for (const voice of this.active) {
@@ -47,10 +55,10 @@ export class SoundEngine {
 
   // 独立缓存加载中的承诺，连续点击或多个配置更新不会重复读取相同文件。
   load(id) {
-    const url = audioUrl(id);
-    if (!url) return Promise.reject(new Error('音频不在音效库中'));
     if (this.buffers.has(id)) return Promise.resolve(this.buffers.get(id));
     if (this.pending.has(id)) return this.pending.get(id);
+    const url = audioUrl(id);
+    if (!url) return Promise.reject(new Error('音频不在音效库中'));
     const loading = this.fetchFile(url)
       .then((response) => {
         if (!response.ok) throw new Error('本机音效文件缺失');
@@ -61,6 +69,7 @@ export class SoundEngine {
         if (!Number.isFinite(buffer.duration) || buffer.duration <= 0)
           throw new Error('音效片段时长无效');
         this.lastError = null;
+        if (isCustomAudioId(id) && (!this.settings.soundEnabled || this.settings.volume === 0)) return buffer;
         if (isCustomAudioId(id) && !this.clickClips?.has(id)) {
           if (!Object.values(this.settings.eventSounds || {}).includes(id)) return buffer;
           // 提醒只复用最近一次解码的自定义声音，正在播放的节点自行持有其缓冲。
@@ -77,17 +86,18 @@ export class SoundEngine {
 
   // 九段内置原声与自选点击音提前解码，切换分配后立即预热新的点击音。
   warm() {
-    if (this.warming && this.warmSignature === this.signature) return this.warming;
-    this.warmSignature = this.signature;
-    const ids = [...AUDIO_FILES.map((file) => file.id), ...(this.clickClips || [])];
-    const warming = Promise.all(ids.map((id) => this.load(id)))
-      .then(() => true)
-      .catch(() => {
-        if (this.warming === warming) this.lastError = '有音效未就绪，请检查本机音效库';
-        return false;
-      })
-      .finally(() => {
-        if (this.warming === warming) this.warming = null;
+    if (this.warming) return this.warming;
+    const missing = this.warmIds.filter((id) => !this.buffers.has(id));
+    // 已预热的结果一直复用到配置或缓存失效，后台刷新不再逐个查询音效。
+    if (!missing.length) return this.warming = Promise.resolve(true);
+    const warming = Promise.allSettled(missing.map((id) => this.load(id)))
+      .then((results) => {
+        const ready = results.every((result) => result.status === 'fulfilled');
+        if (!ready && this.warming === warming) {
+          this.warming = null;
+          this.lastError = '有音效未就绪，请检查本机音效库';
+        }
+        return ready;
       });
     this.warming = warming;
     return warming;
@@ -124,11 +134,11 @@ export class SoundEngine {
     }
     return this.load(id)
       .then((buffer) => {
-        if (!valid() || (requestedAt !== null && this.now() - requestedAt > 250)) return false;
+        if (!valid() || (requestedAt !== null && !isCustomAudioId(id) && this.now() - requestedAt > 250)) return false;
         return start(buffer);
       })
       .catch(() => {
-        this.lastError = '音效无法播放，请检查本机音效库';
+        if (valid()) this.lastError = '音效无法播放，请检查本机音效库';
         return false;
       });
   }
@@ -137,7 +147,6 @@ export class SoundEngine {
   beginPress() {
     this.cancelInteraction();
     const session = {
-      id: ++this.sequence,
       generation: this.generation,
       press: eventAudioId('press', this.settings),
       release: eventAudioId('release', this.settings),
@@ -218,8 +227,7 @@ export class SoundEngine {
     this.stopChannel(channel);
     const generation = this.generation,
       request = ++this.sequence,
-      // 自定义提醒首次解码可能超过交互延迟；仍由请求编号撤销已经过时的提醒。
-      at = preview || isCustomAudioId(id) ? null : this.now();
+      at = preview ? null : this.now();
     this[channel + 'Request'] = request;
     this.context();
     return this.readyBuffer(
