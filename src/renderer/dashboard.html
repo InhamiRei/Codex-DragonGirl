@@ -977,11 +977,11 @@
     <input id="audio-source-file" type="file" accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.flac,.aif,.aiff,.opus,.webm" hidden />
     <dialog id="audio-editor" class="sound-dialog" aria-labelledby="audio-editor-title">
       <header class="sound-dialog-head">
-        <div><h2 id="audio-editor-title">裁剪音效</h2><p id="audio-source-name"></p></div>
+        <h2 id="audio-editor-title">裁剪音效</h2>
         <button id="audio-editor-close" type="button" aria-label="关闭裁剪器">×</button>
       </header>
       <div class="sound-dialog-body">
-        <div class="wave-heading"><span>音频波形</span><output id="audio-selection-length"></output></div>
+        <div class="wave-heading"><span>音频波形</span><output id="audio-selection-length" for="audio-start audio-end"></output></div>
         <div id="audio-wave" class="audio-wave">
           <canvas aria-hidden="true"></canvas>
           <div class="wave-selection"></div>
@@ -990,19 +990,12 @@
           <div class="wave-playhead" hidden></div>
         </div>
         <div class="wave-ruler" aria-hidden="true"><span></span><span></span><span></span></div>
-        <div class="wave-tools">
-          <span>拖动波形选取片段，拖动两端微调。</span>
-          <label for="audio-zoom">缩放</label><input id="audio-zoom" type="range" min="0" max="6" step=".25" value="0" />
-          <output for="audio-zoom" id="audio-zoom-value">1×</output>
-        </div>
-        <label id="audio-pan-row" hidden>可视位置<input id="audio-pan" type="range" min="0" max="1" step="any" value="0" /></label>
         <div class="clip-times">
           <label>开始（秒）<input id="audio-start" type="number" min="0" step=".001" /></label>
           <label>结束（秒）<input id="audio-end" type="number" min="0" step=".001" /></label>
         </div>
         <label class="clip-name" for="audio-clip-name">音效名称</label>
         <input id="audio-clip-name" type="text" maxlength="80" autocomplete="off" />
-        <p id="audio-editor-message" role="status"></p>
       </div>
       <footer class="sound-dialog-footer">
         <button type="button" id="audio-preview">试听选区</button>

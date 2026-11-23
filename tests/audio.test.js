@@ -139,6 +139,47 @@ test('自选按下和松开在真实事件时刻独立起播', async () => {
   assert.equal([...engine.active].at(-1).id, custom);
 });
 
+// 点击音提前准备，较大的提醒音首次解码即使超过手势延迟也会完整起播。
+test('长提醒按需解码，只保留最近的提醒和点击音缓存', async () => {
+  const { engine, context, tick } = player();
+  const [click, complete, error] = ['a', 'b', 'c'].map((letter) => 'clip-' + letter.repeat(32));
+  const urls = [];
+  engine.fetchFile = async (url) => {
+    urls.push(url);
+    return { ok: true, arrayBuffer: async () => new ArrayBuffer(1) };
+  };
+  context.decodeAudioData = async () => {
+    tick(context.currentTime + 1);
+    return { duration: 180 };
+  };
+  await engine.configure(normalizeSettings({ eventSounds: { press: click, complete, error } }));
+  assert.deepEqual(urls, [`dragon://app/sound-library/${click}.wav`]);
+  const voice = await engine.play('complete');
+  assert.equal(voice.endsAt - voice.startsAt, 180);
+  assert.equal((await engine.play('error')).id, error);
+  assert.equal(engine.buffers.has(click), true);
+  assert.equal(engine.buffers.has(complete), false);
+  assert.equal(engine.buffers.has(error), true);
+});
+
+// 空闲计时不应打断仍在播放的三分钟音效，播完最后一段后才交还音频设备。
+test('长音播放期间保持设备运行，自然结束后仍可休眠', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { engine, context, tick } = player();
+  context.startRendering = undefined;
+  context.suspend = async () => { context.state = 'suspended'; };
+  const id = 'clip-' + 'd'.repeat(32);
+  engine.settings = normalizeSettings({ eventSounds: { complete: id } });
+  engine.buffers.set(id, { duration: 180 });
+  const voice = await engine.play('complete');
+  t.mock.timers.tick(15000);
+  assert.equal(context.state, 'running');
+  tick(180);
+  voice.node.onended();
+  t.mock.timers.tick(15000);
+  assert.equal(context.state, 'suspended');
+});
+
 // 暖缓存的按下同步起播；短点击松开音提前四十毫秒进入，而不是截断前半段。
 test('快速点击使用原声并在音频时间轴正确衔接', async () => {
   const { engine, context, tick } = player();

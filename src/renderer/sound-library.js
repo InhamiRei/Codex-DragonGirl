@@ -45,7 +45,7 @@ export class SoundLibraryView {
         return;
       }
       this.engine.stop();
-      void this.editor.open(file.name, file.name.replace(/\.[^.]+$/, '') || '音效片段', () => file.arrayBuffer());
+      void this.editor.open(file.name.replace(/\.[^.]+$/, '') || '音效片段', () => file.arrayBuffer());
     };
     $('audio-rename-cancel').onclick = () => $('audio-rename').close();
     $('audio-rename').querySelector('form').onsubmit = (event) => {
@@ -89,7 +89,7 @@ export class SoundLibraryView {
     actions.append(clipButton('试听', clip, (button) => this.preview(clip, button)),
       clipButton('裁剪', clip, async () => {
         this.engine.stop();
-        await this.editor.open(clip.label, clip.label + ' · 片段', async () => {
+        await this.editor.open(clip.label + ' · 片段', async () => {
           const result = await fetch(audioUrl(clip.id));
           if (!result.ok) throw new Error('读取音频失败。');
           return result.arrayBuffer();

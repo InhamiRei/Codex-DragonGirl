@@ -1,21 +1,21 @@
 import { clipFrames, encodeClip } from '../shared/audio-clip.js';
-import { MAX_CLIP_SECONDS } from '../shared/audio-library.js';
 
-// 编辑器的控件由固定编号引用，时间和视窗坐标统一限制在给定区间。
+// 通过固定编号取得裁剪器控件。
 const $ = (id) => document.getElementById(id);
+// 将指针位置与选区边界约束在音频的时间范围内。
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-const PEAK_BLOCK = 128;
 
-// 索引每一小段中所有声道的最大振幅，缩放和拖动时只需重画当前视窗。
-function waveformPeaks(buffer) {
-  const peaks = new Float32Array(Math.ceil(buffer.length / PEAK_BLOCK));
+// 每根波形柱对应全曲的一段采样，拖动选区时复用各声道的峰值。
+function waveformPeaks(buffer, count) {
+  const peaks = new Float32Array(count);
   let maximum = 0;
   for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
     const samples = buffer.getChannelData(channel);
     for (let block = 0; block < peaks.length; block++) {
-      const end = Math.min(samples.length, (block + 1) * PEAK_BLOCK);
+      const first = Math.floor(block * samples.length / count);
+      const end = Math.max(first + 1, Math.floor((block + 1) * samples.length / count));
       let peak = peaks[block];
-      for (let frame = block * PEAK_BLOCK; frame < end; frame++) peak = Math.max(peak, Math.abs(samples[frame]));
+      for (let frame = first; frame < end; frame++) peak = Math.max(peak, Math.abs(samples[frame]));
       peaks[block] = peak;
       maximum = Math.max(maximum, peak);
     }
@@ -52,16 +52,11 @@ export class AudioEditor {
     this.dialog.addEventListener('close', () => this.release());
     $('audio-preview').onclick = () => void this.preview().catch(() => {
       this.stopPreview();
-      this.message('无法使用音频设备。');
+      this.message('无法使用音频设备。', true);
     });
     $('audio-save').onclick = () => void this.commit();
     $('audio-clip-name').oninput = () => this.validate();
-    for (const edge of ['start', 'end']) $('audio-' + edge).oninput = () => this.readTimes(edge);
-    $('audio-zoom').oninput = () => this.zoom();
-    $('audio-pan').oninput = () => {
-      this.offset = Number($('audio-pan').value) * (this.buffer.duration - this.span);
-      this.draw();
-    };
+    for (const edge of ['start', 'end']) $('audio-' + edge).oninput = () => this.readTimes();
     this.wave.onpointerdown = (event) => this.beginDrag(event);
     this.wave.onpointermove = (event) => this.dragTo(event);
     this.wave.onpointerup = (event) => this.endDrag(event);
@@ -71,18 +66,13 @@ export class AudioEditor {
   }
 
   // 先显示载入状态，取消后迟到的解码结果不会写进下一次编辑。
-  async open(sourceName, label, read) {
+  async open(label, read) {
     const token = ++this.token;
-    this.buffer = null;
+    this.buffer = this.envelope = null;
     this.invalidTimes = false;
     this.saving = false;
-    $('audio-source-name').textContent = sourceName;
     $('audio-clip-name').value = label.slice(0, 80);
     $('audio-start').value = $('audio-end').value = '';
-    $('audio-zoom').value = '0';
-    $('audio-zoom-value').textContent = '1×';
-    $('audio-pan-row').hidden = true;
-    $('audio-selection-length').textContent = '';
     this.wave.dataset.ready = 'false';
     for (const tick of this.dialog.querySelectorAll('.wave-ruler span')) tick.textContent = '';
     this.dialog.showModal();
@@ -95,16 +85,15 @@ export class AudioEditor {
       if (token !== this.token || !this.dialog.open) return;
       if (!buffer.length) throw new Error();
       this.buffer = buffer;
-      this.envelope = waveformPeaks(buffer);
-      this.start = this.offset = 0;
-      this.span = buffer.duration;
-      this.end = Math.min(buffer.duration, MAX_CLIP_SECONDS);
+      // 打开文件或再次裁剪时默认选中整段，波形始终覆盖原录音的完整时长。
+      this.start = 0;
+      this.end = buffer.duration;
       this.wave.dataset.ready = 'true';
       this.sync();
       $('audio-clip-name').focus();
       $('audio-clip-name').select();
     } catch {
-      if (token === this.token) this.message('无法解码此文件，请选择可播放的 WAV、MP3、M4A、OGG 或 FLAC 音频。');
+      if (token === this.token) this.message('无法解码此文件，请选择可播放的音频。', true);
     }
   }
 
@@ -116,25 +105,25 @@ export class AudioEditor {
     this.context = this.buffer = this.envelope = this.drag = null;
   }
 
-  // 状态保留稳定高度，加载错误或无效选区都能就地看到。
-  message(text) {
-    $('audio-editor-message').textContent = text;
+  // 波形右上角同时承载选区时长和操作反馈，错误使用醒目的颜色。
+  message(text, error = false) {
+    const status = $('audio-selection-length');
+    status.textContent = text;
+    status.dataset.error = String(error);
   }
 
-  // 只有已命名、有实际采样且符合时长的选区才可保存。
+  // 只要选区包含有效采样就可试听，填好名称后即可保存整段或片段。
   validate() {
     const duration = this.buffer ? clipFrames(this.buffer, this.start, this.end).duration : 0;
-    const invalid = this.invalidTimes || duration <= 0 || duration > MAX_CLIP_SECONDS;
+    const invalid = this.invalidTimes || duration <= 0;
     $('audio-preview').disabled = !this.buffer || this.saving || invalid;
     $('audio-save').disabled = $('audio-preview').disabled || !$('audio-clip-name').value.trim();
-    for (const id of ['audio-zoom', 'audio-pan', 'audio-start', 'audio-end', 'audio-clip-name'])
+    for (const id of ['audio-start', 'audio-end', 'audio-clip-name'])
       $(id).disabled = !this.buffer || this.saving;
     for (const id of ['audio-editor-close', 'audio-cancel']) $(id).disabled = this.saving;
     if (!this.buffer) return;
-    $('audio-selection-length').textContent = `已选 ${duration.toFixed(3)} 秒`;
-    const message = this.invalidTimes ? '开始时间须早于结束时间，且两者都在原音频范围内。'
-      : (invalid ? `请选择大于 0 且不超过 ${MAX_CLIP_SECONDS} 秒的片段。` : `原音频 ${this.buffer.duration.toFixed(3)} 秒 · 片段最长 ${MAX_CLIP_SECONDS} 秒`);
-    this.message(this.saving ? '正在保存片段…' : message);
+    if (invalid) this.message('请在音频范围内选择有效的起止时间。', true);
+    else this.message(this.saving ? '正在保存片段…' : `已选 ${duration.toFixed(3)} 秒`);
   }
 
   // 用实际采样帧保留文件末尾，输入栏以毫秒显示且可用键盘微调。
@@ -150,7 +139,7 @@ export class AudioEditor {
   }
 
   // 输入未完成时保留文本和上一份有效波形，修正后再启用试听与保存。
-  readTimes(edge) {
+  readTimes() {
     this.stopPreview();
     const start = $('audio-start').valueAsNumber, end = $('audio-end').valueAsNumber;
     if (!(start >= 0 && start < end && end <= this.buffer.duration + 0.0005)) {
@@ -160,42 +149,10 @@ export class AudioEditor {
     }
     this.start = start;
     this.end = Math.min(end, this.buffer.duration);
-    const time = this[edge];
-    if (time < this.offset || time > this.offset + this.span) this.center(time);
     this.sync(false);
   }
 
-  // 视窗围绕选区缩放，平移只改变可视范围。
-  center(time) {
-    this.offset = clamp(time - this.span / 2, 0, this.buffer.duration - this.span);
-  }
-
-  // 放大后用位置滑块浏览原录音的任意部分。
-  zoom() {
-    const factor = 2 ** Number($('audio-zoom').value);
-    this.span = this.buffer.duration / factor;
-    this.center((this.start + this.end) / 2);
-    $('audio-zoom-value').textContent = Number(factor.toFixed(1)) + '×';
-    $('audio-pan-row').hidden = factor === 1;
-    this.draw();
-  }
-
-  // 取当前像素范围的峰值，高倍缩放时读取原始采样以显示极短的瞬态。
-  peak(first, last) {
-    let peak = 0;
-    if (last - first >= PEAK_BLOCK) {
-      for (let i = Math.floor(first / PEAK_BLOCK); i < Math.ceil(last / PEAK_BLOCK); i++)
-        peak = Math.max(peak, this.envelope.peaks[i]);
-    } else {
-      for (let channel = 0; channel < this.buffer.numberOfChannels; channel++) {
-        const samples = this.buffer.getChannelData(channel);
-        for (let i = first; i < last; i++) peak = Math.max(peak, Math.abs(samples[i]));
-      }
-    }
-    return peak;
-  }
-
-  // 以设备像素绘制可见波形，选区、两端把手与刻度共用同一时间坐标。
+  // 以固定的全曲时间轴绘制波形、选区和刻度，窗口宽度改变后才重新计算峰值。
   draw() {
     const width = this.wave.clientWidth, height = this.wave.clientHeight;
     if (!width || !height || !this.buffer) return;
@@ -207,51 +164,48 @@ export class AudioEditor {
     const ctx = this.canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    const rate = this.buffer.sampleRate, limit = this.buffer.length;
-    for (let x = 0; x < width; x += 3) {
-      const time = this.offset + x / width * this.span;
-      const first = Math.min(limit - 1, Math.floor(time * rate));
-      const last = Math.min(limit, Math.max(first + 1, Math.floor((time + 3 / width * this.span) * rate)));
-      const bar = Math.max(1, this.peak(first, last) / (this.envelope.maximum || 1) * (height - 24));
+    const duration = this.buffer.duration, count = Math.ceil(width / 3);
+    if (this.envelope?.peaks.length !== count) this.envelope = waveformPeaks(this.buffer, count);
+    for (let i = 0; i < count; i++) {
+      const time = i / count * duration;
+      const bar = Math.max(1, this.envelope.peaks[i] / (this.envelope.maximum || 1) * (height - 24));
       ctx.fillStyle = time >= this.start && time <= this.end ? '#7561ad' : '#bab8c6';
-      ctx.fillRect(x, (height - bar) / 2, 2, bar);
+      ctx.fillRect(i / count * width, (height - bar) / 2, 2, bar);
     }
-    const position = (time) => 100 * (time - this.offset) / this.span;
+    const position = (time) => 100 * time / duration;
     const left = position(this.start), right = position(this.end);
     const selection = this.wave.querySelector('.wave-selection');
-    selection.style.left = clamp(left, 0, 100) + '%';
-    selection.style.width = (clamp(right, 0, 100) - clamp(left, 0, 100)) + '%';
+    selection.style.left = left + '%';
+    selection.style.width = (right - left) + '%';
+    // 整首歌中的短选区可能窄于一个把手，此时上下错开，两个边界都可以点到。
+    const handleWidth = this.handles[0].offsetWidth;
+    const handleX = (percent) => clamp(width * percent / 100, handleWidth / 2, width - handleWidth / 2);
+    this.wave.classList.toggle('stacked-handles', handleX(right) - handleX(left) < handleWidth);
     for (const handle of this.handles) {
       const time = this[handle.dataset.edge], pos = position(time);
-      handle.hidden = pos < -0.001 || pos > 100.001;
-      handle.style.left = `clamp(7px, ${pos}%, calc(100% - 7px))`;
+      handle.style.left = handleX(pos) + 'px';
       handle.setAttribute('aria-valuemin', '0');
       handle.setAttribute('aria-valuemax', this.buffer.duration.toFixed(3));
       handle.setAttribute('aria-valuenow', time.toFixed(3));
       handle.setAttribute('aria-valuetext', time.toFixed(3) + ' 秒');
     }
     this.dialog.querySelectorAll('.wave-ruler span').forEach((tick, i) => {
-      tick.textContent = (this.offset + this.span * i / 2).toFixed(3) + ' s';
+      tick.textContent = (duration * i / 2).toFixed(3) + ' s';
     });
-    const range = this.buffer.duration - this.span;
-    $('audio-pan').value = range > 0 ? this.offset / range : 0;
-    for (const id of ['audio-pan', 'audio-zoom']) {
-      const slider = $(id);
-      slider.style.setProperty('--range-progress', (100 * slider.value / slider.max) + '%');
-    }
   }
 
-  // 指针坐标限制在当前可见时间段内。
+  // 波形左右边缘分别对应原音频起点和终点。
   timeAt(event) {
     const rect = this.wave.getBoundingClientRect();
-    return this.offset + clamp((event.clientX - rect.left) / rect.width, 0, 1) * this.span;
+    return clamp((event.clientX - rect.left) / rect.width, 0, 1) * this.buffer.duration;
   }
 
   // 拖动空白或波形重选区间，拖动两端的把手只移动对应边界。
   beginDrag(event) {
     if (event.button !== 0 || !this.buffer || this.saving || this.drag) return;
     this.stopPreview();
-    this.drag = { id: event.pointerId, edge: event.target.dataset.edge, anchor: this.timeAt(event) };
+    const edge = event.target.dataset.edge, anchor = this.timeAt(event);
+    this.drag = { id: event.pointerId, edge, anchor, offset: edge ? this[edge] - anchor : 0 };
     this.wave.setPointerCapture(event.pointerId);
   }
 
@@ -259,7 +213,11 @@ export class AudioEditor {
   dragTo(event) {
     if (!this.drag || this.drag.id !== event.pointerId) return;
     const time = this.timeAt(event);
-    if (this.drag.edge) this.setEdge(this.drag.edge, time);
+    if (this.drag.edge) {
+      // 从按住的位置连续移动边界，拖到波形两端时精确对齐文件的首尾。
+      const atBoundary = time === 0 || time === this.buffer.duration;
+      this.setEdge(this.drag.edge, atBoundary ? time : time + this.drag.offset);
+    }
     else {
       this.start = Math.min(time, this.drag.anchor);
       this.end = Math.max(time, this.drag.anchor);
@@ -287,10 +245,6 @@ export class AudioEditor {
     const delta = (event.shiftKey ? 0.1 : 0.001) * (event.key === 'ArrowLeft' ? -1 : 1);
     const time = event.key === 'Home' ? 0 : event.key === 'End' ? this.buffer.duration : this[edge] + delta;
     this.setEdge(edge, time);
-    if (this[edge] < this.offset || this[edge] > this.offset + this.span) {
-      this.center(this[edge]);
-      this.draw();
-    }
   }
 
   // 试听只播放将要保存的采样范围，使用总音量并实时标出播放位置。
@@ -315,9 +269,9 @@ export class AudioEditor {
     source.start(at, offset, duration);
     $('audio-preview').textContent = '停止试听';
     const head = this.wave.querySelector('.wave-playhead');
-    // 播放位置取自音频时钟，缩放或平移视口后也能保持同步。
+    // 用音频时钟把当前采样位置映射到整段录音的波形上。
     const tick = () => {
-      const fraction = (offset + ctx.currentTime - at - this.offset) / this.span;
+      const fraction = (offset + ctx.currentTime - at) / this.buffer.duration;
       head.hidden = fraction < 0 || fraction > 1;
       head.style.left = 100 * fraction + '%';
       this.animation = requestAnimationFrame(tick);
@@ -351,7 +305,7 @@ export class AudioEditor {
     } catch (error) {
       this.saving = false;
       this.validate();
-      this.message(error.message || '片段保存失败，请重试。');
+      this.message(error.message || '片段保存失败，请重试。', true);
     }
   }
 }

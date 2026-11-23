@@ -16,6 +16,20 @@ delete env.ELECTRON_RUN_AS_NODE;
 let application, page;
 const errors = [];
 
+// 将已有的立体声 WAV 原样循环成三分钟测试录音，首尾都有可识别的信号。
+async function writeLongSource(target) {
+  const file = AUDIO_FILES.find((entry) => entry.id === 'end_a');
+  const sample = await fs.readFile(path.join(root, 'assets/audio', file.localFile));
+  assert.equal(sample.toString('ascii', 36, 40), 'data');
+  const size = 180 * sample.readUInt32LE(28);
+  const wav = Buffer.alloc(44 + size);
+  sample.copy(wav, 0, 0, 44);
+  wav.writeUInt32LE(size + 36, 4);
+  wav.writeUInt32LE(size, 40);
+  wav.fill(sample.subarray(44), 44);
+  await fs.writeFile(target, wav);
+}
+
 // 先通过开发版导入，第二次从指定的实际成品打开同一份测试用户目录。
 async function openSettings(executablePath) {
   application = await electron.launch(executablePath
@@ -55,17 +69,34 @@ try {
   await fs.mkdir(path.join(user, '.codex/sessions'), { recursive: true });
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
   await fs.writeFile(path.join(data, 'settings.json'), JSON.stringify({ soundTheme: 'fx1', mode: 'desktop' }));
-  const original = path.join(temp, '清脆提示.wav');
-  await fs.copyFile(path.join(root, 'assets/audio', AUDIO_FILES.find((file) => file.id === 'end_a').localFile), original);
+  const original = path.join(temp, '三分钟录音.wav');
+  await writeLongSource(original);
   await openSettings();
   assert.equal(await page.locator('#event-audio-press').inputValue(), 'd1');
   assert.equal(await page.locator('#event-audio-release').inputValue(), 'd2');
   assert.equal(await page.locator('select[name="soundTheme"]').count(), 0);
 
-  // 通过文件选择入口打开波形，核对拖选、手柄、缩放、精确时间与试听。
+  // 默认显示全曲并选中整首，右上角正常显示三分钟时长。
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: '导入音效', exact: true }).click();
   await (await chooser).setFiles(original);
+  await page.locator('#audio-wave[data-ready=true]').waitFor();
+  const editor = page.locator('#audio-editor'), length = page.locator('#audio-selection-length');
+  const ruler = editor.locator('.wave-ruler span');
+  assert.deepEqual(await ruler.allTextContents(), ['0.000 s', '90.000 s', '180.000 s']);
+  assert.equal(await length.textContent(), '已选 180.000 秒');
+  assert.equal(await length.getAttribute('data-error'), 'false');
+  assert.equal(await editor.locator('input[type=range], #audio-source-name, #audio-editor-message').count(), 0);
+  assert.doesNotMatch(await editor.innerText(), /拖动波形选取片段|片段最长|三分钟录音\.wav/);
+  await page.locator('#audio-save').click();
+  await editor.waitFor({ state: 'hidden' });
+  const longRow = page.locator('#sound-library-list li').filter({ hasText: '三分钟录音' });
+  const longId = await longRow.getAttribute('data-clip-id');
+  const longFile = path.join(data, 'sound-library', longId, 'clip.wav');
+  assert.equal((await fs.stat(longFile)).size, 44 + 180 * 48000 * 4);
+
+  // 再次裁剪可拖选、移动手柄、输入起止时间；长选区保持有效，越界才提示。
+  await longRow.getByRole('button', { name: /裁剪/ }).click();
   await page.locator('#audio-wave[data-ready=true]').waitFor();
   const wave = await page.locator('#audio-wave').boundingBox();
   await page.mouse.move(wave.x + wave.width * 0.1, wave.y + 16);
@@ -73,15 +104,27 @@ try {
   await page.mouse.move(wave.x + wave.width * 0.8, wave.y + 25, { steps: 7 });
   await page.mouse.up();
   const start = Number(await page.locator('#audio-start').inputValue());
-  assert.ok(start > 0.15 && start < 0.18);
+  assert.ok(Math.abs(start - 18) < 0.5);
+  assert.equal(await page.locator('#audio-save').isEnabled(), true);
+  assert.equal(await length.getAttribute('data-error'), 'false');
   await page.locator('[data-edge=start]').focus();
   await page.keyboard.press('ArrowRight');
   assert.ok(Number(await page.locator('#audio-start').inputValue()) > start);
-  await page.locator('#audio-zoom').focus();
-  await page.keyboard.press('ArrowRight');
-  assert.equal(await page.locator('#audio-pan-row').isVisible(), true);
   await page.locator('#audio-start').fill('0.125');
+  await page.locator('#audio-end').fill('181');
+  assert.equal(await length.getAttribute('data-error'), 'true');
+  assert.equal(await page.locator('#audio-save').isDisabled(), true);
+  assert.equal(await page.locator('#audio-preview').isDisabled(), true);
   await page.locator('#audio-end').fill('0.825');
+  assert.deepEqual(await ruler.allTextContents(), ['0.000 s', '90.000 s', '180.000 s']);
+  assert.equal(await length.textContent(), '已选 0.700 秒');
+  // 全曲视图里极短的选区也需要两个独立的拖动目标。
+  for (const handle of await editor.locator('.wave-handle').all()) {
+    assert.ok(await handle.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2) === element;
+    }), '短选区的把手互相遮挡');
+  }
   await page.locator('#audio-clip-name').fill('轻声提醒');
   await page.locator('#audio-preview').click();
   await page.locator('.wave-playhead').waitFor({ state: 'visible' });
@@ -103,6 +146,7 @@ try {
   await choose('press', id);
   await choose('release', 'exp_orb');
   await choose('question', id);
+  await choose('complete', longId);
   await saveSettings();
   await page.locator('#install-audio').click();
   await page.waitForFunction(() => document.querySelector('#audio-library-status').textContent.includes('本机原声音效已就绪'));
@@ -116,6 +160,12 @@ try {
   assert.equal(await page.locator('#event-audio-press').inputValue(), id);
   assert.equal(await page.locator('#event-audio-release').inputValue(), 'exp_orb');
   assert.equal(await page.locator('#event-audio-question option:checked').textContent(), '轻声');
+  assert.equal(await page.locator('#event-audio-complete').inputValue(), longId);
+  await page.locator('#sound-catalog summary').click();
+  await page.locator(`li[data-clip-id="${longId}"]`).getByRole('button', { name: /裁剪/ }).click();
+  await page.locator('#audio-wave[data-ready=true]').waitFor();
+  assert.equal(await page.locator('#audio-selection-length').textContent(), '已选 180.000 秒');
+  await page.locator('#audio-cancel').click();
   const character = application.windows().find((window) => window.url().endsWith('/character.html'));
   await character.waitForFunction((id) => window.__soundEngine?.buffers.has(id), id);
   const playback = await character.evaluate(async (id) => {
@@ -129,6 +179,24 @@ try {
   assert.equal(playback.release, 'exp_orb');
   assert.equal(playback.question, id);
   assert.ok(Math.abs(playback.duration - 0.7) < 0.0001);
+  // 用实际事件播放器离线渲染完整三分钟，核对原先 15 秒界限之后直到结尾仍有声音。
+  const full = await character.evaluate(async (id) => {
+    const { SoundEngine } = await import('./audio.js');
+    const settings = window.__soundEngine.settings;
+    const context = new OfflineAudioContext(1, 180 * 8000 + 128, 8000);
+    const player = new SoundEngine({ createContext: () => context });
+    player.settings = settings;
+    const live = await window.__soundEngine.play('complete');
+    player.buffers.set(id, live.node.buffer);
+    window.__soundEngine.stop();
+    const voice = await player.play('complete');
+    const samples = (await context.startRendering()).getChannelData(0);
+    return { id: voice.id, duration: voice.endsAt - voice.startsAt,
+      tail: samples.subarray(178 * 8000, 180 * 8000).some((value) => Math.abs(value) > 0.001) };
+  }, longId);
+  assert.equal(full.id, longId);
+  assert.ok(Math.abs(full.duration - 180) < 0.001);
+  assert.ok(full.tail, '三分钟事件音效没有播放到末尾');
   await assert.rejects(page.evaluate((id) => window.dragonGirl.command('remove-audio-clip', id), id), /正在使用/);
 
   // 在界面最窄和常规尺寸检查修复行的间距，以及与总音量控件列的水平对齐。
@@ -145,7 +213,7 @@ try {
   await page.locator('#import-audio').scrollIntoViewIfNeeded();
   await page.locator('#import-audio').locator('xpath=ancestor::article').screenshot({ path: path.join(root, '.artifacts/sound-library.png') });
   assert.deepEqual(errors, []);
-  console.log('音效库验收通过：旧设置迁移、波形裁剪、试听、保存、重命名、跨安装恢复、角色播放与宽窄布局。');
+  console.log('音效库验收通过：三分钟整曲导入和播至末尾、全曲视图、精确裁剪、试听、重启恢复与宽窄布局。');
 } finally {
   await application?.close().catch(() => {});
   await fs.rm(temp, { recursive: true, force: true, maxRetries: 3 });

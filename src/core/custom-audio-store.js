@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { isCustomAudioId, MAX_CLIP_SECONDS } from '../shared/audio-library.js';
+import { isCustomAudioId } from '../shared/audio-library.js';
 
 // 主进程独立核验裁剪器提交的标准 PCM 头和实际帧数，时长由音频字节计算。
 function readClipDuration(bytes) {
@@ -10,15 +10,14 @@ function readClipDuration(bytes) {
   const wav = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const channels = wav.readUInt16LE(22), rate = wav.readUInt32LE(24);
   const frameBytes = channels * 2, size = wav.length - 44;
-  const duration = size / (rate * frameBytes);
   if (wav.toString('latin1', 0, 4) !== 'RIFF' || wav.readUInt32LE(4) !== wav.length - 8 ||
       wav.toString('latin1', 8, 16) !== 'WAVEfmt ' || wav.readUInt32LE(16) !== 16 ||
       wav.readUInt16LE(20) !== 1 || ![1, 2].includes(channels) || rate < 8000 || rate > 96000 ||
       wav.readUInt32LE(28) !== rate * frameBytes || wav.readUInt16LE(32) !== frameBytes ||
       wav.readUInt16LE(34) !== 16 || wav.toString('latin1', 36, 40) !== 'data' ||
-      wav.readUInt32LE(40) !== size || size % frameBytes !== 0 || duration > MAX_CLIP_SECONDS)
-    throw new Error(`请选择不超过 ${MAX_CLIP_SECONDS} 秒的有效 WAV 片段。`);
-  return duration;
+      wav.readUInt32LE(40) !== size || size % frameBytes !== 0)
+    throw new Error('片段不是有效的 PCM WAV 音频。');
+  return size / (rate * frameBytes);
 }
 
 // 名称仅用作界面文本，允许同名片段和中文名称。

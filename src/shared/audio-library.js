@@ -121,7 +121,6 @@ export const DEFAULT_EVENT_SOUNDS = Object.freeze({
   quota: 'exp_orb',
 });
 export const RELEASE_LEAD_SECONDS = 0.04;
-export const MAX_CLIP_SECONDS = 15;
 
 // 只允许音效清单中的标识，禁止将任意路径作为音频地址。
 export function audioFile(id) {

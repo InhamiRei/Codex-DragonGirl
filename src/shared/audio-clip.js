@@ -1,5 +1,3 @@
-import { MAX_CLIP_SECONDS } from './audio-library.js';
-
 // 片段统一存为无损 PCM WAV，试听与导出使用同一对采样帧边界。
 export function clipFrames(buffer, start, end) {
   const first = Math.max(0, Math.min(buffer.length, Math.round(start * buffer.sampleRate)));
@@ -11,10 +9,12 @@ export function clipFrames(buffer, start, end) {
 export function encodeClip(buffer, start, end) {
   const { first, last, duration } = clipFrames(buffer, start, end);
   const channels = buffer.numberOfChannels;
-  if (!(duration > 0 && duration <= MAX_CLIP_SECONDS) || ![1, 2].includes(channels))
-    throw new Error(`请选择不超过 ${MAX_CLIP_SECONDS} 秒的有效片段。`);
+  if (!Number.isFinite(duration) || duration <= 0 || ![1, 2].includes(channels))
+    throw new Error('请选择有效的音频片段。');
   const frameBytes = channels * 2;
   const dataBytes = (last - first) * frameBytes;
+  // 标准 RIFF 头用四字节记录长度，在分配内存前检查格式能否表示整个选区。
+  if (dataBytes + 36 > 0xffffffff) throw new Error('所选音频超出 WAV 文件容量，请缩短选区。');
   const bytes = new Uint8Array(44 + dataBytes);
   const view = new DataView(bytes.buffer);
   const encoder = new TextEncoder();

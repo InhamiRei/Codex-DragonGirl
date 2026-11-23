@@ -1,5 +1,5 @@
 import {
-  AUDIO_FILES, AUDIO_GROUPS, audioUrl, eventAudioId, isCustomAudioId, MAX_CLIP_SECONDS, RELEASE_LEAD_SECONDS,
+  AUDIO_FILES, AUDIO_GROUPS, audioUrl, eventAudioId, isCustomAudioId, RELEASE_LEAD_SECONDS,
 } from '../shared/audio-library.js';
 
 // 原声和自选片段共用播放路径，保留录音的速度与音量包络。
@@ -26,12 +26,15 @@ export class SoundEngine {
   // 更换事件分配时撤销旧排期，只常驻缓存仍被事件引用的自定义片段。
   configure(settings) {
     const signature = JSON.stringify([settings.soundTheme, settings.eventSounds]);
-    if (this.signature !== undefined && this.signature !== signature) this.stop();
-    this.signature = signature;
+    if (this.signature !== signature) {
+      if (this.signature !== undefined) this.stop();
+      this.signature = signature;
+      // 按下和松开需要即时反馈；其余自定义提醒按需加载，避免同时解码多首长录音。
+      this.clickClips = new Set(['press', 'release'].map((event) => eventAudioId(event, settings)).filter(isCustomAudioId));
+      for (const id of this.buffers.keys())
+        if (isCustomAudioId(id) && !this.clickClips.has(id)) this.buffers.delete(id);
+    }
     this.settings = settings;
-    this.assignedClips = new Set(Object.values(settings.eventSounds || {}).filter(isCustomAudioId));
-    for (const id of this.buffers.keys())
-      if (isCustomAudioId(id) && !this.assignedClips.has(id)) this.buffers.delete(id);
     if (!settings.soundEnabled || settings.volume === 0) {
       this.stop();
       return Promise.resolve(false);
@@ -55,12 +58,16 @@ export class SoundEngine {
       })
       .then((bytes) => this.context(false).decodeAudioData(bytes))
       .then((buffer) => {
-        // 设备重采样可能令末帧相差一个采样周期。
-        if (!Number.isFinite(buffer.duration) || buffer.duration <= 0 ||
-            buffer.duration > MAX_CLIP_SECONDS + 1 / (buffer.sampleRate || 48000))
+        if (!Number.isFinite(buffer.duration) || buffer.duration <= 0)
           throw new Error('音效片段时长无效');
-        if (!isCustomAudioId(id) || this.assignedClips?.has(id)) this.buffers.set(id, buffer);
         this.lastError = null;
+        if (isCustomAudioId(id) && !this.clickClips?.has(id)) {
+          if (!Object.values(this.settings.eventSounds || {}).includes(id)) return buffer;
+          // 提醒只复用最近一次解码的自定义声音，正在播放的节点自行持有其缓冲。
+          for (const cached of this.buffers.keys())
+            if (isCustomAudioId(cached) && !this.clickClips?.has(cached)) this.buffers.delete(cached);
+        }
+        this.buffers.set(id, buffer);
         return buffer;
       })
       .finally(() => this.pending.delete(id));
@@ -68,11 +75,11 @@ export class SoundEngine {
     return loading;
   }
 
-  // 九段原声与已分配的片段提前解码，配置切换期间也会立即预热新选择。
+  // 九段内置原声与自选点击音提前解码，切换分配后立即预热新的点击音。
   warm() {
     if (this.warming && this.warmSignature === this.signature) return this.warming;
     this.warmSignature = this.signature;
-    const ids = [...AUDIO_FILES.map((file) => file.id), ...(this.assignedClips || [])];
+    const ids = [...AUDIO_FILES.map((file) => file.id), ...(this.clickClips || [])];
     const warming = Promise.all(ids.map((id) => this.load(id)))
       .then(() => true)
       .catch(() => {
@@ -211,7 +218,8 @@ export class SoundEngine {
     this.stopChannel(channel);
     const generation = this.generation,
       request = ++this.sequence,
-      at = preview ? null : this.now();
+      // 自定义提醒首次解码可能超过交互延迟；仍由请求编号撤销已经过时的提醒。
+      at = preview || isCustomAudioId(id) ? null : this.now();
     this[channel + 'Request'] = request;
     this.context();
     return this.readyBuffer(
@@ -244,6 +252,8 @@ export class SoundEngine {
       node.disconnect();
       gain.disconnect();
       this.active.delete(voice);
+      // 长音频可能播过原来的空闲计时点，最后一段结束后重新安排设备休眠。
+      if (!this.active.size) this.context(false);
     };
     node.start(startAt);
     this.played++;
