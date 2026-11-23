@@ -1,4 +1,4 @@
-import { BUBBLE_FRAME } from '../shared/geometry.js';
+import { BUBBLE_FRAME, BUBBLE_SIZE, bubbleOutline } from '../shared/geometry.js';
 import { quotaResetTime } from '../shared/time.js';
 import { tokenDisplayParts } from '../shared/presentation.js';
 
@@ -20,6 +20,7 @@ const PRAYER_START_MS = 100;
 const PRAYER_END_MS = 400;
 const PRAYER_BEATS = { '，': 1.28, '、': 1.28, '；': 1.28, '：': 1.28, '。': 1.65, '！': 1.65, '？': 1.65, '\n': 1.55, ' ': 0.5 };
 let lastInteractive = null;
+let lastCursor = null;
 let renderedRevision = -1;
 let renderedShowId = -1;
 let animatedShowId = -1;
@@ -100,8 +101,9 @@ function renderUsage(usage) {
 // 判断文字是否处于固定椭圆内部，只调整内容容器，不再根据文字改写气泡尺寸。
 function contentFitsEllipse() {
   const rect = bubble.getBoundingClientRect();
-  const radiusX = Math.max(1, rect.width / 2 - 5);
-  const radiusY = Math.max(1, rect.height / 2 - 5);
+  const inset = 5 * rect.width / bubble.offsetWidth;
+  const radiusX = Math.max(1, rect.width / 2 - inset);
+  const radiusY = Math.max(1, rect.height / 2 - inset);
   const walker = document.createTreeWalker(contentPane, NodeFilter.SHOW_TEXT);
   while (walker.nextNode()) {
     if (!walker.currentNode.textContent.trim()) continue;
@@ -130,7 +132,7 @@ function measure(model, scrollTop = 0) {
   // 测量在未滚动的坐标中进行，结束后恢复已有阅读位置，不让后台刷新把长内容推回顶部。
   contentPane.scrollTop = Math.min(scrollTop, Math.max(0, contentPane.scrollHeight - contentPane.clientHeight));
   const label = model.kind === 'usage'
-    ? '点击查看一句语录，点击角色可收起气泡'
+    ? '点击角色或气泡查看一句语录，再点收起'
     : model.kind === 'prayer' ? '点击收起祷文，可用滚轮回看'
     : '点击收起气泡';
   bubble.setAttribute('aria-label', scrollable && model.kind !== 'prayer'
@@ -236,16 +238,12 @@ function scrollFromKeyboard(event) {
   return true;
 }
 
-// 主体只绘制完整椭圆，两颗独立小泡沿下缘定位，保持原有位置和间距。
+// 用原生摆放时同一份椭圆和泡链几何绘制，上下翻转时整套轮廓一起镜像。
 function drawOutline(model) {
-  const style = getComputedStyle(bubble);
-  const width = Number.parseFloat(style.width);
-  const height = Number.parseFloat(style.height);
-  const stroke = BUBBLE_FRAME.stroke;
-  const centerX = bubble.offsetLeft + width / 2;
-  const centerY = bubble.offsetTop + height / 2;
-  const radiusX = width / 2 - stroke / 2;
-  const radiusY = height / 2 - stroke / 2;
+  const shape = bubbleOutline(BUBBLE_SIZE, model.tailX / model.scale);
+  const { centerX, radiusX, radiusY, anchorX, tailTop } = shape;
+  const below = model.side === 'below';
+  const centerY = below ? BUBBLE_SIZE.height - shape.centerY : shape.centerY;
   outlinePath.setAttribute('d', [
     `M ${centerX} ${centerY - radiusY}`,
     `A ${radiusX} ${radiusY} 0 0 1 ${centerX + radiusX} ${centerY}`,
@@ -253,16 +251,9 @@ function drawOutline(model) {
     `A ${radiusX} ${radiusY} 0 0 1 ${centerX - radiusX} ${centerY}`,
     `A ${radiusX} ${radiusY} 0 0 1 ${centerX} ${centerY - radiusY} Z`,
   ].join(' '));
-  outlinePath.removeAttribute('transform');
-  const anchorX = Math.max(centerX - radiusX + 20, Math.min(centerX + radiusX - 20, model.tailX));
-  const arc = radiusY * Math.sqrt(Math.max(0, 1 - ((anchorX - centerX) / radiusX) ** 2));
-  const below = model.side === 'below';
-  const edge = centerY + (below ? -arc : arc);
   const rightSide = model.horizontal === 'right';
   tail.style.left = `${rightSide ? anchorX + BUBBLE_FRAME.thoughtRoot - BUBBLE_FRAME.thoughtWidth : anchorX - BUBBLE_FRAME.thoughtRoot}px`;
-  tail.style.top = `${below
-    ? edge - stroke / 2 - BUBBLE_FRAME.thoughtGap - BUBBLE_FRAME.thoughtHeight
-    : edge + stroke / 2 + BUBBLE_FRAME.thoughtGap}px`;
+  tail.style.top = `${below ? BUBBLE_SIZE.height - tailTop - BUBBLE_FRAME.thoughtHeight : tailTop}px`;
 }
 
 // 内容版本只负责排版，显示轮次才负责入场动画；可见内容刷新始终在原位完成。
@@ -291,8 +282,7 @@ function render(model) {
   if (renderedRevision !== model.revision) {
     renderedRevision = model.revision;
     if (!keepVisible) document.body.dataset.ready = 'false';
-    document.documentElement.style.setProperty('--max-width', `${model.maxWidth}px`);
-    document.documentElement.style.setProperty('--max-height', `${model.maxHeight}px`);
+    document.documentElement.style.setProperty('--bubble-scale', String(model.scale));
     plan.hidden = true;
     if (model.usage) renderUsage(model.usage);
     else if (!sameTyping) message.textContent = model.typingId == null ? model.text : '';
@@ -302,6 +292,8 @@ function render(model) {
   const measured = model.measuredRevision === model.revision;
   const ready = keepVisible || measured;
   document.body.dataset.ready = String(ready);
+  // 原生坐标可能先于排版回执到达；椭圆就绪或方向改变后用原地鼠标再做一次真实路径命中。
+  if (ready && lastCursor) routeCursor(lastCursor, !keepVisible);
   if (ready && model.typingId != null && !sameTyping) startPrayerTyping(model);
   if (!measured || animatedShowId === showId) return;
   animatedShowId = showId;
@@ -311,12 +303,13 @@ function render(model) {
 }
 
 // 直接按完整椭圆命中，移除凸点后的空白与两颗独立小泡都继续穿透。
-function routeCursor(point) {
-  const matrix = outlinePath.getScreenCTM();
+function routeCursor(point, refresh = false) {
+  lastCursor = point;
+  const matrix = document.body.dataset.ready === 'true' && outlinePath.getScreenCTM();
   const local = matrix && new DOMPoint(point.x, point.y).matrixTransform(matrix.inverse());
-  const enabled = document.body.dataset.ready === 'true' && !!local &&
+  const enabled = !!local &&
     (outlinePath.isPointInFill(local) || outlinePath.isPointInStroke(local));
-  if (enabled === lastInteractive) return;
+  if (enabled === lastInteractive && !refresh) return;
   lastInteractive = enabled;
   bridge.interactive(enabled);
 }
@@ -324,9 +317,12 @@ function routeCursor(point) {
 // 等字体可用后再测量首屏，避免初始化阶段的替代字体把气泡撑大。
 async function start() {
   await document.fonts.ready;
+  // 设计画布大小固定，切换语录、额度或角色比例时只更新实际缩放值。
+  document.documentElement.style.setProperty('--max-width', `${BUBBLE_SIZE.width}px`);
+  document.documentElement.style.setProperty('--max-height', `${BUBBLE_SIZE.height}px`);
   bridge.onBubble(render);
   render(await bridge.bootstrap());
-  bridge.onCursor(routeCursor);
+  bridge.onCursor(point => routeCursor(point, point.refresh === true));
   bridge.onInputState((enabled) => {
     lastInteractive = enabled;
   });

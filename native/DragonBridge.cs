@@ -36,6 +36,14 @@ internal static class DragonBridge
     [StructLayout(LayoutKind.Sequential)]
     private struct Rect { internal int Left, Top, Right, Bottom; }
 
+    // 一份快照中的句柄、物理边界和置顶状态来自同一次枚举，顺序从屏幕前方向后。
+    private sealed class ScreenWindow
+    {
+        internal IntPtr Handle;
+        internal Rect Bounds;
+        internal bool Topmost;
+    }
+
     // Windows x64 的 MEMORY_BASIC_INFORMATION 按指针宽度对齐，区域长度使用 SIZE_T。
     [StructLayout(LayoutKind.Sequential)]
     private struct MemoryRegion
@@ -66,15 +74,18 @@ internal static class DragonBridge
     // 忽略隐藏窗口。
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr window);
+    // 模态文件框、确认框由系统禁用其宿主，桌宠在宿主重新启用之前收起。
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowEnabled(IntPtr window);
+    // 区分宿主与它拥有的非模态工具窗，并在用户要求聚焦时找到可用的模态窗口。
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr window, uint command);
     // 最小化窗口不显示关联角色。
     [DllImport("user32.dll")]
     private static extern bool IsIconic(IntPtr window);
     // 区分系统置顶窗口与普通窗口，避免相对排序意外继承置顶属性。
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
-    // 读取实际相邻窗口，包含没有绘制区域的窗口，不能使用过滤后的快照作为 Win32 插入位置。
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetWindow(IntPtr window, uint command);
     // 只调整本应用角色的层级，不激活、不移动、不显示隐藏窗口，也不改变所有者层级。
     [DllImport("user32.dll")]
     private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
@@ -215,7 +226,7 @@ internal static class DragonBridge
             {
                 try
                 {
-                    if (!IsTarget(process) || Windows(process.Id, true).Count == 0) continue;
+                    if (!IsTarget(process) || FirstHostWindow(process.Id, true) == IntPtr.Zero) continue;
                     Dictionary<string, string> environment = ReadEnvironment(process.Id);
                     if (environment == null) continue;
                     string home;
@@ -233,31 +244,44 @@ internal static class DragonBridge
         discoveredAt = DateTime.UtcNow;
     }
 
-    // 保留可见宿主窗口；原生菜单继续参与层级排序，但不能成为跟随或聚焦目标。
-    private static List<Dictionary<string, object>> Windows(int pid, bool includeMinimized, Dictionary<long, Rect> frames = null)
+    // 过滤同进程工具窗、附属面板和菜单，小型最小化窗口仍可供用户从管理页恢复。
+    private static bool CanHost(IntPtr window, Rect rect, bool minimized)
     {
-        List<Dictionary<string, object>> windows = new List<Dictionary<string, object>>();
+        if (!minimized && (rect.Right - rect.Left < 400 || rect.Bottom - rect.Top < 300)) return false;
+        if ((GetWindowLongPtr(window, -20).ToInt64() & 0x80) != 0) return false; // WS_EX_TOOLWINDOW。
+        IntPtr parent = GetWindow(window, 4); // GW_OWNER。
+        if (parent != IntPtr.Zero && IsWindowVisible(parent)) return false;
         StringBuilder className = new StringBuilder(64);
+        return GetClassName(window, className, className.Capacity) == 0 || className.ToString() != "#32768";
+    }
+
+    // 发现或聚焦进程只需要最前面的宿主，第一个命中后就结束系统枚举。
+    private static IntPtr FirstHostWindow(int pid, bool includeMinimized)
+    {
+        IntPtr found = IntPtr.Zero;
         EnumWindows(delegate(IntPtr window, IntPtr parameter)
         {
             uint owner;
             GetWindowThreadProcessId(window, out owner);
-            if (owner != (uint)pid || !IsWindowVisible(window) || (!includeMinimized && IsIconic(window))) return true;
+            if (owner != (uint)pid || !IsWindowVisible(window)) return true;
+            bool minimized = IsIconic(window);
             int cloaked;
-            if (!includeMinimized && DwmGetWindowAttribute(window, 14, out cloaked, 4) == 0 && cloaked != 0) return true;
+            if (!includeMinimized && (minimized || DwmGetWindowAttribute(window, 14, out cloaked, 4) == 0 && cloaked != 0)) return true;
             Rect rect;
-            if (!GetWindowRect(window, out rect)) return true;
-            if (!includeMinimized && (rect.Right - rect.Left < 400 || rect.Bottom - rect.Top < 300)) return true;
-            if (GetClassName(window, className, className.Capacity) > 0 && className.ToString() == "#32768") return true;
-            long id = window.ToInt64();
-            if (frames != null) frames[id] = rect;
-            windows.Add(new Dictionary<string, object> {
-                { "id", id }, { "x", rect.Left }, { "y", rect.Top },
-                { "width", rect.Right - rect.Left }, { "height", rect.Bottom - rect.Top }
-            });
-            return true;
+            if (!GetWindowRect(window, out rect) || !CanHost(window, rect, minimized)) return true;
+            found = window;
+            return false;
         }, IntPtr.Zero);
-        return windows;
+        return found;
+    }
+
+    // 普通遮挡窗和宿主用相同的物理矩形，序列化时可以复用同一次采样得到的记录。
+    private static Dictionary<string, object> WindowFrame(long id, Rect rect)
+    {
+        return new Dictionary<string, object> {
+            { "id", id }, { "x", rect.Left }, { "y", rect.Top },
+            { "width", rect.Right - rect.Left }, { "height", rect.Bottom - rect.Top }
+        };
     }
 
     // 只比较宿主几何，角色自移动与其他窗口变动不会延长高频采样。
@@ -273,11 +297,9 @@ internal static class DragonBridge
     }
 
     // 仅发布屏幕上窗口的前后编号；层级变化也触发快照，不读取其他应用的标题或内容。
-    private static List<long> WindowOrder(out List<long> topmost, out List<Dictionary<string, object>> normalWindows)
+    private static List<ScreenWindow> VisibleWindows()
     {
-        List<long> order = new List<long>();
-        List<long> raised = new List<long>();
-        List<Dictionary<string, object>> normal = new List<Dictionary<string, object>>();
+        List<ScreenWindow> windows = new List<ScreenWindow>();
         EnumWindows(delegate(IntPtr window, IntPtr parameter)
         {
             if (!IsWindowVisible(window) || IsIconic(window)) return true;
@@ -286,17 +308,10 @@ internal static class DragonBridge
             // 输入法等辅助窗口可能带有可见标志却没有绘制区域，不能因此把前台宿主误判为被覆盖。
             Rect rect;
             if (!GetWindowRect(window, out rect) || rect.Right <= rect.Left || rect.Bottom <= rect.Top) return true;
-            order.Add(window.ToInt64());
-            if ((GetWindowLongPtr(window, -20).ToInt64() & 0x8) != 0) raised.Add(window.ToInt64());
-            else normal.Add(new Dictionary<string, object> {
-                { "id", window.ToInt64() }, { "x", rect.Left }, { "y", rect.Top },
-                { "width", rect.Right - rect.Left }, { "height", rect.Bottom - rect.Top }
-            });
+            windows.Add(new ScreenWindow { Handle = window, Bounds = rect, Topmost = IsTopmost(window) });
             return true;
         }, IntPtr.Zero);
-        topmost = raised;
-        normalWindows = normal;
-        return order;
+        return windows;
     }
 
     // 输出与 macOS 一致的行分隔 JSON 协议，物理坐标显式标记。
@@ -307,20 +322,47 @@ internal static class DragonBridge
         GetWindowThreadProcessId(GetForegroundWindow(), out front);
         List<Dictionary<string, object>> rows = new List<Dictionary<string, object>>();
         Dictionary<long, Rect> frames = new Dictionary<long, Rect>();
+        var hostsByPid = new Dictionary<uint, List<Dictionary<string, object>>>();
+        foreach (ProcessRow row in processes) hostsByPid[(uint)row.Pid] = new List<Dictionary<string, object>>();
+        List<long> topmost = new List<long>(), order = new List<long>();
+        List<Dictionary<string, object>> normalWindows = new List<Dictionary<string, object>>();
+        // 同一次 EnumWindows 既提供遮挡顺序也提供各实例的宿主，拖动时不会为每个进程重扫整桌面。
+        foreach (ScreenWindow window in VisibleWindows())
+        {
+            long id = window.Handle.ToInt64();
+            order.Add(id);
+            Dictionary<string, object> frame = null;
+            if (window.Topmost) topmost.Add(id);
+            else
+            {
+                frame = WindowFrame(id, window.Bounds);
+                normalWindows.Add(frame);
+            }
+            if (hostsByPid.Count == 0) continue;
+            uint owner;
+            GetWindowThreadProcessId(window.Handle, out owner);
+            List<Dictionary<string, object>> hosts;
+            if (hostsByPid.TryGetValue(owner, out hosts) && CanHost(window.Handle, window.Bounds, false))
+            {
+                hosts.Add(frame ?? WindowFrame(id, window.Bounds));
+                frames[id] = window.Bounds;
+            }
+        }
         foreach (ProcessRow row in processes)
+        {
+            List<Dictionary<string, object>> hosts = hostsByPid[(uint)row.Pid];
+            bool blocked = hosts.Count > 0 && !IsWindowEnabled(new IntPtr((long)hosts[0]["id"]));
             rows.Add(new Dictionary<string, object> {
                 { "pid", row.Pid }, { "appPath", row.AppPath }, { "home", row.Home },
                 { "networkEnv", row.Network }, { "frontmost", front == (uint)row.Pid },
-                { "coordinateSpace", "physical" }, { "windows", Windows(row.Pid, false, frames) }
+                { "coordinateSpace", "physical" }, { "windows", hosts }, { "modalOpen", blocked }
             });
+        }
         if (HostFramesChanged(frames))
         {
             lastHostFrames = frames;
             hostMovement.Restart();
         }
-        List<long> topmost;
-        List<Dictionary<string, object>> normalWindows;
-        List<long> order = WindowOrder(out topmost, out normalWindows);
         return Json.Serialize(new Dictionary<string, object> { { "processes", rows }, { "windowOrder", order }, { "topmostWindows", topmost }, { "normalWindows", normalWindows }, { "screenPermission", true } });
     }
 
@@ -330,10 +372,16 @@ internal static class DragonBridge
         using (Process process = Process.GetProcessById(pid))
         {
             if (!IsTarget(process)) return 1;
-            List<Dictionary<string, object>> windows = Windows(pid, true);
-            if (windows.Count == 0) return 1;
-            IntPtr window = new IntPtr((long)windows[0]["id"]);
-            ShowWindow(window, 9);
+            IntPtr window = FirstHostWindow(pid, false);
+            if (window == IntPtr.Zero) window = FirstHostWindow(pid, true);
+            if (window == IntPtr.Zero) return 1;
+            if (IsIconic(window)) ShowWindow(window, 9); // SW_RESTORE 也会取消最大化，仅用于最小化窗口。
+            if (!IsWindowEnabled(window))
+            {
+                IntPtr popup = GetWindow(window, 6); // GW_ENABLEDPOPUP。
+                if (popup == IntPtr.Zero || !IsWindowVisible(popup) || !IsWindowEnabled(popup)) return 1;
+                window = popup;
+            }
             return SetForegroundWindow(window) ? 0 : 1;
         }
     }
@@ -349,8 +397,8 @@ internal static class DragonBridge
             long id = Convert.ToInt64(item);
             uint pid;
             IntPtr window = new IntPtr(id);
-            if (id <= 0 || GetWindowThreadProcessId(window, out pid) == 0 || pid != (uint)owner)
-                throw new ArgumentException();
+            // 气泡或特效可能已销毁；只丢弃失效或不属于本应用的编号，让仍有效的角色继续排序。
+            if (id <= 0 || GetWindowThreadProcessId(window, out pid) == 0 || pid != (uint)owner) continue;
             if (!result.Contains(window)) result.Add(window);
         }
         return result;
@@ -362,7 +410,13 @@ internal static class DragonBridge
         return window != IntPtr.Zero && (GetWindowLongPtr(window, -20).ToInt64() & 0x8) != 0;
     }
 
-    // 前台普通宿主的角色留在置顶组底部；后台宿主保持相邻普通层级，隐藏气泡也同步样式。
+    // 比较物理像素的开区间；另一台显示器上的窗口或刚好相接的边界都不会遮住桌宠。
+    private static bool Overlaps(Rect a, Rect b)
+    {
+        return a.Left < b.Right && b.Left < a.Right && a.Top < b.Bottom && b.Top < a.Bottom;
+    }
+
+    // 只用本次真正显示的窗口排序。收起的气泡不能充当角色的锚点，其他应用的前台焦点保持原样。
     private static void StackWindows(Dictionary<string, object> request, int owner)
     {
         List<IntPtr> overlays = OwnedHandles(request["overlays"], owner);
@@ -378,52 +432,50 @@ internal static class DragonBridge
             return;
         }
         uint hostPid;
-        if (GetWindowThreadProcessId(host, out hostPid) == 0 || !IsWindowVisible(host) || IsIconic(host)) return;
+        if (GetWindowThreadProcessId(host, out hostPid) == 0 || !IsWindowVisible(host) || IsIconic(host) || !IsWindowEnabled(host)) return;
         using (Process process = Process.GetProcessById((int)hostPid)) if (!IsTarget(process)) return;
-        List<long> topmost;
-        List<Dictionary<string, object>> normal;
-        List<long> visible = WindowOrder(out topmost, out normal);
-        if (!visible.Contains(host.ToInt64())) return;
-        bool hostTopmost = IsTopmost(host);
-        bool floating = hostTopmost;
-        if (!floating) foreach (long id in visible)
+        List<ScreenWindow> visible = VisibleWindows();
+        int hostIndex = visible.FindIndex(w => w.Handle == host);
+        if (hostIndex < 0) return;
+        // 上次在前台收起的气泡先退回普通层，下次在后台弹出通知时也不会带着旧置顶样式出现。
+        foreach (IntPtr window in overlays)
+            if (!IsWindowVisible(window) && IsTopmost(window)) SetWindowPos(window, new IntPtr(-2), 0, 0, 0, 0, flags);
+        // 请求按波纹、角色、气泡从后到前排列；隐藏窗口重新显示时会触发新的排序请求。
+        List<int> layers = overlays.ConvertAll(handle => visible.FindIndex(w => w.Handle == handle));
+        layers.RemoveAll(index => index < 0);
+        if (layers.Count == 0) return;
+
+        // 前台只考虑真正挡住桌宠的窗口；后台连同宿主一起排在遮挡者后面，露出的部分由系统自然合成。
+        bool hostForeground = GetForegroundWindow() == host;
+        int cover = -1;
+        for (int i = 0; i < hostIndex; i++)
         {
-            if (topmost.Contains(id) || owned.Contains(new IntPtr(id))) continue;
-            floating = id == host.ToInt64();
-            break;
+            ScreenWindow candidate = visible[i];
+            if (owned.Contains(candidate.Handle) || overlays.Contains(candidate.Handle)) continue;
+            if ((!hostForeground && Overlaps(candidate.Bounds, visible[hostIndex].Bounds))
+                || layers.Exists(index => Overlaps(candidate.Bounds, visible[index].Bounds))) cover = i;
         }
-        IntPtr anchor;
-        if (floating && !hostTopmost)
+        bool floating = cover < 0 || visible[cover].Topmost;
+        int upper = hostIndex;
+        bool placed = true;
+        foreach (int index in layers)
         {
-            // 插在最后一个可见置顶窗口之后；隐藏的辅助窗口可能带有所有者约束，不能作为锚点。
-            anchor = new IntPtr(-1);
-            foreach (long id in topmost)
-                if (!overlays.Contains(new IntPtr(id))) anchor = new IntPtr(id);
+            if (index <= cover || index >= upper || visible[index].Topmost != floating) placed = false;
+            upper = index;
         }
-        else
+        if (placed) return;
+
+        // 每个窗口都插在同一个可见遮挡者之后，后放的气泡自然在角色前方。无需依赖另一扇桌宠窗口已就位。
+        IntPtr anchor = cover < 0 ? new IntPtr(-1) : visible[cover].Handle;
+        foreach (int index in layers)
         {
-            anchor = GetWindow(host, 3); // GW_HWNDPREV。
-            while (overlays.Contains(anchor)) anchor = GetWindow(anchor, 3);
-            if (floating && anchor == IntPtr.Zero) anchor = new IntPtr(-1);
-            else if (!floating && IsTopmost(anchor)) anchor = IntPtr.Zero;
-        }
-        // 先放气泡再放角色，使用明确的“插在其后”语义；正确排列时完全不调用 SetWindowPos。
-        for (int index = overlays.Count - 1; index >= 0; index--)
-        {
-            IntPtr window = overlays[index];
-            IntPtr previous = GetWindow(window, 3);
-            bool placed = anchor == new IntPtr(-1) ? previous == IntPtr.Zero
-                : anchor == IntPtr.Zero ? previous == IntPtr.Zero || IsTopmost(previous)
-                : previous == anchor;
-            bool topmostWindow = IsTopmost(window);
-            // 直接插入目标层级，避免先提到置顶组最前面而瞬间盖住已打开的菜单。
-            if (!placed || topmostWindow != floating)
-            {
-                IntPtr after = !floating && topmostWindow && anchor == IntPtr.Zero ? new IntPtr(-2) : anchor;
-                // 锚点可能在快照后关闭；等待下一次心跳重试，避免用未就位的窗口继续排列。
-                if (!SetWindowPos(window, after, 0, 0, 0, 0, flags)) return;
-            }
-            anchor = window;
+            IntPtr window = visible[index].Handle;
+            // 跨组时显式撤销置顶，单纯对普通窗口做相对排序可能留下旧样式。
+            if (!floating && IsTopmost(window) && !SetWindowPos(window, new IntPtr(-2), 0, 0, 0, 0, flags)) return;
+            if (SetWindowPos(window, anchor, 0, 0, 0, 0, flags) && IsTopmost(window) == floating) continue;
+            // 跨组失败时显式提升，再排回可见菜单之后。若菜单刚刚关闭，交由下一份实时快照选锚点。
+            if (!floating || cover < 0 || !SetWindowPos(window, new IntPtr(-1), 0, 0, 0, 0, flags)) return;
+            if (!SetWindowPos(window, anchor, 0, 0, 0, 0, flags)) return;
         }
     }
 

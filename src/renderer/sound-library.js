@@ -83,7 +83,7 @@ export class SoundLibraryView {
     list.replaceChildren(...(files || []).map((clip) => this.row(clip)));
   }
 
-  // 每段音效都可以试听或另存选区，已导入的片段还可维护名称和移除。
+  // 内置原声只提供试听，只有用户导入的片段才显示裁剪、重命名和移除。
   row(clip) {
     const row = document.createElement('li'), info = document.createElement('div');
     const name = document.createElement('strong'), detail = document.createElement('small');
@@ -94,19 +94,21 @@ export class SoundLibraryView {
     info.append(name, detail);
     const actions = document.createElement('div');
     actions.className = 'sound-library-actions';
-    actions.append(clipButton('试听', clip, (button) => this.preview(button, 'library', clip.id)),
-      clipButton('裁剪', clip, async () => {
+    const preview = clipButton('试听', clip, (button) => this.preview(button, 'library', clip.id));
+    preview.disabled = clip.available === false;
+    actions.append(preview);
+    if (custom) {
+      const trim = clipButton('裁剪', clip, async () => {
         this.stopPreview();
         await this.editor.open(clip.label + ' · 片段', async () => {
           const result = await fetch(audioUrl(clip.id));
           if (!result.ok) throw new Error('读取音频失败。');
           return result.arrayBuffer();
         });
-      }));
-    if (clip.available === false)
-      for (const button of actions.children) button.disabled = true;
-    if (custom) {
-      actions.append(clipButton('重命名', clip, async () => {
+      });
+      // 录音文件缺失时仍能整理或移除这条记录。
+      trim.disabled = clip.available === false;
+      actions.append(trim, clipButton('重命名', clip, async () => {
         this.renaming = clip.id;
         $('audio-new-name').setCustomValidity('');
         $('audio-new-name').value = clip.label;

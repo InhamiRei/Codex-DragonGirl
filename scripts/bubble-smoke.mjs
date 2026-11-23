@@ -12,6 +12,7 @@ const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-bubble-'));
 const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
 let application, page;
 const results = [];
+const clearances = [];
 const fixtureNow = Date.parse('2026-11-05T10:00:00+08:00');
 
 // 测量回传完成后再检查，避免透明首帧被误认为内容没有溢出。
@@ -43,6 +44,43 @@ async function launch(scale) {
     const companion = globalThis.__dragonGirlTest;
     clearTimeout(companion.cursorTimer);
     companion.pollCursor = () => {};
+  });
+}
+
+// 逐行比较两个隔离窗口的实际着色像素，包含龙角、椭圆和两颗小泡；透明角落不会被算成碰撞。
+async function paintedGap() {
+  return application.evaluate(async ({ nativeImage }) => {
+    const windows = globalThis.__dragonGirlTest.windows;
+    const [dragon, bubble] = await Promise.all(['character', 'bubble'].map(async view => {
+      const win = windows.get(view), bounds = win.getContentBounds();
+      // 以图片实际像素取样，再映射回窗口的逻辑坐标，同一断言也适用于高 DPI。
+      const image = nativeImage.createFromBuffer((await win.capturePage()).toPNG());
+      const { width, height } = image.getSize(), pixels = image.toBitmap();
+      const runs = [], stepX = bounds.width / width, stepY = bounds.height / height;
+      for (let y = 0; y < height; y++) {
+        let start = -1;
+        for (let x = 0; x <= width; x++) {
+          if (x < width && pixels[(y * width + x) * 4 + 3] >= 32) {
+            if (start < 0) start = x;
+          } else if (start >= 0) {
+            runs.push({ left: bounds.x + start * stepX, right: bounds.x + x * stepX,
+              top: bounds.y + y * stepY, bottom: bounds.y + (y + 1) * stepY });
+            start = -1;
+          }
+        }
+      }
+      if (!runs.length) throw new Error(view + ' 窗口没有可见像素');
+      return runs;
+    }));
+    // 每一段都按原生窗口的屏幕坐标比较，返回最近两处描边之间的逻辑像素距离。
+    let squaredGap = Infinity;
+    for (const a of dragon) for (const b of bubble) {
+      const dy = Math.max(0, a.top - b.bottom, b.top - a.bottom);
+      if (dy * dy >= squaredGap) continue;
+      const dx = Math.max(0, a.left - b.right, b.left - a.right);
+      squaredGap = Math.min(squaredGap, dx * dx + dy * dy);
+    }
+    return Math.sqrt(squaredGap);
   });
 }
 
@@ -254,10 +292,71 @@ try {
       await until(() => application.evaluate(() => !globalThis.__dragonGirlTest.bubbleVisible), '渲染层未处理注入的 Esc');
       await application.evaluate((_, settings) => { globalThis.__dragonGirlTest.appearance.settings = settings; }, settings);
     }
+    // 同一只已经打开的气泡连续调大小。分别核对窗口、绘制后的字高和内边距，也覆盖 Windows 的 DPI 换算。
+    const sentence = '今天也一起工作吧。';
+    await show({ text: sentence });
+    let previousLayout;
+    for (const petScale of [.5, .6, .75, 1, 1.25, 1.5]) {
+      const target = await application.evaluate((_, value) => {
+        const c = globalThis.__dragonGirlTest;
+        c.setScale(value);
+        return { width: c.bubbleModel.maxWidth, revision: c.bubbleModel.revision };
+      }, petScale);
+      // 系统窗口调整大小和渲染进程更新视口是独立消息，须等两者都到达本轮目标。
+      let nativeWidth, viewport;
+      await until(async () => {
+        nativeWidth = await application.evaluate(() => globalThis.__dragonGirlTest.windows.get('bubble').getContentBounds().width);
+        viewport = await page.evaluate(() => innerWidth);
+        return Math.abs(target.width - nativeWidth) <= 1 && Math.abs(nativeWidth - viewport) <= 1;
+      }, '缩放后的原生窗口与视口不一致').catch(error => {
+        throw new Error(`${error.message}：${JSON.stringify({ scale, petScale, target, nativeWidth, viewport })}`);
+      });
+      await until(() => page.evaluate(async revision => {
+        const model = await window.dragonGirl.bootstrap();
+        return model.measuredRevision === revision && document.body.dataset.ready === 'true';
+      }, target.revision), '角色缩放后已打开的气泡没有更新');
+      const layout = await page.evaluate(() => {
+        const card = document.getElementById('bubble').getBoundingClientRect();
+        const message = document.getElementById('message'), range = document.createRange();
+        range.selectNodeContents(message);
+        return { width: card.width, text: range.getBoundingClientRect().height, inset: card.left, viewport: innerWidth };
+      });
+      assert.ok(layout.width < nativeWidth);
+      assert.ok(layout.text >= 12, '最小角色的正文字高不足');
+      if (previousLayout) assert.ok(layout.width > previousLayout.width && layout.text > previousLayout.text
+        && layout.inset > previousLayout.inset, '角色变大时气泡、字号和内边距没有同步放大');
+      previousLayout = layout;
+      // 两侧屏幕边缘都复现小头像，150% 系统缩放放在顶部，检查气泡翻到角色下方时的净空。
+      if (scale !== 1 && petScale > .75) continue;
+      const atTop = scale === 1.5;
+      for (const edge of ['right', 'left']) {
+        await application.evaluate((_, { edge, atTop }) => {
+          const c = globalThis.__dragonGirlTest, area = c.display.workArea;
+          c.character.x = edge === 'left' ? area.x : area.x + area.width - c.character.width;
+          c.character.y = atTop ? area.y : area.y + area.height - c.character.height;
+          c.applyCharacter();
+        }, { edge, atTop });
+        const direction = edge === 'right' ? 'left' : 'right';
+        await page.waitForFunction(direction => document.body.dataset.horizontal === direction, direction);
+        // 对照反馈中的半大小头像和红框中心，检查实际窗口与网页椭圆组合后的屏幕位置。
+        if (petScale === .5 && scale === 1 && edge === 'right') {
+          const { character, frame } = await application.evaluate(() => {
+            const c = globalThis.__dragonGirlTest;
+            return { character: c.character, frame: c.windows.get('bubble').getContentBounds() };
+          });
+          const card = await page.locator('#bubble').boundingBox();
+          assert.ok(Math.abs(frame.x + card.x + card.width / 2 - character.x + 81) <= 3, '半大小气泡横向偏离红框中心');
+          assert.ok(Math.abs(frame.y + card.y + card.height / 2 - character.y + 54) <= 3, '半大小气泡纵向偏离红框中心');
+        }
+        const gap = await paintedGap();
+        assert.ok(gap >= 3, `气泡或泡尾进入龙娘轮廓：系统缩放 ${scale}，角色 ${petScale}，${edge}，描边间距 ${gap}`);
+        clearances.push({ scale, petScale, edge, atTop, gap });
+      }
+    }
     await application.close(); application = null;
   }
-  await fs.writeFile(path.join(root, '.artifacts/bubble-scrollbar-report.json'), JSON.stringify({ passed: true, results }, null, 2));
-  console.log('气泡验证通过：四档显示比例、三组字体配置、双额度完整展示、无原生滚动条、长内容可滚动，语录重新计时、常驻与渲染层 Esc 处理。');
+  await fs.writeFile(path.join(root, '.artifacts/bubble-scrollbar-report.json'), JSON.stringify({ passed: true, results, clearances }, null, 2));
+  console.log(`气泡验收通过：${clearances.length} 组截图中角色与泡尾均有净空，四档显示比例、文字排版、滚动、计时与收起正常。`);
 } finally {
   if (application) await application.close().catch(() => {});
   await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

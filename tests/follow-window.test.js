@@ -1,9 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { followWindowFrame, followWindowStack, followWindowFloating } from '../src/shared/follow-window.js';
+import { followWindowFrame, followWindowStack, followWindowFloating, followDisplayFrame } from '../src/shared/follow-window.js';
 
 const main = { id: 1, x: 200, y: 125, width: 1100, height: 792 };
 const picker = { id: 2, x: 310, y: 297, width: 880, height: 448 };
+
+// 两块模拟显示器分别为 125% 和 200%，包含负坐标以及物理窗口跨过屏幕边界的情况。
+test('Windows 跨 DPI 按目标屏原点投影视窗，移出所有显示器后失效', () => {
+  const left = { scaleFactor: 1.25, bounds: { x: -1280, y: 0, width: 1280, height: 800 } };
+  const right = { scaleFactor: 2, bounds: { x: 0, y: 0, width: 1440, height: 900 } };
+  const screen = {
+    getAllDisplays: () => [left, right],
+    getDisplayNearestPoint: ({x}) => x < 0 ? left : right,
+    screenToDipPoint: ({x, y}) => ({ x: Math.round(x / (x < 0 ? 1.25 : 2)), y: Math.round(y / (x < 0 ? 1.25 : 2)) }),
+    dipToScreenRect: (_, rect) => rect === left.bounds ? { x: -1600, y: 0, width: 1600, height: 1000 } : { x: 0, y: 0, width: 2880, height: 1800 },
+  };
+  const frame = { id: 11, physicalBounds: { x: -1100, y: 100, width: 1750, height: 800 } };
+  const start = followDisplayFrame(frame, { x: 0, y: 0 }, screen);
+  const end = followDisplayFrame(frame, { x: 1, y: 1 }, screen);
+  assert.equal(start.display, left);
+  assert.equal(start.frame.x, -880);
+  assert.equal(end.display, right);
+  assert.equal(end.frame.x + end.frame.width, 325);
+  assert.equal(end.frame.y + end.frame.height, 450);
+  assert.equal(followDisplayFrame({ ...frame, physicalBounds: { ...frame.physicalBounds, y: 2000 } }, { x: 1, y: 1 }, screen), null);
+});
 
 // 前台宿主不再依赖每次点击后的补偿排序；角色自身及其他实例角色不能改变前台判断。
 test('macOS 未被遮挡的宿主保持浮动层，跨屏窗口与角色自身不触发层级切换', () => {
@@ -67,7 +88,7 @@ test('保留其他平台和空窗口的跟随行为', () => {
 // 角色和气泡必须紧贴宿主上方，其他应用仍保留在整组窗口之前。
 test('宿主被遮挡时把角色与气泡一起退到覆盖窗口后面', () => {
   assert.deepEqual(followWindowStack([3, 2, 9, 1], 1, [2, 3]), [
-    { id: '2', above: '1', top: false }, { id: '3', above: '2', top: false },
+    { id: '2', above: '1' }, { id: '3', above: '2' },
   ]);
   assert.deepEqual(followWindowStack([9, 3, 2, 1], 1, [2, 3]), []);
 });
@@ -75,7 +96,7 @@ test('宿主被遮挡时把角色与气泡一起退到覆盖窗口后面', () =>
 // 重新置前时只提升本实例的窗口，多个宿主之间不会互相带起角色。
 test('宿主重新置前后恢复层级，其他实例与应用顺序保持原样', () => {
   assert.deepEqual(followWindowStack([1, 8, 7, 6, 9, 3, 2], 1, [2, 3]), [
-    { id: '2', above: '1', top: true }, { id: '3', above: '2', top: true },
+    { id: '2', above: '1' }, { id: '3', above: '2' },
   ]);
   assert.deepEqual(followWindowStack([1, 8, 7, 6, 9, 3, 2], 6, [7, 8]), []);
 });
@@ -83,11 +104,11 @@ test('宿主重新置前后恢复层级，其他实例与应用顺序保持原�
 // 首次显示的窗口可能还没进入快照；显式显示仍可排序，旧桥无顺序信息时也能使用窗口编号。
 test('支持首次显示、单个角色、字符串编号和缺失顺序的快照', () => {
   assert.deepEqual(followWindowStack([9, 1], 1, [2, 3]), [
-    { id: '2', above: '1', top: false }, { id: '3', above: '2', top: false },
+    { id: '2', above: '1' }, { id: '3', above: '2' },
   ]);
   assert.deepEqual(followWindowStack(['9', '2', '1'], 1, [2]), []);
   assert.deepEqual(followWindowStack(null, 1, [2, 3]), [
-    { id: '2', above: '1', top: false }, { id: '3', above: '2', top: false },
+    { id: '2', above: '1' }, { id: '3', above: '2' },
   ]);
 });
 
@@ -97,25 +118,9 @@ test('宿主不在当前屏幕顺序中时停止显示', () => {
   assert.equal(followWindowStack([], 1, [2]), null);
 });
 
-// Windows 在置顶组之后调用相对排序会继承置顶，普通宿主位于组边界时必须使用普通组顶端。
-test('Windows 置顶窗口之后的宿主不会把角色和气泡变成全局置顶', () => {
-  assert.deepEqual(followWindowStack([9, 1, 3, 2], 1, [2, 3], { topmost: [9] }), [
-    { id: '2', above: '1', top: true }, { id: '3', above: '2', top: true },
-  ]);
-  assert.deepEqual(followWindowStack([9, 8, 1, 3, 2], 1, [2, 3], { topmost: [9] }), [
-    { id: '2', above: '1', top: false }, { id: '3', above: '2', top: false },
-  ]);
-  assert.deepEqual(followWindowStack([9, 3, 2, 1], 1, [2, 3], { topmost: [9], force: true }), [
-    { id: '2', above: '1', top: true }, { id: '3', above: '2', top: true },
-  ]);
-});
-
-// 宿主被用户设为置顶时跟随该属性；宿主恢复普通层级后，即使排列相邻也要撤销角色的置顶。
-test('Windows 宿主置顶属性改变时修正角色与气泡的层级组', () => {
-  assert.deepEqual(followWindowStack([1, 3, 2], 1, [2, 3], { topmost: [1] }), [
-    { id: '2', above: '1', top: false }, { id: '3', above: '2', top: false },
-  ]);
-  assert.deepEqual(followWindowStack([3, 2, 1], 1, [2, 3], { topmost: [3, 2] }), [
-    { id: '2', above: '1', top: true }, { id: '3', above: '2', top: true },
+// macOS 从普通层切回浮动层时，即使旧快照显示相邻，也要重新确认波纹、角色、气泡的实际顺序。
+test('首次显示或切换层级时按指定顺序重新排列整组', () => {
+  assert.deepEqual(followWindowStack([9, 4, 3, 2, 1], 1, [2, 3, 4], true), [
+    { id: '2', above: '1' }, { id: '3', above: '2' }, { id: '4', above: '3' },
   ]);
 });

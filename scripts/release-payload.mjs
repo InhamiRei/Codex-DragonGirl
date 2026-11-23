@@ -85,6 +85,8 @@ async function releaseReadme(root) {
 
 // 用文件清单构建应用目录，避免整个目录复制把本机临时文件带进安装包。
 export async function copyReleasePayload(root, application, nativeExtension = '') {
+  // 发行壳自带的 Electron 示例网页只供开发启动器使用，正式产品有自己的 app/package.json。
+  await fs.rm(path.join(path.dirname(application), 'default_app.asar'), { force: true });
   for (const file of await releaseFiles(root, nativeExtension)) {
     const target = path.join(application, file);
     await fs.mkdir(path.dirname(target), { recursive: true });
@@ -98,6 +100,8 @@ export async function copyReleasePayload(root, application, nativeExtension = ''
 // 核对实际应用目录中的所有文件、源码内容和发布信息，旧产物不能通过验收。
 export async function verifyReleasePayload(root, application, version, nativeExtension = '') {
   if (version !== await readReleaseVersion(root)) throw new Error('安装包版本与当前源码版本不符');
+  if ((await fs.readdir(path.dirname(application))).includes('default_app.asar'))
+    throw new Error('发行包仍包含 Electron 的示例应用');
   const files = await releaseFiles(root, nativeExtension);
   const expected = new Set([...files, 'package.json', 'README.md']);
   const actual = new Set(await listFiles(application, ''));

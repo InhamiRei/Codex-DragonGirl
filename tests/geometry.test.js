@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { snapCharacter, constrainCharacter, capturePlacement, restorePlacement, characterSize,
-  resizeCharacter, placeBubble, stageBounds, EDGE_MARGIN, BUBBLE_FRAME, BUBBLE_PLACEMENT } from '../src/shared/geometry.js';
+  resizeCharacter, placeBubble, bubbleDimensions, bubbleOutline, stageBounds, EDGE_MARGIN, BUBBLE_FRAME } from '../src/shared/geometry.js';
 import { normalizeState } from '../src/shared/state.js';
 
 const display = { id: 1, workArea: { x: 0, y: 25, width: 1440, height: 850 } };
@@ -57,24 +57,87 @@ test('独立气泡自动避让上边与右边', () => {
   assert.ok(bottom.bounds.x >= 4);
 });
 
-// 在正常工作区贴近头部左侧，左边不足时才镜像到右侧，不能再默认居中悬在头顶。
-test('气泡默认靠近角色左上角，靠左边时镜像避让', () => {
-  const character = { ...size, x: 600, y: 400 };
-  const bubble = { width: 230, height: 160 };
-  const layout = placeBubble(character, display.workArea, bubble);
+// 用反馈图的二倍像素坐标复现半大小角色：用量椭圆中心约在 (208, 359)，头像左上角在 (370, 468)。
+test('半大小用量气泡回到标出的头侧位置，贴左时镜像，泡尾与角色之间留空', () => {
+  const workArea = { x: -400, y: -400, width: 1750, height: 1500 };
+  const character = { x: 185, y: 234, width: 130, height: 116 };
+  const dims = bubbleDimensions(character.width, workArea);
+  const layout = placeBubble(character, workArea);
   assert.equal(layout.side, 'above');
   assert.equal(layout.horizontal, 'left');
-  assert.ok(layout.bounds.x + bubble.width / 2 <= character.x - character.width * .24, '大气泡主体需要明显左移');
-  assert.ok(Math.abs(layout.bounds.x + bubble.width / 2 - (character.x - character.width * .25 - BUBBLE_PLACEMENT.bodyX)) < 1, '主体应整体向左微调');
-  const thoughtAnchor = character.x - character.width * .05 - (bubble.width - BUBBLE_FRAME.width) * .12 + BUBBLE_PLACEMENT.thoughtX;
-  assert.ok(Math.abs(layout.bounds.x + layout.tailX - thoughtAnchor) < 1, '独立小泡应向右靠近头部');
-  const visibleBottom = layout.bounds.y + bubble.height - BUBBLE_FRAME.thoughtSpace;
-  const expectedBottom = character.y + Math.min(8, character.height * .04) - BUBBLE_PLACEMENT.bodyY;
-  assert.ok(Math.abs(visibleBottom - expectedBottom) < 1, '主体应整体向上微调');
-  const mirrored = placeBubble({ ...character, x: 0 }, display.workArea, bubble);
-  assert.equal(mirrored.horizontal, 'right');
-  assert.ok(mirrored.bounds.x + bubble.width / 2 > character.width);
-  assert.ok(mirrored.bounds.x >= 4 && mirrored.bounds.x + bubble.width <= 1436);
+  const center = bubbleOutline({ width: dims.width / dims.scale, height: dims.height / dims.scale }, layout.tailX / dims.scale);
+  assert.ok(Math.abs((layout.bounds.x + center.centerX * dims.scale) * 2 - 208) <= 4, '气泡中心未落回红框横向位置');
+  assert.ok(Math.abs((layout.bounds.y + center.centerY * dims.scale) * 2 - 359) <= 4, '气泡中心未落回红框纵向位置');
+  const reach = (BUBBLE_FRAME.thoughtWidth - BUBBLE_FRAME.thoughtRoot) * dims.scale;
+  const leftGap = character.x - (layout.bounds.x + layout.tailX + reach);
+  assert.ok(leftGap >= 4 && leftGap <= 8, '左侧最小圆泡应靠近头部且避开龙角');
+
+  const leftEdge = { ...character, x: workArea.x };
+  const mirror = placeBubble(leftEdge, workArea);
+  assert.equal(mirror.horizontal, 'right');
+  assert.equal(mirror.side, layout.side);
+  assert.equal(mirror.bounds.y, layout.bounds.y);
+  const rightGap = mirror.bounds.x + mirror.tailX - reach - (leftEdge.x + leftEdge.width);
+  assert.ok(Math.abs(rightGap - leftGap) <= 1, '左右位置的泡尾净距不一致');
+});
+
+// 狭窄的工作区会把椭圆推回头像上方或下方。沿实际描边采样，包含负坐标和两种翻转。
+test('侧面空间不足时，椭圆靠角色的一段仍保持间距', () => {
+  const area = { x: -520, y: -180, width: 290, height: 540 };
+  for (const x of [area.x + 74, area.x + 86]) for (const y of [area.y + 4, area.y + 260]) {
+    const character = { x, y, width: 130, height: 116 };
+    const dims = bubbleDimensions(character.width, area);
+    const { bounds, side, tailX } = placeBubble(character, area);
+    const shape = bubbleOutline({ width: bounds.width / dims.scale, height: bounds.height / dims.scale }, tailX / dims.scale);
+    for (let degree = 0; degree < 360; degree++) {
+      const angle = degree * Math.PI / 180;
+      const arcX = bounds.x + (shape.centerX + shape.radiusX * Math.cos(angle)) * dims.scale;
+      const localY = (shape.centerY + shape.radiusY * Math.sin(angle)) * dims.scale;
+      const arcY = bounds.y + (side === 'above' ? localY : bounds.height - localY);
+      const dx = Math.max(0, x - arcX, arcX - x - character.width);
+      const dy = Math.max(0, y - arcY, arcY - y - character.height);
+      assert.ok(Math.hypot(dx, dy) - BUBBLE_FRAME.stroke * dims.scale / 2 >= 4, '空间夹紧后描边压到了角色');
+    }
+  }
+});
+
+// 低矮副屏上方和下方都放不下时，两种镜像方向都能把气泡放到角色旁边。
+test('上下空间不足时选能容纳气泡的一侧，窗口夹紧后也不碰角色', () => {
+  const area = { x: -1180, y: -310, width: 1000, height: 320 };
+  for (const offset of [80, 640]) {
+    const character = { ...size, x: area.x + offset, y: area.y + 45 };
+    const { bounds, horizontal } = placeBubble(character, area);
+    assert.equal(horizontal, offset === 80 ? 'right' : 'left');
+    const gap = horizontal === 'right' ? bounds.x - (character.x + character.width) : character.x - (bounds.x + bounds.width);
+    assert.ok(gap >= 6 && gap <= 7);
+    assert.ok(bounds.y >= area.y + 4 && bounds.y + bounds.height <= area.y + area.height - 4);
+  }
+});
+
+// 角色在各个大小下使用统一比例缩放气泡；小屏幕按短边限制，不挤扁轮廓或裁掉尾巴。
+test('气泡随角色缩放，最小档文字可读，四角和负坐标屏幕内保留完整边界', () => {
+  for (const area of [display.workArea, { x: -320, y: -160, width: 220, height: 175 }]) {
+    let previous = 0;
+    for (const factor of [.5, .6, .75, 1, 1.25, 1.5]) {
+      const size = characterSize(factor, area);
+      const dims = bubbleDimensions(size.width, area);
+      assert.ok(dims.width >= previous);
+      if (area === display.workArea) {
+        assert.ok(dims.width > previous);
+        assert.ok(dims.scale * 16 >= 12);
+      }
+      previous = dims.width;
+      for (const x of [area.x, area.x + area.width - size.width])
+        for (const y of [area.y, area.y + area.height - size.height]) {
+          const { bounds, horizontal, tailX } = placeBubble({ ...size, x, y }, area);
+          assert.deepEqual([bounds.width, bounds.height], [dims.width, dims.height]);
+          assert.ok(bounds.x >= area.x && bounds.x + bounds.width <= area.x + area.width);
+          assert.ok(bounds.y >= area.y && bounds.y + bounds.height <= area.y + area.height);
+          const left = tailX - dims.scale * (horizontal === 'left' ? BUBBLE_FRAME.thoughtRoot : BUBBLE_FRAME.thoughtWidth - BUBBLE_FRAME.thoughtRoot);
+          assert.ok(left >= 0 && left + dims.scale * BUBBLE_FRAME.thoughtWidth <= bounds.width);
+        }
+    }
+  }
 });
 
 // 主体左移后，短句的泡链可能接近窄窗口边缘，左右两种方向都必须完整保留小圆泡。

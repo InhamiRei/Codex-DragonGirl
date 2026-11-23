@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import { Monitor } from '../src/main/monitor.js';
 import { CLI_UNAVAILABLE, CLI_UNAVAILABLE_MESSAGE } from '../src/core/rpc.js';
@@ -13,6 +15,36 @@ function gate() {
   const promise = new Promise((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+// 让系统真实返回 ENOENT，覆盖没有 exit 事件的启动失败；旧桥的迟到快照不能恢复旧窗口。
+test('窗口桥启动失败只失效一次并安排重连，迟到的快照不会复活宿主', async (t) => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-bridge-missing-'));
+  t.after(() => fs.rm(folder, { recursive: true, force: true }));
+  const monitor = new Monitor(folder, { testMode: true });
+  monitor.publish = () => {};
+  monitor.processes = [{ pid: 123, home: folder, frontmost: true, windows: [{ id: 7 }] }];
+  let disconnected = 0;
+  monitor.on('windows', () => { disconnected++; });
+  const spawn = childProcess.spawn;
+  // 只替换这一轮的启动路径，使用真实 ChildProcess 的 error/close 事件顺序。
+  const mock = t.mock.method(childProcess, 'spawn', (_, args, options) => spawn(path.join(folder, 'missing-bridge'), args, options));
+  syncBuiltinESMExports();
+  let bridge;
+  try {
+    monitor.startNative();
+    bridge = monitor.native;
+  } finally { mock.mock.restore(); syncBuiltinESMExports(); }
+  // events.once 对 error 有特殊处理，这里要等到随后发出的 close。
+  await new Promise(resolve => bridge.once('close', resolve));
+  t.after(() => clearTimeout(monitor.nativeRetry));
+  assert.equal(disconnected, 1);
+  assert.equal(monitor.native, null);
+  assert.ok(monitor.nativeRetry);
+  assert.deepEqual(monitor.processes[0].windows, []);
+  assert.equal(monitor.processes[0].frontmost, false);
+  await monitor.receiveNative({ processes: [], windowOrder: [7] }, bridge);
+  assert.deepEqual(monitor.windowOrder, []);
+});
 
 // 只向当前可用管道发送有限窗口编号，失联、背压和停止期间等待后续恢复，不继续积压旧排序。
 test('Windows 层级管道校验编号并在恢复后重新接受请求', () => {

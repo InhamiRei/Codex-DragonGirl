@@ -145,6 +145,25 @@ try {
   assert.equal(await page.evaluate(() => window.__bubbleAnimations), 1);
   assert.deepEqual(await nativeCalls(), before);
 
+  // 位置逐步往返时原生气泡必须每步都跟上，局部轮廓和内容未变则无需发给网页重画。
+  const movement = await application.evaluate(() => {
+    const c = globalThis.__dragonGirlTest, contents = c.windows.get('bubble').webContents;
+    const send = contents.send.bind(contents), previous = c.bubbleCalls.bounds;
+    let models = 0;
+    contents.send = (channel, ...args) => {
+      if (channel === 'dg:bubble') models++;
+      return send(channel, ...args);
+    };
+    try {
+      for (let i = 0; i < 12; i++) {
+        c.character.x += i < 6 ? 4 : -4;
+        c.applyCharacter();
+      }
+    } finally { contents.send = send; }
+    return { nativeMoves: c.bubbleCalls.bounds - previous, models };
+  });
+  assert.deepEqual(movement, { nativeMoves: 12, models: 0 }, '平移时漏跟随或重复发送了未变化的气泡');
+
   // 延后抵达的旧快照不能把已经更新的文字回退，也不能重新播放入场动画。
   await application.evaluate(() => {
     const c = globalThis.__dragonGirlTest;
@@ -201,7 +220,33 @@ try {
   await measured();
   assert.equal(await page.evaluate(() => window.__bubbleAnimations), previousAnimations + 1, '新一轮开泡未单独播放一次淡入');
   assert.deepEqual(errors, []);
-  await fs.writeFile(path.join(artifacts, 'bubble-refresh-report.json'), JSON.stringify({ ...report, passed: true, repeatedRefreshes: 12, cancelledOpenings: 10, scrollPreserved: true, staleSnapshotIgnored: true }, null, 2));
+  // 固定测试进程读取的鼠标位置，验证在同一处关闭并重新打开时不需要用户把鼠标移走再移回。
+  await application.evaluate(({ screen }) => {
+    const c = globalThis.__dragonGirlTest, bounds = c.windows.get('bubble').getContentBounds();
+    screen.getCursorScreenPoint = () => ({ x: bounds.x + Math.round(bounds.width / 2), y: bounds.y + Math.round(bounds.height * .45) });
+    delete c.pollCursor;
+    c.pollCursor(true);
+  });
+  const interactive = () => application.evaluate(() => globalThis.__dragonGirlTest.interactive.get('bubble'));
+  await until(interactive, '鼠标位于气泡中心却不能点击');
+  await application.evaluate(() => globalThis.__dragonGirlTest.hideBubble());
+  await page.evaluate(async () => { window.dragonGirl.interactive(true); await window.dragonGirl.bootstrap(); });
+  assert.equal(await interactive(), false, '隐藏后的迟到命中重新启用了透明窗口输入');
+  await application.evaluate(() => globalThis.__dragonGirlTest.showBubble('原地重开', 'speech'));
+  await measured();
+  await until(interactive, '鼠标静止时再次打开的气泡不能点击').catch(async error => {
+    const native = await application.evaluate(({ screen }) => {
+      const c = globalThis.__dragonGirlTest, w = c.windows.get('bubble');
+      return { bounds: w.getContentBounds(), point: screen.getCursorScreenPoint(), last: c.cursorPositions.get('bubble'),
+        visible: w.isVisible(), user: c.visible, suppressed: c.suppressedByFollow, enabled: c.interactive.get('bubble'), model: c.bubbleModel };
+    });
+    const drawing = await page.evaluate(({x, y}) => {
+      const path = document.getElementById('outline-path'), point = new DOMPoint(x, y).matrixTransform(path.getScreenCTM().inverse());
+      return { ready: document.body.dataset.ready, inside: path.isPointInFill(point), width: innerWidth, height: innerHeight };
+    }, { x: native.point.x - native.bounds.x, y: native.point.y - native.bounds.y });
+    throw new Error(`${error.message}：${JSON.stringify({ native, drawing })}`);
+  });
+  await fs.writeFile(path.join(artifacts, 'bubble-refresh-report.json'), JSON.stringify({ ...report, passed: true, repeatedRefreshes: 12, cancelledOpenings: 10, scrollPreserved: true, staleSnapshotIgnored: true, stationaryHitRestored: true }, null, 2));
   console.log('气泡刷新验收通过：可见内容不闪、不重播淡入、不重复定位、文字坐标稳定，长内容保留阅读位置，关闭后的迟到测量不重开。');
 } finally {
   await application?.close().catch(() => {});

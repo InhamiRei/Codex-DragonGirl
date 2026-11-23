@@ -1,27 +1,31 @@
+// 每种展示格式只缓存当前时区的 ICU 实例，切换时区时重新创建，日期和倒计时仍每次计算。
+export function formatterForZone(locale, options) {
+  let zone, formatter;
+  return (timezone) => {
+    if (!formatter || timezone !== zone) {
+      formatter = new Intl.DateTimeFormat(locale, { ...options, timeZone: timezone });
+      zone = timezone;
+    }
+    return formatter;
+  };
+}
+
+const calendar = { year: 'numeric', month: '2-digit', day: '2-digit' };
+const clockFields = { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
+const calendarDate = formatterForZone('en-CA', calendar);
+const resetDateTime = formatterForZone('en-CA', { ...calendar, ...clockFields });
+const preciseDateTime = formatterForZone('en-CA', { ...calendar, ...clockFields, second: '2-digit' });
+
 // 日期边界按所选时区换算，避免北京时间午夜被 UTC 日期拆开。
 export function dayKey(timestamp = Date.now(), timezone = 'Asia/Shanghai') {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(timestamp);
+  return calendarDate(timezone).format(timestamp);
 }
 // 迭代修正目标时区偏移，兼容夏令时下的自然日边界。
 export function midnight(day, timezone = 'Asia/Shanghai') {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('日期格式无效');
   const target = Date.parse(day + 'T00:00:00Z');
   let time = target;
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  });
+  const fmt = preciseDateTime(timezone);
   for (let i = 0; i < 4; i++) {
     const p = Object.fromEntries(fmt.formatToParts(time).map((x) => [x.type, x.value]));
     const asUTC = Date.parse(`${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}Z`);
@@ -42,11 +46,7 @@ export function nextDay(day) {
 export function quotaResetTime(timestamp, timezone = 'Asia/Shanghai', now = Date.now()) {
   if (!Number.isFinite(timestamp) || timestamp <= 0)
     return { text: '重置时间未知', title: '服务暂未提供此额度窗口的重置时间' };
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).formatToParts(timestamp).map((part) => [part.type, part.value]));
+  const parts = Object.fromEntries(resetDateTime(timezone).formatToParts(timestamp).map((part) => [part.type, part.value]));
   const clock = `${parts.hour}:${parts.minute}`;
   const title = `${parts.year}-${parts.month}-${parts.day} ${clock} 重置（${timezone}）`;
   if (timestamp <= now) return { text: '重置待刷新', title: `${title}；时间已到，等待最新额度` };

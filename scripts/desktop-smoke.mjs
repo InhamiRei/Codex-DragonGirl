@@ -30,7 +30,10 @@ async function until(check, message, timeout = 10000) {
 
 // 每次启动使用同一份隔离配置，重启用来检验真正的磁盘恢复。
 async function launch() {
-  const instance = await electron.launch({ args: [root], env: environment, timeout: 30000 });
+  const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
+  const instance = await electron.launch({
+    ...(executablePath ? { executablePath, args: [] } : { args: [root] }), env: environment, timeout: 30000,
+  });
   instance.on('window', page => {
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -278,6 +281,17 @@ try {
   });
   assert.equal((await snapshot()).bubbleVisible, false, '迟到点击重新打开了隐藏的气泡。');
 
+  // 鼠标保持在同一处头像，连续三次真实点击完成用量、语录和收起。
+  await prepareCharacterInput();
+  const portrait = await facePoint();
+  await page.mouse.click(portrait.x, portrait.y);
+  await until(() => bubble.locator('body').getAttribute('data-kind').then(kind => kind === 'usage'), '点头像未打开用量');
+  const portraitQuote = await application.evaluate(() => globalThis.__dragonGirlTest.dialogueCounts.get('dragon:chat') ?? 0);
+  await page.mouse.click(portrait.x, portrait.y);
+  await bubbleLayout(dialogueLine('chat', portraitQuote));
+  await page.mouse.click(portrait.x, portrait.y);
+  await until(async () => !(await snapshot()).bubbleVisible, '第三次点头像未收起语录');
+
   // 自动化强制聚焦并注入按键只校验渲染层处理，不代表非聚焦原生窗口支持键盘操作。
   for (const key of ['Enter', 'Space']) {
     await prepareCharacterInput();
@@ -366,10 +380,13 @@ try {
   const usageBubble = await bubbleLayout(usageText);
   assert.equal(usageBubble.textOutside, false, '用量文字超出了漫画气泡轮廓。');
   assert.ok(usageBubble.scrollHeight <= usageBubble.clientHeight + 1, 'Pro 单额度不应裁切或需要滚动。');
-  assert.deepEqual([usageBubble.card.width, usageBubble.card.height], [shortBubble.card.width, shortBubble.card.height], '用量和对话的轮廓尺寸不同。');
+  assert.ok(usageBubble.card.width < shortBubble.card.width && usageBubble.card.height < shortBubble.card.height, '缩小角色后气泡没有一起缩小。');
   const usageState = await snapshot();
-  assert.ok(usageState.windows.bubble.x + usageState.windows.bubble.width / 2 <= usageState.character.x - usageState.character.width * .24, '大气泡主体没有明显左移。');
-  assert.ok(usageState.windows.bubble.y < usageState.character.y, '气泡没有贴在角色上方。');
+  // 用实际可见的椭圆边缘检查头侧位置，透明窗口边界和思绪泡不会顶高主体。
+  const cardRight = usageState.windows.bubble.x + usageBubble.card.x + usageBubble.card.width;
+  const cardBottom = usageState.windows.bubble.y + usageBubble.card.y + usageBubble.card.height;
+  assert.ok(cardRight >= usageState.character.x && cardRight <= usageState.character.x + usageState.character.width * .12, '缩小后的气泡没有落在头像侧边。');
+  assert.ok(cardBottom >= usageState.character.y && cardBottom <= usageState.character.y + usageState.character.height * .12, '缩小后的气泡仍悬在龙角上方。');
   assert.doesNotMatch(await bubble.locator('#bubble').innerText(), /工作中|任务完成|任务异常|状态待更新/, '默认用量气泡仍显示任务状态行。');
   await bubble.screenshot({ path: path.join(artifacts, 'bubble-comic-usage.png'), omitBackground: true });
   const taskPreview = await captureCompanionPreview();
@@ -429,6 +446,15 @@ try {
   // 后续拖动和翻转继续使用标准大小，同时覆盖两种角色比例。
   await application.evaluate(() => globalThis.__dragonGirlTest.setScale(1));
 
+  // 带着展开的气泡拖动也要坚持到松手，再从已收起的状态继续拖到屏幕边缘。
+  await application.evaluate(() => globalThis.__dragonGirlTest.showBubble('拖动开始前气泡展开', 'speech'));
+  await bubbleLayout('拖动开始前气泡展开');
+  await until(() => application.evaluate(() => globalThis.__dragonGirlTest.windows.get('bubble').isVisible()), '拖动前气泡尚未显示。');
+  const middle = { x: Math.round(workArea.x + workArea.width * .32), y: Math.round(workArea.y + workArea.height * .34) };
+  await dragTo(middle.x, middle.y);
+  const firstDrop = await snapshot();
+  assert.deepEqual([firstDrop.character.x, firstDrop.character.y], [middle.x, middle.y], '气泡收起时中断了角色拖动。');
+  assert.equal(firstDrop.bubbleVisible, false);
   await dragTo(workArea.x + 18, workArea.y + 18);
   const snapped = await snapshot();
   assert.equal(snapped.character.x, workArea.x);

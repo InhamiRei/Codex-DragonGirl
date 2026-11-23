@@ -11,8 +11,8 @@ const RECT_KEYS = ['x', 'y', 'width', 'height'];
 // 一次祈祷只持有一个透明特效窗口，绘制期间绑定最初的 Codex 窗口编号。
 export class PrayerWave {
   // 所有坐标和窗口编号都来自主进程已有的宿主快照。
-  constructor(hostId, { getTarget, getOrigin, ownedWindowIds, stackOnWindows, onStart, onFinish }) {
-    Object.assign(this, { hostId, getTarget, getOrigin, ownedWindowIds, stackOnWindows, onStart, onFinish });
+  constructor(hostId, { getTarget, getOrigin, ownedWindowIds, stackWithCompanion, onStart, onFinish }) {
+    Object.assign(this, { hostId, getTarget, getOrigin, ownedWindowIds, stackWithCompanion, onStart, onFinish });
     this.started = false;
     this.closed = false;
   }
@@ -96,11 +96,8 @@ export class PrayerWave {
         if (this.started) this.sendOrigin();
       }
       const id = window.getMediaSourceId().split(':')[1];
+      if (this.stackWithCompanion(this.hostId, id, force)) return;
       const owned = this.ownedWindowIds();
-      if (process.platform === 'win32') {
-        this.stackOnWindows(this.hostId, id, owned);
-        return;
-      }
       const floating = process.platform === 'darwin' && followWindowFloating(normalWindows, frame, owned, [frame]);
       const levelChanged = window.isAlwaysOnTop() !== floating;
       // 跟随特效与角色使用同一层，宿主的浮动菜单仍在最上方。

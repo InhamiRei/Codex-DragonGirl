@@ -31,6 +31,41 @@ internal static class WindowFixture
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr window, out Rect rectangle);
 
+    // 与被测桥使用相同物理坐标，按 Electron 换算出的探针位置读取本次夹具上的像素。
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
+    // 捕获两个测试点时计入分层透明窗口，禁止把只包含 WinForms 底板的位图当成屏幕结果。
+    [DllImport("gdi32.dll")]
+    private static extern bool BitBlt(IntPtr destination, int x, int y, int width, int height,
+        IntPtr source, int sourceX, int sourceY, uint operation);
+
+    // 只取夹具客户区内一个像素；返回 RGB，不保存或采集桌面截图。
+    private static string Pixel(Form host, int x, int y)
+    {
+        if (!host.RectangleToScreen(host.ClientRectangle).Contains(x, y)) throw new ArgumentOutOfRangeException();
+        using (Bitmap bitmap = new Bitmap(1, 1))
+        {
+            using (Graphics target = Graphics.FromImage(bitmap))
+            using (Graphics desktop = Graphics.FromHwnd(IntPtr.Zero))
+            {
+                IntPtr src = desktop.GetHdc(), dst = target.GetHdc();
+                try { if (!BitBlt(dst, 0, 0, 1, 1, src, x, y, 0x40CC0020)) throw new InvalidOperationException(); }
+                finally { target.ReleaseHdc(dst); desktop.ReleaseHdc(src); }
+            }
+            return (bitmap.GetPixel(0, 0).ToArgb() & 0xffffff).ToString("X6");
+        }
+    }
+
+    // 从夹具实际露出的客户区选择点击点，避免标题栏按钮、任务栏和桌面上的其他窗口。
+    private static Point? ExposedPoint(Form form)
+    {
+        Rectangle client = form.RectangleToScreen(form.ClientRectangle);
+        foreach (int y in new int[] { client.Top + 8, client.Top + client.Height / 2, client.Bottom - 12 })
+            foreach (int x in new int[] { client.Left + 16, client.Right - 16, client.Left + client.Width / 2 })
+                if (GetAncestor(WindowFromPoint(new Point(x, y)), 2) == form.Handle) return new Point(x, y);
+        return null;
+    }
+
     // Win32 窗口矩形保持原始物理像素。
     [StructLayout(LayoutKind.Sequential)]
     private struct Rect { internal int Left, Top, Right, Bottom; }
@@ -137,11 +172,16 @@ internal static class WindowFixture
     [STAThread]
     private static void Main(string[] args)
     {
+        SetProcessDpiAwarenessContext(new IntPtr(-4));
         Form form = new Form { Text = "窗口桥测试", StartPosition = FormStartPosition.Manual, Bounds = new Rectangle(150, 150, 1100, 792) };
         string directory = args.Length == 2 && args[0] == "--controlled" ? args[1] : null;
         string previous = "";
         Point? restoreCursor = null;
+        Point? probeCursor = null;
+        int clientClicks = 0;
+        form.MouseDown += delegate { clientClicks++; };
         ContextMenuStrip menu = null;
+        Form panel = null;
         Timer timer = new Timer { Interval = 50 };
         // 控制文件只影响自建测试窗口，所有命令都在窗口线程执行。
         timer.Tick += delegate {
@@ -159,8 +199,52 @@ internal static class WindowFixture
             if (command == previous) return;
             previous = command;
             command = command.Split('\n')[0];
-            switch (command)
+            string[] parts = command.Split(' ');
+            switch (parts[0])
             {
+                // 只移动夹具自身，保留当前焦点和前后顺序；深蓝宿主和绿色遮挡者便于独立验证合成结果。
+                case "video-bounds":
+                    form.BackColor = Path.GetFileNameWithoutExtension(Application.ExecutablePath) == "Codex"
+                        ? Color.FromArgb(11, 37, 73) : Color.FromArgb(27, 142, 68);
+                    form.Bounds = new Rectangle(int.Parse(parts[1]), int.Parse(parts[2]), int.Parse(parts[3]), int.Parse(parts[4]));
+                    break;
+                // 记录是否实际发出了鼠标点击，未命中时不触碰其他应用。
+                case "click-exposed":
+                    Point? point = ExposedPoint(form);
+                    if (point.HasValue)
+                    {
+                        restoreCursor = Cursor.Position;
+                        Cursor.Position = point.Value;
+                        mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
+                        mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+                    }
+                    File.WriteAllText(Path.Combine(directory, "click-point"), point.HasValue ? point.Value.ToString() : "none");
+                    break;
+                case "foreground":
+                    File.WriteAllText(Path.Combine(directory, "foreground"), GetForegroundWindow().ToInt64().ToString());
+                    break;
+                // 对本夹具客户区内的固定点验收真实穿透。只有夹具自身或测试传入的角色句柄允许接收点击。
+                case "hover-input":
+                    Point input = new Point(int.Parse(parts[1]), int.Parse(parts[2]));
+                    if (!form.RectangleToScreen(form.ClientRectangle).Contains(input)) break;
+                    if (!probeCursor.HasValue) probeCursor = Cursor.Position;
+                    Cursor.Position = input;
+                    break;
+                case "click-input":
+                    IntPtr hit = GetAncestor(WindowFromPoint(Cursor.Position), 2);
+                    if (probeCursor.HasValue && form.RectangleToScreen(form.ClientRectangle).Contains(Cursor.Position)
+                        && (hit == form.Handle || hit.ToInt64() == long.Parse(parts[1])))
+                    {
+                        mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
+                        mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+                    }
+                    break;
+                case "input-count": File.WriteAllText(Path.Combine(directory, "input-count"), clientClicks.ToString()); break;
+                case "end-input": if (probeCursor.HasValue) Cursor.Position = probeCursor.Value; probeCursor = null; break;
+                case "sample":
+                    File.WriteAllText(Path.Combine(directory, "pixels"), Pixel(form, int.Parse(parts[1]), int.Parse(parts[2]))
+                        + " " + Pixel(form, int.Parse(parts[3]), int.Parse(parts[4])));
+                    break;
                 case "raise": SetWindowPos(form.Handle, IntPtr.Zero, 0, 0, 0, 0, 0x13); break;
                 case "lower": SetWindowPos(form.Handle, new IntPtr(1), 0, 0, 0, 0, 0x13); break;
                 case "activate": form.Activate(); break;
@@ -175,6 +259,20 @@ internal static class WindowFixture
                 case "glide": GlideHost(form, directory); break;
                 case "open-floating-menu": menu = OpenContextMenu(form, directory); break;
                 case "close-floating-menu": if (menu != null) menu.Dispose(); menu = null; break;
+                // 同一宿主分别打开足够大的普通工具面板和真正禁用所有者的模态框，便于区分跟随目标。
+                case "owned-panel":
+                case "modal-panel":
+                case "independent-window":
+                    panel = new Form { Width = 560, Height = 380, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = command == "independent-window" };
+                    Form opened = panel;
+                    File.WriteAllText(Path.Combine(directory, "panel-id"), opened.Handle.ToInt64().ToString());
+                    if (command == "modal-panel") form.BeginInvoke(new MethodInvoker(delegate { opened.ShowDialog(form); }));
+                    else if (command == "independent-window") { opened.Show(); opened.Activate(); }
+                    else opened.Show(form);
+                    break;
+                case "close-panel": if (panel != null) { panel.Close(); panel.Dispose(); panel = null; } break;
+                case "maximize": form.WindowState = FormWindowState.Maximized; break;
+                case "window-state": File.WriteAllText(Path.Combine(directory, "window-state"), form.WindowState.ToString()); break;
                 case "partial": form.Width = 550; SetWindowPos(form.Handle, IntPtr.Zero, 0, 0, 0, 0, 0x13); break;
                 case "full": form.Width = 1100; SetWindowPos(form.Handle, IntPtr.Zero, 0, 0, 0, 0, 0x13); break;
                 case "topmost": form.TopMost = true; break;
@@ -197,8 +295,10 @@ internal static class WindowFixture
         form.FormClosed += delegate {
             stopping = true;
             if (menu != null) menu.Dispose();
+            if (panel != null) panel.Dispose();
             if (dragThread != null) dragThread.Join(1500);
             if (restoreCursor.HasValue) Cursor.Position = restoreCursor.Value;
+            if (probeCursor.HasValue) Cursor.Position = probeCursor.Value;
         };
         timer.Start();
         Application.Run(form);

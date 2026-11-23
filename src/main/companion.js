@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   characterSize,
+  clamp,
   stageBounds,
   constrainCharacter,
   snapCharacter,
@@ -21,20 +22,20 @@ import {
   resizeCharacter,
   placeBubble,
   containsPoint,
-  BUBBLE_SIZE,
-  BUBBLE_MAX_SIZE,
+  bubbleDimensions,
 } from '../shared/geometry.js';
 import { DragGesture } from '../shared/gesture.js';
 import { StateStore } from './state-store.js';
 import { dialogueLine, PRAYER_TEXT } from '../shared/dialogue.js';
 import { EYE_ARTWORK, eyeTrackingEnabled } from '../shared/gaze.js';
 import { shouldFaceLeft } from '../shared/facing.js';
-import { followWindowStack, followWindowFloating } from '../shared/follow-window.js';
+import { followWindowStack, followWindowFloating, followDisplayFrame } from '../shared/follow-window.js';
 import { CHARACTERS, characterByAsset, characterById, isDragonAsset } from '../shared/characters.js';
 import { dragonHairstyle } from '../shared/dragon-gear.js';
 import { DRAGON_FACE_EXPRESSIONS, isDragonFace } from '../shared/expression.js';
 import { PRAYER_PALM } from '../shared/prayer-wave.js';
 import { PrayerWave } from './prayer-wave.js';
+import { recoverWindowRenderer } from './window-recovery.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const ORIGIN = 'dragon://app';
@@ -86,7 +87,6 @@ export class Companion {
     this.bubbleVisible = false;
     this.dialogueCounts = new Map();
     this.bubbleKind = null;
-    this.bubbleSize = { ...BUBBLE_SIZE };
     this.bubbleModel = {
       text: '',
       usage: null,
@@ -193,24 +193,29 @@ export class Companion {
         webSecurity: true,
       },
     });
-    window.setAlwaysOnTop(true, 'floating');
+    window.setAlwaysOnTop(!(this.followMode || this.suppressedByFollow), 'floating');
     if (process.platform === 'darwin')
-      window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
     window.setIgnoreMouseEvents(true, { forward: true });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', (event) => event.preventDefault());
-    window.webContents.on('render-process-gone', (_event, details) => {
-      console.error(`[${view}] 窗口渲染已退出：${details.reason}`);
-      this.cancelGesture();
-      this.hide();
+    recoverWindowRenderer(window, `${ORIGIN}/src/renderer/${view}.html`, () => this.stopping, () => {
+      this.ready.delete(view);
+      this.cursorPositions.delete(view);
+      if (view === 'character') {
+        this.contextMenu?.closePopup(window);
+        this.cancelGesture();
+        this.setInteractive(view, false);
+        this.hideWindow(view);
+      }
+      // 重新启动的气泡从关闭状态开始；角色的主动隐藏偏好由原来的用户操作决定。
+      this.hideBubble();
     });
     // 原生透明窗口的隐藏不总会触发页面可见性事件，显式同步显示状态以暂停视线动画。
-    if (view === 'character') for (const event of ['show', 'hide']) window.on(event, () => {
-      this.sendCharacterLayout();
-      if (event === 'show') this.pollCursor(true);
-    });
-    // 原生显示可能提升窗口层级，角色和气泡每次出现后立即回到宿主上方。
-    window.on('show', () => this.syncWindowStacking(true));
+    if (view === 'character') for (const event of ['show', 'hide']) window.on(event, () => this.sendCharacterLayout());
+    window.on('hide', () => this.cursorPositions.delete(view));
+    // 鼠标静止时新出现的气泡也要重新命中；显示后立即纠正系统可能提升的窗口层级。
+    window.on('show', () => { this.syncWindowStacking(true); this.pollCursor(true); });
     this.windows.set(view, window);
     this.interactive.set(view, false);
     return window;
@@ -263,7 +268,7 @@ export class Companion {
     });
     ipcMain.on('dg:gesture-start', (event, point) => {
       const c = locate(event, 'character');
-      if (c?.validPoint(point)) {
+      if (c?.validPoint(point) && !c.contextMenu && c.canInteract('character')) {
         c.gesture.begin(point, c.character);
         c.setInteractive('character', true);
       }
@@ -405,10 +410,19 @@ export class Companion {
     if (result.kind === 'drag') {
       this.display = screen.getDisplayNearestPoint({ x: Math.round(point.x), y: Math.round(point.y) });
       this.character = snapCharacter(result.rect, this.display.workArea, this.state.snapEnabled);
-      this.state.placement = capturePlacement(this.character, this.display, this.state.snapEnabled);
-      this.applyCharacter();
-      this.persist();
-      this.delegate?.onDrag?.(this);
+      if (this.followMode && this.followTarget) {
+        // 将拖动终点和宿主换到同一坐标系，跨 DPI 拖动时也能反算相同的相对位置。
+        const host = this.followTarget.physicalBounds || this.followTarget;
+        const rect = this.followTarget.physicalBounds ? screen.dipToScreenRect(null, this.character) : this.character;
+        this.setFollowOffset({
+          x: host.width > rect.width ? clamp((rect.x - host.x) / (host.width - rect.width), 0, 1) : this.followOffset.x,
+          y: host.height > rect.height ? clamp((rect.y - host.y) / (host.height - rect.height), 0, 1) : this.followOffset.y,
+        });
+      } else if (!this.followMode) {
+        this.state.placement = capturePlacement(this.character, this.display, this.state.snapEnabled);
+        this.applyCharacter();
+        this.persist();
+      }
     } else {
       this.toggleBubble();
       // 只有手势状态机判定为轻戳才通知双耳，独立于点击后的气泡和表情。
@@ -428,29 +442,28 @@ export class Companion {
     this.character = result.rect;
     this.display = screen.getDisplayMatching(this.character);
     this.applyCharacter();
-    this.windows.get('character')?.webContents.send('dg:cancelled');
+    if (this.ready.has('character')) this.windows.get('character')?.webContents.send('dg:cancelled');
   }
 
-  // 更改大小时固定底部及吸附边；气泡尺寸保持独立，文字不会跟着缩放。
+  // 更改大小时固定底部及吸附边，正在显示的气泡随角色的新宽度同步排版。
   setScale(scale) {
     this.cancelGesture();
     this.state.scale = scale;
-    this.character = resizeCharacter(
-      this.character,
-      characterSize(scale, this.display.workArea, this.imageRatio),
-      this.state.placement,
-      this.display.workArea,
-    );
-    this.state.placement = capturePlacement(this.character, this.display, this.state.snapEnabled);
-    this.applyCharacter();
+    if (this.followMode) this.applyFollowPlacement(true);
+    else {
+      const size = characterSize(scale, this.display.workArea, this.imageRatio);
+      this.character = resizeCharacter(this.character, size, this.state.placement, this.display.workArea);
+      this.state.placement = capturePlacement(this.character, this.display, this.state.snapEnabled);
+      this.applyCharacter();
+    }
     this.persist();
     this.updateMenu();
   }
 
-  // 轻点角色打开用量或收起当前气泡，点击用量气泡与菜单入口负责显示语录。
+  // 连续轻点头像依次打开用量、显示一句语录、收起；中间也可以改点气泡。
   toggleBubble() {
     if (this.bubbleVisible) {
-      this.hideBubble();
+      this.advanceBubble();
       return;
     }
     if (!this.state.speechEnabled) return;
@@ -484,7 +497,7 @@ export class Companion {
     // 显示轮次独立于内容版本，后台额度更新与气泡内换句不能被当作重新打开。
     if (opening) this.bubbleModel.showId += 1;
     this.bubbleVisible = true;
-    this.positionBubble();
+    this.positionBubble(true);
     clearTimeout(this.bubbleTimer);
     // 祷文由释放震荡波的流程收起，普通气泡仍使用各自的自动关闭设置。
     if (kind !== 'prayer' && !this.appearance.settings?.pinnedBubble)
@@ -526,7 +539,7 @@ export class Companion {
     if (typingId == null || typingId !== this.bubbleModel.typingId) return;
     this.bubbleModel.typingId = null;
     const window = this.windows.get('bubble');
-    if (window && !window.isDestroyed()) window.webContents.send('dg:bubble', this.bubbleModel);
+    if (this.ready.has('bubble') && window && !window.isDestroyed()) window.webContents.send('dg:bubble', this.bubbleModel);
     if (completed && this.bubbleVisible) {
       this.releasePrayer();
     } else {
@@ -550,9 +563,16 @@ export class Companion {
         y: this.character.y + this.character.height * PRAYER_PALM.y,
       }),
       ownedWindowIds: () => Companion.ownedWindowIds(),
-      stackOnWindows: (host, id, owned) => {
-        if (this.followMode && this.followTarget?.id === host && !this.contextMenu) this.syncWindowStacking();
-        else this.delegate?.stackWindows?.(host, [id], owned);
+      stackWithCompanion: (host, id, force) => {
+        if (this.followMode && this.followTarget?.id === host && !this.contextMenu) {
+          // 跟随快照已按波纹、角色、气泡整组排序；特效首次显示时补排新窗口。
+          if (force) this.syncWindowStacking(true);
+          return true;
+        }
+        if (process.platform !== 'win32') return false;
+        // 独立桌面的置顶角色也是特效的遮挡者，单排波纹时只排除波纹自身。
+        this.delegate?.stackWindows?.(host, [id], [id]);
+        return true;
       },
       onStart: () => {
         this.hideBubble({ keepWave: true });
@@ -588,18 +608,14 @@ export class Companion {
   // 用量气泡切换为一条语录，其余气泡点击收起；迟到点击不能重新叫出已隐藏的角色或气泡。
   advanceBubble() {
     if (this.stopping || !this.visible || this.suppressedByFollow || !this.bubbleVisible) return;
-    if (this.bubbleKind === 'usage') this.speak();
+    if (this.bubbleKind === 'usage') this.showBubble(this.nextDialogue('chat'), 'speech');
     else this.hideBubble();
   }
 
-  // 使用固定设计尺寸，仅在屏幕工作区小于气泡时收紧边界，内容长度不参与计算。
+  // 布局基于实际角色宽度和当前工作区，显示器切换或小屏自动缩小时也会更新比例。
   bubbleLimits() {
-    const area = this.display?.workArea;
-    if (!area) return { maxWidth: BUBBLE_MAX_SIZE.width, maxHeight: BUBBLE_MAX_SIZE.height };
-    return {
-      maxWidth: Math.min(BUBBLE_MAX_SIZE.width, Math.max(1, area.width - 8)),
-      maxHeight: Math.min(BUBBLE_MAX_SIZE.height, Math.max(1, area.height - 8)),
-    };
+    const { width, height, scale } = bubbleDimensions(this.character?.width, this.display?.workArea);
+    return { maxWidth: width, maxHeight: height, scale };
   }
 
   // 界面消息只确认当前内容已经排版，原生窗口始终使用固定尺寸，不能被正文长度改写。
@@ -615,32 +631,48 @@ export class Companion {
       measurement.width > this.bubbleModel.maxWidth ||
       measurement.height > this.bubbleModel.maxHeight
     ) return;
-    const limits = this.bubbleLimits();
-    this.bubbleSize = { width: limits.maxWidth, height: limits.maxHeight };
     this.bubbleModel.measuredRevision = measurement.revision;
-    this.positionBubble();
+    this.positionBubble(true);
     const window = this.windows.get('bubble');
-    if (this.bubbleVisible && !window.isVisible()) window.showInactive();
+    if (this.bubbleVisible && !window.isVisible()) {
+      window.showInactive();
+      this.cursorPositions.delete('bubble');
+      this.pollCursor(true);
+    }
   }
 
-  // 默认使用角色左上方的位置，方向和思绪泡锚点随屏幕边缘避让一起更新。
-  positionBubble() {
+  // 实际窗口随角色移动；只有内容、测量状态或窗口内的图形变化时才通知渲染端。
+  positionBubble(notify = false) {
     const limits = this.bubbleLimits();
-    if (limits.maxWidth !== this.bubbleModel.maxWidth || limits.maxHeight !== this.bubbleModel.maxHeight)
+    if (limits.scale !== this.bubbleModel.scale || limits.maxWidth !== this.bubbleModel.maxWidth || limits.maxHeight !== this.bubbleModel.maxHeight) {
       this.bubbleModel = {
         ...this.bubbleModel,
         ...limits,
         revision: this.bubbleModel.revision + 1,
         measuredRevision: -1,
       };
-    const layout = placeBubble(this.character, this.display.workArea, this.bubbleSize);
-    this.bubbleModel = { ...this.bubbleModel, side: layout.side, horizontal: layout.horizontal, tailX: layout.tailX };
+      notify = true;
+    }
+    const layout = placeBubble(this.character, this.display.workArea, {
+      width: limits.maxWidth, height: limits.maxHeight, scale: limits.scale,
+    });
+    const { side, horizontal, tailX } = layout;
+    if (this.bubbleModel.side !== side || this.bubbleModel.horizontal !== horizontal || this.bubbleModel.tailX !== tailX) {
+      Object.assign(this.bubbleModel, { side, horizontal, tailX });
+      notify = true;
+    }
     const window = this.windows.get('bubble');
     const current = window.getBounds();
     // 原生窗口位置不变时不重复定位，避免在透明窗口上制造无意义的重绘与位置回跳。
-    if (['x', 'y', 'width', 'height'].some(key => current[key] !== layout.bounds[key]))
+    if (RECT_KEYS.some(key => current[key] !== layout.bounds[key]))
       window.setBounds(layout.bounds, false);
-    window.webContents.send('dg:bubble', this.bubbleModel);
+    if (notify) window.webContents.send('dg:bubble', this.bubbleModel);
+  }
+
+  // 已收起的窗口不重复向系统发隐藏命令，避免 AppKit 释放另一扇角色窗口正在使用的鼠标捕获。
+  hideWindow(view) {
+    const window = this.windows.get(view);
+    if (window && !window.isDestroyed() && window.isVisible()) window.hide();
   }
 
   // 隐藏气泡时释放输入区域，震荡波开场可单独收起气泡。
@@ -648,22 +680,33 @@ export class Companion {
     clearTimeout(this.bubbleTimer);
     this.bubbleVisible = false;
     this.setInteractive('bubble', false);
-    this.windows.get('bubble')?.hide();
+    this.hideWindow('bubble');
     if (!keepWave) this.cancelPrayerWave();
     this.finishPrayerTyping(this.bubbleModel.typingId);
+  }
+
+  // 显隐来自主进程，已隐藏的页面即使有迟到命中消息也不能重新占用鼠标。
+  canInteract(view) {
+    const window = this.windows.get(view);
+    return this.ready.has(view) && this.visible && !this.suppressedByFollow && !this.stopping && (view !== 'bubble' || this.bubbleVisible)
+      && window && !window.isDestroyed() && window.isVisible();
   }
 
   // 手势和原生菜单展开期间保留输入，移出角色后仍能悬停子菜单。
   setInteractive(view, enabled) {
     const window = this.windows.get(view);
     if (!window || window.isDestroyed()) return;
-    const next = view === 'character' && (this.gesture.active
-      || (this.contextMenu && this.visible && !this.suppressedByFollow && !this.stopping)) ? true : enabled;
-    if (this.interactive.get(view) === next) return;
+    const next = !!((enabled || view === 'character' && (this.gesture.active || this.contextMenu)) && this.canInteract(view));
+    if (this.interactive.get(view) === next) {
+      // 被隐藏状态否决的迟到消息也要回执，否则渲染端可能一直认为鼠标已经启用。
+      if (enabled !== next && this.ready.has(view)) window.webContents.send('dg:input-state', next);
+      return;
+    }
     this.interactive.set(view, next);
+    if (!next) this.cursorPositions.delete(view);
     window.setIgnoreMouseEvents(!next, { forward: true });
     // 原生轮询或隐藏操作可能主动释放输入，回传实际状态避免渲染层缓存过期后无法重新进入。
-    window.webContents.send('dg:input-state', next);
+    if (this.ready.has(view)) window.webContents.send('dg:input-state', next);
   }
 
   // 复用全局光标轮询驱动视线；仅在位置变化时发消息，隐藏角色与静止鼠标不增加绘制。
@@ -672,7 +715,7 @@ export class Companion {
     clearTimeout(this.cursorTimer);
     // 菜单自行追踪鼠标；全局轮询此时不能把所属窗口重新设为穿透。
     if (this.contextMenu) return;
-    const point = screen.getCursorScreenPoint();
+    let point;
     let nearby = false;
     let followingEyes = false;
     for (const [view, window] of this.windows) {
@@ -681,6 +724,8 @@ export class Companion {
       // macOS 原生显示可能先于 Electron 的 show 通知完成，不能让可见角色一直保留隐藏标记。
       if (view === 'character' && visible !== this.lastCharacterVisibility) this.sendCharacterLayout();
       if (!visible) continue;
+      // 两扇窗口都已隐藏时无需查询全局光标；显示后的第一次采样仍会立即命中。
+      point ??= screen.getCursorScreenPoint();
       const bounds = window.getBounds();
       const inside = containsPoint(bounds, point);
       const followEyes = view === 'character' && eyeTrackingEnabled(this.appearance.asset, this.appearance.settings);
@@ -692,7 +737,8 @@ export class Companion {
       if ((inside || force || followEyes) && !(view === 'character' && this.gesture.active)
         && (force || previous?.x !== local.x || previous?.y !== local.y)) {
         this.cursorPositions.set(view, local);
-        window.webContents.send('dg:cursor', local);
+        // 强制采样也要重查渲染端命中缓存，处理原生显示与网页完成排版先后不固定的情况。
+        window.webContents.send('dg:cursor', view === 'bubble' && (force || !previous) ? { ...local, refresh: true } : local);
       }
     }
     this.cursorTimer = setTimeout(() => this.pollCursor(), nearby ? 24 : followingEyes ? 33 : 100);
@@ -851,6 +897,11 @@ export class Companion {
   // 重置只影响位置，大小、气泡与吸附偏好继续保留。
   resetPosition() {
     this.cancelGesture();
+    if (this.followMode) {
+      this.setFollowOffset({ x: 1, y: 1 });
+      this.show();
+      return;
+    }
     this.state.placement = null;
     this.restore();
     this.state.placement = capturePlacement(this.character, this.display, this.state.snapEnabled);
@@ -863,8 +914,8 @@ export class Companion {
   show() {
     if (this.stopping) return;
     this.visible = true;
-    if (this.ready.has('character') && !this.suppressedByFollow)
-      this.windows.get('character').showInactive();
+    const window = this.windows.get('character');
+    if (this.ready.has('character') && !this.suppressedByFollow && !window.isVisible()) window.showInactive();
     this.pollCursor(true);
     this.updateMenu();
   }
@@ -877,7 +928,7 @@ export class Companion {
     this.visible = false;
     this.hideBubble();
     this.setInteractive('character', false);
-    this.windows.get('character')?.hide();
+    this.hideWindow('character');
     this.updateMenu();
   }
 
@@ -918,13 +969,15 @@ export class Companion {
     const usage = typeof content === 'string' ? null : content.usage;
     if (text === this.bubbleModel.text && JSON.stringify(usage) === JSON.stringify(this.bubbleModel.usage)) return;
     this.setBubbleContent(content);
-    this.positionBubble();
+    this.positionBubble(true);
   }
 
   // 跟随模式交由宿主决定层级，独立桌面模式继续置顶；只在模式切换时重设默认窗口属性。
   setFollowMode(enabled) {
     if (this.followMode === enabled) return;
+    if (this.gesture?.active) this.cancelGesture();
     this.followMode = enabled;
+    this.contextMenu?.closePopup(this.windows.get('character'));
     for (const window of this.windows.values()) window.setAlwaysOnTop(!enabled, 'floating');
     // 同一管道中的桌面恢复命令会覆盖尚未执行的旧跟随请求，避免切换后被迟到请求降级。
     if (!enabled && process.platform === 'win32') this.delegate?.stackWindows?.(0,
@@ -943,34 +996,34 @@ export class Companion {
     if (!this.followMode || this.suppressedByFollow || this.stopping || this.contextMenu || !Number.isSafeInteger(hostId) || hostId <= 0) return;
     if (this.followOrder && !this.followOrder.some((id) => String(id) === String(hostId))) { this.followFrame(null); return; }
     const owned = Companion.ownedWindowIds();
+    const wave = this.prayerWave?.hostId === hostId ? this.prayerWave.window : null;
+    const hasWave = wave && !wave.isDestroyed() && wave.isVisible();
+    const group = [...(hasWave ? [wave] : []), ...this.windows.values()].filter(window => !window.isDestroyed());
     // Windows 由原生桥按实时句柄排序，避免 Electron 对普通宿主的相对排序隐式改变置顶组。
     if (process.platform === 'win32') {
-      const wave = this.prayerWave?.hostId === hostId ? this.prayerWave.window : null;
-      const overlays = [...(wave?.isVisible() ? [wave] : []), ...this.windows.values()].filter((window) => !window.isDestroyed())
-        .map((window) => window.getMediaSourceId().split(':')[1]);
+      const overlays = group.map(window => window.getMediaSourceId().split(':')[1]);
       this.delegate?.stackWindows?.(hostId, overlays, owned);
       return;
     }
-    const regions = [this.character, ...(this.bubbleVisible ? [this.windows.get('bubble').getBounds()] : [])];
+    const regions = [this.character, ...(hasWave ? [this.followTarget] : []), ...(this.bubbleVisible ? [this.windows.get('bubble').getBounds()] : [])];
     const floating = process.platform === 'darwin' && followWindowFloating(this.followNormalWindows, this.followTarget, owned, regions);
     let levelChanged = false;
     // 前台只比普通窗口高一级，重新显示角色与气泡时也会留在浮动菜单后面。
-    if (process.platform === 'darwin') for (const window of this.windows.values()) {
-      if (!window.isDestroyed() && window.isAlwaysOnTop() !== floating) {
+    if (process.platform === 'darwin') for (const window of group) {
+      if (window.isAlwaysOnTop() !== floating) {
         window.setAlwaysOnTop(floating, 'normal', 1);
         levelChanged = true;
       }
     }
-    const overlays = [...this.windows.values()].filter((window) => !window.isDestroyed() && window.isVisible());
+    const overlays = group.filter(window => window.isVisible());
     const sources = new Map(overlays.map((window) => [window.getMediaSourceId().split(':')[1], window]));
     if (!sources.size) return;
-    const topmost = new Set(this.followTopmost?.map(String));
-    const [characterId, ...bubbleIds] = sources.keys();
-    // 浮动层已天然高于宿主，只维护气泡在角色上方；不能再把角色拉回普通层参与反复置前。
-    const localOrder = this.followOrder?.some((id) => String(id) === characterId) ? this.followOrder : null;
+    const [baseId, ...upperIds] = sources.keys();
+    // 浮动层已天然高于宿主，只维护组内波纹、角色和气泡的前后顺序。
+    const localOrder = this.followOrder?.some((id) => String(id) === baseId) ? this.followOrder : null;
     const moves = floating
-      ? followWindowStack(localOrder, characterId, bubbleIds, { force: force || levelChanged })
-      : followWindowStack(this.followOrder, hostId, [...sources.keys()], { force: force || levelChanged, topmost: [...topmost] });
+      ? followWindowStack(localOrder, baseId, upperIds, force || levelChanged)
+      : followWindowStack(this.followOrder, hostId, [...sources.keys()], force || levelChanged);
     if (!moves) { this.followFrame(null); return; }
     try {
       for (const { id, above } of moves) {
@@ -984,15 +1037,22 @@ export class Companion {
   }
 
   // 保留当前宿主和相对锚点，显示器事件到达时无需等待下一份原生快照。
-  followFrame(frame, offset = { x: 1, y: 1 }, { order = null, topmost = [], normalWindows = null } = {}) {
+  followFrame(frame, offset = { x: 1, y: 1 }, { order = null, normalWindows = null } = {}) {
     // 独立桌面的菜单忽略宿主坐标，避免菜单关闭后的屏幕重排使用跟随位置。
     if (this.contextMenu && frame && !this.followMode) return;
     this.followOrder = order;
-    this.followTopmost = topmost;
     this.followNormalWindows = normalWindows;
+    if (this.gesture.active && this.followTarget?.id !== frame?.id) this.cancelGesture();
     this.followTarget = frame;
     this.followOffset = offset;
     this.applyFollowPlacement();
+  }
+
+  // 手动拖动和菜单重置共用宿主锚点，立即应用，再由管理层按账户保存。
+  setFollowOffset(offset) {
+    this.followOffset = offset;
+    this.delegate?.saveFollowOffset?.(this, offset);
+    this.applyFollowPlacement(true);
   }
 
   // 宿主或所在屏幕不可见时先收起角色和气泡，保留用户主动隐藏的状态。
@@ -1002,32 +1062,26 @@ export class Companion {
     this.cancelGesture();
     this.hideBubble();
     this.setInteractive('character', false);
-    this.windows.get('character')?.hide();
+    this.hideWindow('character');
   }
 
   // 原生窗口快照和屏幕重排共用宿主坐标，不能回退到独立桌面的位置。
   applyFollowPlacement(refresh = false) {
-    const frame = this.followTarget;
-    if (!frame) {
+    const offset = this.followOffset;
+    const target = this.followTarget && followDisplayFrame(this.followTarget, offset, screen);
+    if (!target) {
       this.hideForFollow();
       return;
     }
     if (!this.character) return;
+    const { frame, display } = target;
+    this.followTarget = frame;
     if (this.gesture.active) {
       this.syncWindowStacking();
       return;
     }
-    const display = screen.getDisplayMatching(frame);
-    const bounds = display?.bounds;
-    // 副屏刚断开时系统可能返回最近的主屏；旧宿主坐标与它不相交，等宿主移屏或副屏恢复。
-    if (!bounds || !(frame.x < bounds.x + bounds.width && frame.x + frame.width > bounds.x
-      && frame.y < bounds.y + bounds.height && frame.y + frame.height > bounds.y)) {
-      this.hideForFollow();
-      return;
-    }
-    // 菜单展开时保留角色位置，宿主失效仍可在上面两条路径中关闭菜单并收起角色。
+    // 菜单展开时保留角色位置；宿主消失或显示器断开已在上方处理。
     if (this.contextMenu) return;
-    const offset = this.followOffset;
     const size = characterSize(this.state.scale, display.workArea, this.imageRatio);
     const next = constrainCharacter(
       {
