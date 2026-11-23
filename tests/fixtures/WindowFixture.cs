@@ -27,6 +27,12 @@ internal static class WindowFixture
     // 将标题栏命中的子窗口还原为所属顶层窗口。
     [DllImport("user32.dll")]
     private static extern IntPtr GetAncestor(IntPtr window, uint flags);
+    // 检查夹具面板实际的 Win32 所有者，确保测试不会被宿主的附属窗口过滤提前满足。
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr window, uint command);
+    // 窗口扩展样式是 32 位标志，直接读取系统值验证 WS_EX_TOOLWINDOW。
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+    private static extern int GetWindowLong(IntPtr window, int index);
     // 读取实际窗口位置，避免把没有进入系统拖动循环的测试误判为通过。
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr window, out Rect rectangle);
@@ -249,8 +255,11 @@ internal static class WindowFixture
                 case "lower": SetWindowPos(form.Handle, new IntPtr(1), 0, 0, 0, 0, 0x13); break;
                 case "activate": form.Activate(); break;
                 case "click":
+                    // 与后续拖动使用不同的标题栏位置，避免被识别为双击，只向自己的测试窗口发送输入。
+                    Point caption = new Point(form.Left + 200, form.Top + SystemInformation.FrameBorderSize.Height + SystemInformation.CaptionHeight / 2);
+                    if (GetAncestor(WindowFromPoint(caption), 2) != form.Handle) break;
                     restoreCursor = Cursor.Position;
-                    Cursor.Position = new Point(form.Left + 100, form.Top + 10);
+                    Cursor.Position = caption;
                     mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
                     mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
                     break;
@@ -259,6 +268,17 @@ internal static class WindowFixture
                 case "glide": GlideHost(form, directory); break;
                 case "open-floating-menu": menu = OpenContextMenu(form, directory); break;
                 case "close-floating-menu": if (menu != null) menu.Dispose(); menu = null; break;
+                // 面板盖住宿主上的两个取样点，独立显示，使最小化主窗后仍有一个置顶工具窗可见。
+                case "topmost-tool":
+                    panel = new Form { FormBorderStyle = FormBorderStyle.FixedToolWindow, ShowInTaskbar = false,
+                        TopMost = true, StartPosition = FormStartPosition.Manual, Bounds = form.Bounds, BackColor = Color.DarkOrange };
+                    panel.Show();
+                    IntPtr tool = panel.Handle, owner = GetWindow(tool, 4); // GW_OWNER。
+                    File.WriteAllText(Path.Combine(directory, "tool-window.json"), "{\"id\":\"" + tool.ToInt64()
+                        + "\",\"extendedStyle\":" + GetWindowLong(tool, -20) + ",\"visibleOwner\":"
+                        + (owner != IntPtr.Zero && IsWindowVisible(owner) ? "true" : "false")
+                        + ",\"width\":" + panel.Width + ",\"height\":" + panel.Height + "}");
+                    break;
                 // 同一宿主分别打开足够大的普通工具面板和真正禁用所有者的模态框，便于区分跟随目标。
                 case "owned-panel":
                 case "modal-panel":
