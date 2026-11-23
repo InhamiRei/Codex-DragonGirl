@@ -238,7 +238,14 @@ async function checkWindowsSwitching(host, cover) {
       await send(host, 'sample ' + points.flatMap(p => [p.x, p.y]).join(' '));
       last = await fs.readFile(path.join(host.directory, 'pixels'), 'utf8');
       return last === `${left} ${right}`;
-    }, '角色与遮挡窗口的实际屏幕像素不符').catch(error => { throw new Error(`${error.message}，期望 ${left} ${right}，实测 ${last}`); });
+    }, '角色与遮挡窗口的实际屏幕像素不符').catch(async error => {
+      // 取色失败时保留本次测试宿主的前台状态、桌宠几何和窗口顺序，区分被覆盖与取样位置偏移。
+      const desktop = systemState(host.child.pid), state = await companionState();
+      const testWindows = [host.id, cover.id, ...Object.values(ids)];
+      const details = { points, foreground: desktop.host?.frontmost, host: state.follow.frame, character: state.character,
+        bounds: state.windows.character.bounds, order: desktop.order.filter(id => testWindows.includes(id)) };
+      throw new Error(`${error.message}，期望 ${left} ${right}，实测 ${last}。测试窗口 ${JSON.stringify(details)}`);
+    });
   }
   const petColor = 'E629D8', coverColor = '1B8E44';
   for (const bubbleOpen of [false, true]) {
@@ -257,6 +264,10 @@ async function checkWindowsSwitching(host, cover) {
     await sizeCover(hostX + Math.round(hostWidth / 2));
   }
   await checkWindowsToolWindow(host, expectPixels);
+  // 关闭独立工具窗后，系统可将前台交给其他应用。用户实际点回聊天窗后才应再看到两个角色色标。
+  await send(host, 'raise');
+  await clickWindow(host);
+  await expectStack(host, cover, false, false);
   await expectPixels(petColor, petColor);
   // 从透明角落点到底下的宿主，再在脸部点开气泡。两次都实际发送系统鼠标事件。
   await application.evaluate(() => globalThis.__dragonGirlApp.companion.hideBubble());
