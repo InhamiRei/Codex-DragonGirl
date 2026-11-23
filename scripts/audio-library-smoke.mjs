@@ -118,6 +118,47 @@ async function openSettings(executablePath) {
   assert.equal(await page.locator('#sound-library-list li').count(), 0, '折叠的音效库不需要建行');
 }
 
+// 折叠与展开共用同一条中线和文字间距，内置原声只提供试听，修改操作属于导入的片段。
+async function verifyCatalog(importedCount) {
+  const summary = page.locator('#sound-catalog summary');
+  await page.waitForFunction((count) => document.querySelector('#sound-library-count').textContent ===
+    `9 段内置 · ${count} 段导入`, importedCount);
+  for (const expanded of [false, true]) {
+    if (expanded) await summary.press('Enter');
+    const geometry = await summary.evaluate((element) => {
+      const arrow = element.querySelector('.sound-catalog-marker')?.getBoundingClientRect();
+      const label = element.querySelector('.sound-catalog-label')?.getBoundingClientRect();
+      const count = element.querySelector('#sound-library-count').getBoundingClientRect();
+      if (!arrow || !label) return null;
+      const center = (rect) => rect.top + rect.height / 2;
+      return { expanded: element.parentElement.open, gap: label.left - arrow.right,
+        arrowOffset: center(arrow) - center(label), countOffset: center(count) - center(label) };
+    });
+    assert.ok(geometry, '展开箭头和文字缺少独立的对齐区域');
+    assert.equal(geometry.expanded, expanded);
+    assert.ok(geometry.gap >= 6 && geometry.gap <= 10, '展开箭头与标题之间应有适度间距');
+    assert.ok(Math.abs(geometry.arrowOffset) <= .5 && Math.abs(geometry.countOffset) <= .5, '箭头、标题和数量没有垂直居中');
+  }
+  await page.waitForFunction((n) => document.querySelectorAll('#sound-library-list li').length === n, AUDIO_FILES.length + importedCount);
+  const actions = await page.locator('#sound-library-list li').evaluateAll((rows) =>
+    Object.fromEntries(rows.map(row => [row.dataset.clipId, [...row.querySelectorAll('button')].map(button => button.textContent)])));
+  for (const { id } of AUDIO_FILES) {
+    assert.deepEqual(actions[id], ['试听'], id + ' 内置原声应只显示试听');
+    await assert.rejects(page.evaluate((id) => window.dragonGirl.command('remove-audio-clip', id), id), /找不到要移除的音效/);
+  }
+  for (const [id, labels] of Object.entries(actions)) {
+    if (id.startsWith('clip-')) assert.deepEqual(labels, ['试听', '裁剪', '重命名', '移除']);
+  }
+  // 从原声列表播放并当场停止，确保只读条目仍是可操作的试听入口。
+  const listen = page.locator('li[data-clip-id="end_a"] button');
+  await listen.click();
+  assert.equal(await listen.getAttribute('aria-pressed'), 'true');
+  await listen.click();
+  assert.equal(await listen.getAttribute('aria-pressed'), 'false');
+  await summary.press('Space');
+  await page.waitForFunction(() => !document.querySelector('#sound-catalog').open && !document.querySelector('#sound-library-list li'));
+}
+
 // 操作和用户相同的自定义下拉菜单。
 async function choose(event, id) {
   const key = 'event-audio-' + event;
@@ -141,6 +182,7 @@ try {
   const original = path.join(temp, '三分钟录音.wav');
   await writeLongSource(original);
   await openSettings();
+  await verifyCatalog(0);
   console.log('音效验收：开始导入三分钟录音');
   assert.equal(await page.locator('#event-audio-press').inputValue(), 'd1');
   assert.equal(await page.locator('#event-audio-release').inputValue(), 'd2');
@@ -288,6 +330,7 @@ try {
 
   // 重启并切到成品程序，源文件已移走，原声已修复，事件分配仍指向同一 WAV。
   await openSettings(process.env.DRAGONGIRL_TEST_EXECUTABLE);
+  await verifyCatalog(2);
   assert.equal(await page.locator('#event-audio-press').inputValue(), id);
   assert.equal(await page.locator('#event-audio-release').inputValue(), 'exp_orb');
   assert.equal(await page.locator('#event-audio-question option:checked').textContent(), '轻声');
@@ -346,8 +389,8 @@ try {
   }
   await page.locator('#import-audio').scrollIntoViewIfNeeded();
   await page.locator('#import-audio').locator('xpath=ancestor::article').screenshot({ path: path.join(root, '.artifacts/sound-library.png') });
-  // 用真实的内置提问提示音截取预览，检查竖条、网格和选区的整体效果。
-  await page.locator('li[data-clip-id="ask_a"]').getByRole('button', { name: /裁剪/ }).click();
+  // 用已导入的短片段截取预览，检查竖条、网格和选区的整体效果。
+  await page.locator(`li[data-clip-id="${id}"]`).getByRole('button', { name: /裁剪/ }).click();
   await page.locator('#audio-wave[data-ready=true]').waitFor();
   await page.locator('#audio-start').fill('0.160');
   await page.locator('#audio-end').fill('0.540');
