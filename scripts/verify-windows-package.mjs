@@ -44,10 +44,10 @@ try {
   // 桌面用例串行运行同一个解压包，避免测试窗口互抢焦点并保留每项诊断。
   const env = { ...process.env, DRAGONGIRL_TEST_EXECUTABLE: executable };
   const scripts = [
-    'windows-smoke.mjs', 'update-smoke.mjs', 'app-smoke.mjs', 'startup-smoke.mjs', 'position-smoke.mjs', 'bubble-smoke.mjs',
+    'windows-smoke.mjs', 'audio-library-smoke.mjs', 'update-smoke.mjs', 'app-smoke.mjs', 'startup-smoke.mjs', 'position-smoke.mjs', 'bubble-smoke.mjs',
     'follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs',
     'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs',
-    'account-tests-smoke.mjs', 'performance-smoke.mjs', 'audio-library-smoke.mjs', 'character-smoke.mjs', 'dragon-config-smoke.mjs',
+    'account-tests-smoke.mjs', 'performance-smoke.mjs', 'character-smoke.mjs', 'dragon-config-smoke.mjs',
     'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs', 'kokkoro-interaction-smoke.mjs',
   ];
   for (const script of scripts) {
@@ -60,7 +60,11 @@ try {
     const result = spawnSync(process.execPath, args, {
       env, encoding: 'utf8', timeout,
     });
-    if (result.status !== 0) throw new Error(`${script} 验收失败：${result.error?.message || result.stderr || result.stdout || result.signal || result.status}`);
+    if (result.status !== 0) {
+      // 即使外层终止超时进程，也保留用例最后的操作与错误，便于定位具体窗口。
+      const details = [result.error?.message, result.stdout?.trim(), result.stderr?.trim()].filter(Boolean).join('\n');
+      throw new Error(`${script} 验收失败：${details || result.signal || result.status}`);
+    }
     console.log(result.stdout.trim());
   }
   const report = { passed: true, version: manifest.version, checks: ['ZIP SHA-256', '源码一致', 'x64 二进制', '中文空格路径解压', '脱离源码启动', '桌面功能测试', '静默启动与宿主退出', '位置恢复与内置音效', '四档显示比例与无原生滚动条', '跟随窗口遮挡层级与最小化恢复', '气泡并发刷新保持显示与阅读位置', '拖拽松手自动朝向、镜像命中与动画偏好', '成功与失败表情及素材完整性', '原生菜单与表情预览', '后台刷新性能与常驻信息更新'] };

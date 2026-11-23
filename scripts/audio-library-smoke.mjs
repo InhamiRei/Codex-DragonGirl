@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
 import { AUDIO_FILES } from '../src/shared/audio-library.js';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+// 源码路径作为 Electron 的命令行参数传递；Windows 不能让末尾反斜杠转义闭引号。
+const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const temp = await fs.mkdtemp(path.join(os.tmpdir(), '龙娘音效验收-'));
 const data = path.join(temp, 'data'), user = path.join(temp, 'user');
 const env = { ...process.env, DRAGONGIRL_TEST: '1', DRAGONGIRL_MONITOR_TEST: '1',
@@ -96,8 +97,11 @@ async function verifyWaveform() {
 
 // 先通过开发版导入，第二次从指定的实际成品打开同一份测试用户目录。
 async function openSettings(executablePath) {
-  application = await electron.launch(executablePath
-    ? { executablePath, args: [], env } : { args: [root], env });
+  console.log(executablePath ? '音效验收：从成品重新打开原用户目录' : '音效验收：启动隔离的源码应用');
+  application = await electron.launch({
+    ...(executablePath ? { executablePath, args: [], cwd: temp } : { args: [root], cwd: root }),
+    env, timeout: 30000,
+  });
   await application.evaluate(async () => {
     const deadline = Date.now() + 15000;
     while (!globalThis.__dragonGirlApp?.dashboard.window) {
@@ -137,6 +141,7 @@ try {
   const original = path.join(temp, '三分钟录音.wav');
   await writeLongSource(original);
   await openSettings();
+  console.log('音效验收：开始导入三分钟录音');
   assert.equal(await page.locator('#event-audio-press').inputValue(), 'd1');
   assert.equal(await page.locator('#event-audio-release').inputValue(), 'd2');
   assert.equal(await page.locator('select[name="soundTheme"]').count(), 0);
@@ -279,6 +284,7 @@ try {
   await fs.unlink(original);
   await application.close();
   application = null;
+  console.log('音效验收：已校验分块导入、试听、修复和裁剪结果');
 
   // 重启并切到成品程序，源文件已移走，原声已修复，事件分配仍指向同一 WAV。
   await openSettings(process.env.DRAGONGIRL_TEST_EXECUTABLE);
