@@ -56,6 +56,16 @@ internal static class WindowFixture
         }
     }
 
+    // 从夹具实际露出的客户区选择点击点，避免标题栏按钮、任务栏和桌面上的其他窗口。
+    private static Point? ExposedPoint(Form form)
+    {
+        Rectangle client = form.RectangleToScreen(form.ClientRectangle);
+        foreach (int y in new int[] { client.Top + 8, client.Top + client.Height / 2, client.Bottom - 12 })
+            foreach (int x in new int[] { client.Left + 16, client.Right - 16, client.Left + client.Width / 2 })
+                if (GetAncestor(WindowFromPoint(new Point(x, y)), 2) == form.Handle) return new Point(x, y);
+        return null;
+    }
+
     // Win32 窗口矩形保持原始物理像素。
     [StructLayout(LayoutKind.Sequential)]
     private struct Rect { internal int Left, Top, Right, Bottom; }
@@ -194,14 +204,20 @@ internal static class WindowFixture
                         ? Color.FromArgb(11, 37, 73) : Color.FromArgb(27, 142, 68);
                     form.Bounds = new Rectangle(int.Parse(parts[1]), int.Parse(parts[2]), int.Parse(parts[3]), int.Parse(parts[4]));
                     break;
-                // 保持两个窗口各有一段标题栏露出，只点击确认属于本夹具的位置。
+                // 记录是否实际发出了鼠标点击，未命中时不触碰其他应用。
                 case "click-exposed":
-                    Point caption = new Point(form.Left + 50, form.Top + SystemInformation.FrameBorderSize.Height + SystemInformation.CaptionHeight / 2);
-                    if (GetAncestor(WindowFromPoint(caption), 2) != form.Handle) break;
-                    restoreCursor = Cursor.Position;
-                    Cursor.Position = caption;
-                    mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
-                    mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+                    Point? point = ExposedPoint(form);
+                    if (point.HasValue)
+                    {
+                        restoreCursor = Cursor.Position;
+                        Cursor.Position = point.Value;
+                        mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
+                        mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+                    }
+                    File.WriteAllText(Path.Combine(directory, "click-point"), point.HasValue ? point.Value.ToString() : "none");
+                    break;
+                case "foreground":
+                    File.WriteAllText(Path.Combine(directory, "foreground"), GetForegroundWindow().ToInt64().ToString());
                     break;
                 case "sample":
                     File.WriteAllText(Path.Combine(directory, "pixels"), Pixel(form, int.Parse(parts[1]), int.Parse(parts[2]))

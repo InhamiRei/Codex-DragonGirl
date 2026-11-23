@@ -90,7 +90,7 @@ async function raise(target, other) {
 
 // 系统顺序独立于 Electron 的 isVisible，能发现窗口仍可见但错误浮在其他应用上方的问题。
 function systemState(pid) {
-  const result = spawnSync(bridge, ['--once'], { encoding: 'utf8', timeout: 10000 });
+  const result = spawnSync(bridge, ['--once'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
   const snapshot = JSON.parse(result.stdout);
   return { host: snapshot.processes.find((row) => row.pid === pid), order: snapshot.windowOrder.map(String), normal: snapshot.normalWindows, raised: snapshot.topmostWindows?.map(String) || [] };
@@ -145,7 +145,7 @@ async function expectStack(host, cover, covered, bubble = true, raised = !covere
   catch (error) { throw new Error(`${error.message}\n${JSON.stringify(last)}`); }
 }
 
-// 两个夹具的标题栏始终各露出一段，复现用户直接点击切换。取两个合成后的屏幕像素验证半遮挡。
+// 两个夹具始终各露出一部分，复现用户直接点击切换。取两个合成后的屏幕像素验证半遮挡。
 async function checkWindowsSwitching(host, cover) {
   const area = await application.evaluate(({ screen }) => screen.dipToScreenRect(null, screen.getPrimaryDisplay().workArea));
   const hostX = area.x + Math.round(area.width * .18), hostY = area.y + Math.round(area.height * .08);
@@ -156,8 +156,24 @@ async function checkWindowsSwitching(host, cover) {
   await send(host, 'restore');
   await send(host, `video-bounds ${hostX} ${hostY} ${hostWidth} ${hostHeight}`);
   await sizeCover(hostX + Math.round(hostWidth / 2));
-  await send(host, 'click-exposed');
-  await until(() => systemState(host.child.pid).host?.frontmost, '测试标题栏没有激活 Codex');
+  // 先把两个测试窗口放回桌面图标上面。此前的层级用例会把其中一个窗口送到整个桌面的底层。
+  await send(cover, 'raise');
+  await send(host, 'raise');
+  // 由交互桌面内的夹具直接核对实际前台 HWND，轮询期间不启动另一个可能干扰焦点的控制台进程。
+  async function clickWindow(target) {
+    await send(target, 'click-exposed');
+    const point = await fs.readFile(path.join(target.directory, 'click-point'), 'utf8');
+    assert.notEqual(point, 'none', `窗口 ${target.id} 没有可安全点击的客户区`);
+    let foreground;
+    await until(async () => {
+      await send(target, 'foreground');
+      foreground = await fs.readFile(path.join(target.directory, 'foreground'), 'utf8');
+      return foreground === target.id;
+    }, '点击后前台窗口未切换').catch(error => {
+      throw new Error(`${error.message}：目标 ${target.id}，点击 ${point}，实际前台 ${foreground}`);
+    });
+  }
+  await clickWindow(host);
   await expectStack(host, cover, false, false);
   await until(() => application.evaluate(({ screen }, expected) => {
     const frame = globalThis.__dragonGirlApp.companion.followTarget;
@@ -194,16 +210,14 @@ async function checkWindowsSwitching(host, cover) {
   for (const bubbleOpen of [false, true]) {
     if (bubbleOpen) await application.evaluate(() => globalThis.__dragonGirlApp.companion.showBubble('切窗验收', 'speech'));
     await expectPixels(petColor, petColor);
-    await send(cover, 'click-exposed');
-    await until(() => systemState(host.child.pid).host?.frontmost === false, '点击另一个窗口后焦点未切走');
+    await clickWindow(cover);
     await expectStack(host, cover, true, bubbleOpen);
     await expectPixels(petColor, petColor);
     await sizeCover(Math.round((points[0].x + points[1].x) / 2));
     await expectPixels(coverColor, petColor);
     await sizeCover(hostX + hostWidth + 8);
     await expectPixels(coverColor, coverColor);
-    await send(host, 'click-exposed');
-    await until(() => systemState(host.child.pid).host?.frontmost, '点击露出的 Codex 标题栏未切回');
+    await clickWindow(host);
     await expectStack(host, cover, false, bubbleOpen);
     await expectPixels(petColor, petColor);
     await sizeCover(hostX + Math.round(hostWidth / 2));
