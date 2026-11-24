@@ -38,7 +38,7 @@ export const KANNA_PORTRAIT = {
   blinkOverGaze: true,
   center: { x: 618, y: 708 }, travel: { x: 12, y: 7 },
   // 每张贴图只保存发生变化的五官，固定轮廓处透明，始终露出同一张立绘。
-  face: { x: 254, y: 412, width: 744, height: 528, extension: 'webp' },
+  face: { x: 254, y: 412, width: 744, height: 528 },
   eyes: [
     {
       x: 307, y: 596, width: 240, height: 181,

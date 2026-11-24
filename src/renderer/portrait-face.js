@@ -13,8 +13,8 @@ export class PortraitFace {
     this.frameKey = artwork.id + 'Frame';
     this.expressionKey = artwork.id + 'Expression';
     this.motion = new PortraitMotion(onPose, artwork);
+    // 同一张表记录已请求的帧，解码中为 null，就绪后替换为实际图层。
     this.frames = new Map();
-    this.requestedFrames = new Set();
     this.timer = 0;
   }
 
@@ -47,20 +47,20 @@ export class PortraitFace {
 
   // 眨眼与任务表情可各自启用，已请求的帧不会重复解码。两项同时开启时共用一次脸部遮罩。
   prepareFrames(blink, actions) {
-    const needBlink = blink && !this.requestedFrames.has('half');
-    const needActions = actions && !this.requestedFrames.has('happy');
+    const needBlink = blink && !this.frames.has('half');
+    const needActions = actions && !this.frames.has('happy');
     if (!needBlink && !needActions) return;
     const names = [];
     if (needBlink) names.push('half', 'closed');
     if (needActions) names.push('happy', 'sad');
-    for (const name of names) this.requestedFrames.add(name);
+    for (const name of names) this.frames.set(name, null);
     loadPortraitFrames(this.artwork, names).then((frames) => {
       if (this.destroyed) return;
       for (const [name, layer] of frames) this.frames.set(name, layer);
-      if (this.frames.has(this.pending)) this.play(this.pending);
+      if (this.frames.get(this.pending)) this.play(this.pending);
       else if (!this.action) this.syncEyes();
     }).catch((error) => {
-      for (const name of names) this.requestedFrames.delete(name);
+      for (const name of names) this.frames.delete(name);
       if (names.includes(this.pending)) this.pending = null;
       console.warn('角色表情素材暂不可用：', error.message);
     });
@@ -81,7 +81,7 @@ export class PortraitFace {
       this.eyes.follow(this.point);
     }
     const { image, model, pose, reducedMotion, pressed } = this.view;
-    const appearance = this.frames.has('closed') ? model.appearance : {
+    const appearance = this.frames.get('closed') ? model.appearance : {
       ...model.appearance,
       settings: { ...model.appearance?.settings, blinkEnabled: false },
     };
@@ -131,7 +131,7 @@ export class PortraitFace {
   // 手动预览、轻点和主任务通知共用入口，最新一次触发替换当前动作。
   play(name) {
     if (!this.allowed || !Object.hasOwn(ACTIONS, name)) return;
-    if (!this.ready || !this.frames.has(name)) {
+    if (!this.ready || !this.frames.get(name)) {
       this.pending = name;
       return;
     }

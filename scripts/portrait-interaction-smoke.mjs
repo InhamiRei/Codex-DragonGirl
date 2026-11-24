@@ -255,6 +255,20 @@ async function verifyPortrait(sample) {
     }), '隔离的桌宠实例没有准备好');
     page = application.windows().find((window) => window.url().endsWith('/character.html'));
     page.on('pageerror', (error) => errors.push(error.message));
+    // 自定义协议不一定进入 Resource Timing。直接记录真正的解码调用，并确认命中了待机原画。
+    await page.addInitScript(() => {
+      const decode = HTMLImageElement.prototype.decode;
+      window.__portraitDecodes = [];
+      HTMLImageElement.prototype.decode = function () {
+        window.__portraitDecodes.push(this.src);
+        return decode.call(this);
+      };
+    });
+    // 主进程重新加载自己的页面，沿用生产导航限制和原窗口的预加载桥。
+    await application.evaluate(async () => {
+      const contents = globalThis.__dragonGirlApp.companion.windows.get('character').webContents;
+      await contents.loadURL(contents.getURL());
+    });
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await application.evaluate(() => {
       const { companion, dashboard } = globalThis.__dragonGirlApp;
@@ -330,12 +344,12 @@ async function verifyPortrait(sample) {
     assert.ok(Math.max(...angles) - Math.min(...angles) > 0.25 * swayScale, name + '的待机摆动没有显示');
     assert.ok(angles.every((angle) => Math.abs(angle) < 0.6 * swayScale), '待机时左右侧倾超过预期');
     // 两个开关关闭时不加载表情素材；重新开启后继续走真实眨眼和动作预览。
-    const eagerFrames = await page.evaluate((asset) => performance.getEntriesByType('resource')
-      .filter(({ name }) => name.startsWith(new URL('.', asset).href) && /\/(blink-half|blink-closed|success|failure)\.(png|webp)$/.test(name)).length, artwork.asset);
-    assert.equal(eagerFrames, 0, '关闭眨眼和动态表情时仍加载了表情帧');
-    const dragonOnly = await page.evaluate(() => performance.getEntriesByType('resource')
-      .filter(entry => /codex-dragon-girl-(?:sad|prayer(?:-half|-hands)?)\.png$/.test(entry.name)).map(entry => entry.name));
-    assert.deepEqual(dragonOnly, [], '半身角色启动时解码了龙娘专属动作');
+    const decoded = await page.evaluate(() => window.__portraitDecodes);
+    assert.ok(decoded.includes(artwork.asset), '未记录到本次立绘解码');
+    assert.deepEqual(decoded.filter(url => /\/(blink-half|blink-closed|success|failure)\.png$/.test(url)), [],
+      '关闭眨眼和动态表情时仍加载了表情帧');
+    assert.deepEqual(decoded.filter(url => /codex-dragon-girl-(?:sad|prayer(?:-half|-hands)?)\.png$/.test(url)), [],
+      '半身角色启动时解码了龙娘专属动作');
     await settings({ blinkEnabled: true });
 
     // 自然定时器实际驱动半闭、闭眼、半闭、睁眼四次变化。
@@ -354,9 +368,9 @@ async function verifyPortrait(sample) {
     }), name + '没有完成自然眨眼', 10000);
     assert.deepEqual(blink.slice(0, 4), ['half', 'closed', 'half', 'open']);
     assert.equal(await page.locator('.portrait-eye-layer:not([hidden])').count(), 0);
-    const taskFrames = await page.evaluate(asset => performance.getEntriesByType('resource')
-      .filter(entry => entry.name.startsWith(new URL('.', asset).href) && /\/(success|failure)\.(png|webp)$/.test(entry.name)).length, artwork.asset);
-    assert.equal(taskFrames, 0, '只开启眨眼时加载了任务表情');
+    const blinkFiles = await page.evaluate(asset => window.__portraitDecodes.filter(url => url.startsWith(new URL('.', asset).href))
+      .map(url => new URL(url).pathname.split('/').at(-1)).sort(), artwork.asset);
+    assert.deepEqual(blinkFiles, ['blink-closed.png', 'blink-half.png', 'idle.png'], '只开启眨眼时应各解码一次待机和两张眼皮');
     await settings({ blinkEnabled: false });
 
     if (linework) {

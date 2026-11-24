@@ -13,17 +13,6 @@ import { KOKKORO_DIALOGUE } from '../src/shared/kokkoro-dialogue.js';
 import { KANNA_DIALOGUE } from '../src/shared/kanna-dialogue.js';
 import { KANNA_PORTRAIT, KOKKORO_PORTRAIT } from '../src/renderer/portrait-artwork.js';
 
-// 直接读取 VP8L 文件头，在没有外部图像工具的系统上也能核对无损格式、尺寸和透明通道。
-function assertLosslessFrame(frame, width, height) {
-  assert.equal(frame.toString('ascii', 0, 4), 'RIFF');
-  assert.equal(frame.toString('ascii', 8, 16), 'WEBPVP8L');
-  assert.equal(frame[20], 0x2f);
-  const bits = frame.readUInt32LE(21);
-  assert.equal((bits & 0x3fff) + 1, width);
-  assert.equal(((bits >>> 14) & 0x3fff) + 1, height);
-  assert.equal((bits >>> 28) & 1, 1, '无损帧必须保留透明通道');
-}
-
 // 防止打包时误换成旧的低清网格或缺帧；首尾必须与用户确认的待机原图完全一致。
 test('三十帧均为 1254 像素且循环首尾复用待机原图', async () => {
   assert.equal(MARO_FRAME_SIZE, 1254);
@@ -36,20 +25,24 @@ test('三十帧均为 1254 像素且循环首尾复用待机原图', async () =>
   assert.equal(idle.readUInt32BE(20), 1254);
   assert.equal(idle[25], 6, '待机 PNG 必须保留 RGBA 透明通道');
   assert.ok(frames.at(-1).equals(idle));
-  for (const frame of frames.slice(1, -1)) assertLosslessFrame(frame, MARO_FRAME_SIZE, MARO_FRAME_SIZE);
+  for (const frame of frames.slice(1, -1)) {
+    // VP8L 的尺寸位和 Alpha 标志可直接验证，不需要给单元测试引入图片工具。
+    assert.equal(frame.toString('ascii', 0, 4), 'RIFF');
+    assert.equal(frame.toString('ascii', 8, 16), 'WEBPVP8L');
+    assert.equal(frame[20], 0x2f);
+    const header = frame.readUInt32LE(21);
+    assert.equal((header & 0x3fff) + 1, 1254);
+    assert.equal(((header >>> 14) & 0x3fff) + 1, 1254);
+    assert.equal((header >>> 28) & 1, 1, '无损帧必须保留透明通道');
+  }
 });
 
 // 表情只保存实际取样的脸部区域，仍以原图分辨率和 RGBA 格式交给合成器。
 for (const { id, face } of [KOKKORO_PORTRAIT, KANNA_PORTRAIT]) {
   test(id + ' 的表情帧保留原生脸部尺寸和透明通道', async () => {
     for (const name of ['blink-half', 'blink-closed', 'success', 'failure']) {
-      const extension = id === 'kanna' ? 'webp' : 'png';
-      const url = new URL(`../assets/characters/${id}/${name}.${extension}`, import.meta.url);
+      const url = new URL(`../assets/characters/${id}/${name}.png`, import.meta.url);
       const frame = await fs.readFile(url);
-      if (extension === 'webp') {
-        assertLosslessFrame(frame, face.width, face.height);
-        continue;
-      }
       assert.equal(frame.subarray(1, 4).toString(), 'PNG', name);
       assert.deepEqual([frame.readUInt32BE(16), frame.readUInt32BE(20), frame[24], frame[25]], [face.width, face.height, 8, 6], name);
     }

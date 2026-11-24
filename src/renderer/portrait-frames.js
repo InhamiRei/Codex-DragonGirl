@@ -1,5 +1,5 @@
 // 表情文件只含原生脸部像素，头饰和衣领始终由待机立绘绘制。
-const FILES = { half: 'blink-half', closed: 'blink-closed', happy: 'success', sad: 'failure' };
+const FILES = { half: 'blink-half.png', closed: 'blink-closed.png', happy: 'success.png', sad: 'failure.png' };
 
 // 羽化只发生在远离眼白、眼线和嘴角的边缘，表情区整块采用同一张画。
 function faceMask({ x, y, width, height, path }) {
@@ -16,10 +16,10 @@ function faceMask({ x, y, width, height, path }) {
 // 在原生尺寸上合成并缓存表情。每张文件就是脸部区域，直接解码所需像素。
 export async function loadPortraitFrames({ asset, face }, names = Object.keys(FILES)) {
   const mask = face.path ? faceMask(face) : null;
-  const { width, height, extension = 'png' } = face;
+  const { width, height } = face;
   const layers = await Promise.all(names.map(async (name) => {
     const image = new Image();
-    image.src = new URL(FILES[name] + '.' + extension, asset).href;
+    image.src = new URL(FILES[name], asset).href;
     await image.decode();
     if (image.naturalWidth !== width || image.naturalHeight !== height)
       throw new Error('表情帧尺寸与脸部区域不一致：' + image.src);

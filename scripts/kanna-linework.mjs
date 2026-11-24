@@ -6,7 +6,7 @@ import path from 'node:path';
 export async function verifyKannaBlinkGaze(page, artwork, direction) {
   const result = await page.evaluate(async (art) => {
     const { loadPortraitFrames } = await import('dragon://app/src/renderer/portrait-frames.js');
-    const frames = await loadPortraitFrames(art);
+    const frames = await loadPortraitFrames(art, ['half', 'closed']);
     const character = document.getElementById('character'), image = document.getElementById('portrait');
     const pupils = [...character.querySelectorAll('.kanna-eye-layer')], lids = character.querySelector('.kanna-face');
     if (!lids || !lids.hidden || pupils.length !== 2 || pupils.some(layer => layer.hidden))
