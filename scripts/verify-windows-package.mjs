@@ -48,7 +48,7 @@ try {
     'follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs',
     'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs',
     'account-tests-smoke.mjs', 'performance-smoke.mjs', 'character-smoke.mjs', 'dragon-config-smoke.mjs',
-    'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs', 'kokkoro-interaction-smoke.mjs',
+    'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs', 'portrait-interaction-smoke.mjs',
   ];
   for (const script of scripts) {
     console.log(`验收 ${script}`);
@@ -69,8 +69,8 @@ try {
   }
   const report = { passed: true, version: manifest.version, checks: ['ZIP SHA-256', '源码一致', 'x64 二进制', '中文空格路径解压', '脱离源码启动', '桌面功能测试', '静默启动与宿主退出', '位置恢复与内置音效', '四档显示比例与无原生滚动条', '跟随窗口遮挡层级与最小化恢复', '气泡并发刷新保持显示与阅读位置', '拖拽松手自动朝向、镜像命中与动画偏好', '成功与失败表情及素材完整性', '原生菜单与表情预览', '后台刷新性能与常驻信息更新'] };
   // 发行验收记录明确列出新角色检查，避免只有源码检查通过而成品遗漏素材。
-  report.checks.push('首次默认龙娘与角色切换', '三十帧 1254 像素动作、配色和几何一致', '三个角色的眨眼与视线、麻吕眼眶和脸部逐像素保持固定');
-  report.checks.push('实际安装包侧栏版本、陪伴配置切换与原版部件、龙娘瞳色与重启恢复', '可可萝的完成、失败与任务台词', '账号测智界面与本地协议');
+  report.checks.push('首次默认龙娘与角色切换', '三十帧 1254 像素动作、配色和几何一致', '四个角色的眨眼与视线、麻吕眼眶和脸部逐像素保持固定');
+  report.checks.push('实际安装包侧栏版本、陪伴配置切换与原版部件、龙娘瞳色与重启恢复', '可可萝和康娜的完成、失败与任务台词', '账号测智界面与本地协议');
   report.checks.push('NSIS 安装包 SHA-256', '更新提示、下载校验、关闭弹窗后继续下载与安装操作');
   report.checks.push('重置卡悬停、滚动跟随、键盘访问、滚出视口与后台刷新');
   report.checks.push('三分钟音效导入、波形裁剪与播放、修复及升级后保留音效分配');

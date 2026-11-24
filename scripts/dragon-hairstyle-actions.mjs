@@ -20,11 +20,12 @@ export async function prepareHairstyleActions(application, pet) {
   });
 }
 
-// 通过主进程走真实布局更新，只修改当前验收窗口的动作开关。
+// 动作开关写入隔离的测试偏好，后台刷新也会沿用正在验收的眨眼和视线设置。
 async function configureActions(application, changes) {
-  await application.evaluate((_, settings) => {
-    const companion = globalThis.__dragonGirlTest;
-    companion.setAppearance({ ...companion.appearance, settings: { ...companion.appearance.settings, ...settings } });
+  await application.evaluate(async (_, settings) => {
+    const { monitor, dashboard } = globalThis.__dragonGirlApp;
+    await monitor.saveSettings((current) => ({ ...current, ...settings }), { refreshUsage: false });
+    await dashboard.updatePets();
   }, changes);
 }
 

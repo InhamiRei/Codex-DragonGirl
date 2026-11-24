@@ -1,7 +1,7 @@
 {
   "name": "codex-dragongirl",
   "productName": "Codex DragonGirl",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "author": "Hey、小怪兽",
   "homepage": "https://github.com/InhamiRei/Codex-DragonGirl",
   "repository": {
@@ -48,7 +48,8 @@
     "test:character-frames": "node scripts/maro-frame-audit.mjs",
     "test:maro-interaction": "node scripts/maro-interaction-smoke.mjs",
     "test:maro-gaze-pixels": "node scripts/maro-gaze-audit.mjs",
-    "test:kokkoro": "node scripts/kokkoro-interaction-smoke.mjs"
+    "test:kokkoro": "node scripts/portrait-interaction-smoke.mjs kokkoro",
+    "test:kanna": "node scripts/portrait-interaction-smoke.mjs kanna"
   },
   "devDependencies": {
     "@electron-internal/extract-zip": "1.0.6",

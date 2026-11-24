@@ -14,12 +14,19 @@ export const CHARACTERS = Object.freeze([
   Object.freeze({
     id: 'kokkoro', name: '可可萝', image: 'assets/characters/kokkoro/idle.png', avatar: 'assets/characters/avatars/kokkoro.webp',
   }),
+  // 康娜的立绘与局部表情共用同一套透明半身坐标。
+  Object.freeze({
+    id: 'kanna', name: '康娜', image: 'assets/characters/kanna/idle.png', avatar: 'assets/characters/avatars/kanna.webp',
+  }),
 ]);
 export const DEFAULT_CHARACTER_ASSET = ORIGIN + CHARACTERS[0].image;
 export const MARO_ASSET = ORIGIN + CHARACTERS[1].image;
 export const KOKKORO_ASSET = ORIGIN + CHARACTERS[2].image;
+export const KANNA_ASSET = ORIGIN + characterById('kanna').image;
 // 内置发型沿用原画坐标，共用眼区、表情和发饰点击区域。
 const DRAGON_ASSETS = new Set(DRAGON_HAIRSTYLES.map(({ image }) => ORIGIN + image));
+// 全屏鼠标轮询与右键菜单都按立绘地址识别角色，地址表只构建一次。
+const BUILTIN_BY_ASSET = new Map(CHARACTERS.map(character => [ORIGIN + character.image, character]));
 export const HAIR_FRAMES = 30;
 export const MARO_FRAME_SIZE = 1254;
 // 动作帧使用原生 1254 像素的无损 WebP，首尾复用待机图，播放仍为三十帧。
@@ -61,7 +68,7 @@ export function isDragonAsset(asset) {
 // 导入图片不会借用内置角色的动画。
 export function characterByAsset(asset = DEFAULT_CHARACTER_ASSET) {
   if (isDragonAsset(asset)) return CHARACTERS[0];
-  return CHARACTERS.find(({ image }) => ORIGIN + image === asset) ?? null;
+  return BUILTIN_BY_ASSET.get(asset) ?? null;
 }
 
 // 以绝对经过时间选帧，卡顿或后台恢复不会积累过期动作。

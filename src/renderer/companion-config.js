@@ -34,6 +34,16 @@ const ORIGINAL_GEAR = {
       { id: 'clothes', label: '服饰', target: [641, 1174] },
     ],
   },
+  // 连线分别落在康娜的左角、蓝瞳、右侧发珠和披肩绣边上。
+  kanna: {
+    size: [1254, 1254],
+    parts: [
+      { id: 'horns', label: '龙角', target: [265, 287] },
+      { id: 'eyes', label: '瞳孔', target: [452, 682] },
+      { id: 'beads', label: '发珠', target: [1005, 999] },
+      { id: 'clothes', label: '服饰', target: [740, 1164] },
+    ],
+  },
 };
 
 // 分类卡和下方装备选项共用对应部件的完整缩略图。

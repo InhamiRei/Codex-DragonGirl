@@ -56,10 +56,12 @@ export function companionAppearance(settings, assetDirectory, status = 'idle') {
 }
 
 // 动作菜单根据角色已有的表情与动作素材提供预览。
+const TASK_ACTIONS = [['完成', 'happy'], ['失败', 'sad']];
 const CHARACTER_ACTIONS = {
   dragon: [['发光', 'happy'], ['哭泣', 'sad'], ['祈祷', 'prayer'], ...DRAGON_FACE_EXPRESSIONS],
-  maro: [['完成', 'happy'], ['失败', 'sad'], ['捋头发', 'hair']],
-  kokkoro: [['完成', 'happy'], ['失败', 'sad']],
+  maro: [...TASK_ACTIONS, ['捋头发', 'hair']],
+  kokkoro: TASK_ACTIONS,
+  kanna: TASK_ACTIONS,
 };
 
 // 桌面层只负责窗口、手势与持久化，角色绘制和气泡内容各自独立。

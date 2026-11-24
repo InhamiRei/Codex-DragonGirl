@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright';
-import { CHARACTERS, DEFAULT_CHARACTER_ASSET, KOKKORO_ASSET, MARO_ASSET } from '../src/shared/characters.js';
+import { CHARACTERS, DEFAULT_CHARACTER_ASSET, KANNA_ASSET, KOKKORO_ASSET, MARO_ASSET } from '../src/shared/characters.js';
 import { DRAGON_HAIRSTYLES } from '../src/shared/dragon-gear.js';
 import { prepareHairstyleActions, verifyHairstyleActions } from './dragon-hairstyle-actions.mjs';
 import {
@@ -17,7 +17,7 @@ const hairstyleNames = DRAGON_HAIRSTYLES.map(({ name }) => name);
 // 散发与单马尾已有独立的初始切换和保存检查，其余款式共用逐款验收。
 const additionalHairstyles = DRAGON_HAIRSTYLES.filter(({ id }) => id !== 'loose' && id !== 'ponytail');
 const ponytailAsset = 'dragon://app/assets/characters/codex-dragon-girl-ponytail.png';
-// 固定部件应各有原版缩略图，连线和预览尺寸按两个角色的原图验证。
+// 固定部件各有原版缩略图，连线和预览尺寸按每个角色的原图验证。
 const originalCompanions = [
   { id: 'maro', name: '麻吕', asset: MARO_ASSET, size: [1254, 1254], parts: {
     tuft: ['翘发', [278, 152]], eyes: ['瞳孔', [440, 620]], hair: ['发型', [843, 272]], clothes: ['服饰', [686, 932]],
@@ -25,11 +25,15 @@ const originalCompanions = [
   { id: 'kokkoro', name: '可可萝', asset: KOKKORO_ASSET, size: [1299, 1211], parts: {
     hat: ['兔帽', [309, 275]], eyes: ['瞳孔', [393, 734]], accessory: ['发饰', [1012, 680]], clothes: ['服饰', [641, 1174]],
   } },
+  { id: 'kanna', name: '康娜', asset: KANNA_ASSET, size: [1254, 1254], parts: {
+    horns: ['龙角', [265, 287]], eyes: ['瞳孔', [452, 682]], beads: ['发珠', [1005, 999]], clothes: ['服饰', [740, 1164]],
+  } },
 ];
 // 验证实际渲染出的连线、悬停和展开高亮使用所选角色的配色。
 const companionColors = {
   maro: { line: 'rgb(214, 149, 112)', activeLine: 'rgb(185, 101, 57)', fill: 'rgb(255, 240, 229)' },
   kokkoro: { line: 'rgb(155, 183, 135)', activeLine: 'rgb(104, 147, 85)', fill: 'rgb(237, 246, 230)' },
+  kanna: { line: 'rgb(193, 162, 202)', activeLine: 'rgb(146, 100, 156)', fill: 'rgb(248, 237, 248)' },
 };
 const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-dragon-config-'));
@@ -318,7 +322,7 @@ try {
   await config.click();
   assert.equal(await dashboard.locator('#title').textContent(), '陪伴配置');
   const chooser = dashboard.getByRole('group', { name: '切换桌面角色' });
-  assert.deepEqual(await chooser.getByRole('button').allTextContents(), ['龙娘', '麻吕', '可可萝']);
+  assert.deepEqual(await chooser.getByRole('button').allTextContents(), ['龙娘', '麻吕', '可可萝', '康娜']);
   // 逐一解码安装包中的小头像，用包含留白的外框尺寸核对按钮布局。
   assert.deepEqual(await chooser.locator('button > img').evaluateAll((images) =>
     Promise.all(images.map(async (image) => {
@@ -427,6 +431,8 @@ try {
   // 悬停的服饰卡整块填色，展开的选项与立绘留出间距。
   await window.evaluate((dashboardWindow) => dashboardWindow.focus());
   await dashboard.waitForFunction(() => document.hasFocus());
+  // 等原生窗口的焦点切换完成再移入卡片，迟到的离开事件不会抵消测试的悬停。
+  await dashboard.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await dashboard.getByRole('button', { name: '服饰', exact: true }).hover();
   await dashboard.waitForFunction(() => {
     const card = document.querySelector('.dragon-slot[data-slot="clothes"]');
@@ -522,7 +528,7 @@ try {
   await dashboard.locator('#save-settings').click();
   await dashboard.locator('#dirty-hint[data-dirty="false"]').waitFor({ state: 'visible' });
   const savedCompanion = JSON.parse(await fs.readFile(settingsFile, 'utf8'));
-  assert.equal(savedCompanion.characterId, 'kokkoro');
+  assert.equal(savedCompanion.characterId, 'kanna');
   assert.equal(savedCompanion.blinkEnabled, true);
   await config.click();
   await chooser.getByRole('button', { name: '龙娘', exact: true }).click();
@@ -592,7 +598,7 @@ try {
   }
   await fs.writeFile(path.join(hairstyleArtifacts, 'report.json'), JSON.stringify(verified, null, 2));
   assert.deepEqual(errors, []);
-  console.log('陪伴配置验证通过：v' + version + '，三角色切换、原版部件、龙娘换装与瞳色、重启恢复及全部发型的动作。');
+  console.log('陪伴配置验证通过：v' + version + '，四角色切换、原版部件、龙娘换装与瞳色、重启恢复及全部发型的动作。');
 } finally {
   if (application) await application.close().catch(() => {});
   await fs.rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });

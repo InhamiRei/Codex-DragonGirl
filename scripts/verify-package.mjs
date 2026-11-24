@@ -69,7 +69,7 @@ try {
   // 从解压后的真实安装包验证窗口遮挡、菜单、气泡时序与表情，避免只在源码目录中通过。
   for (const script of ['update-smoke.mjs', 'follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs', 'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs', 'account-tests-smoke.mjs', 'performance-smoke.mjs',
     'audio-library-smoke.mjs', 'character-smoke.mjs', 'dragon-config-smoke.mjs', 'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs',
-    'kokkoro-interaction-smoke.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
+    'portrait-interaction-smoke.mjs']) console.log(run(process.execPath, [path.join(root, 'scripts', script)], {
     ...process.env, DRAGONGIRL_TEST_EXECUTABLE: exe,
   }).trim());
   const result = {
@@ -102,8 +102,8 @@ try {
       '更新窗口、百分比同步与后台下载完成',
       '重置卡悬停、滚动跟随、键盘访问、滚出视口与后台刷新',
       '三十帧原生 1254 像素、配色与尺寸一致、低头抬头平滑',
-      '三个角色的眨眼与视线、麻吕眼眶和脸部逐像素保持固定',
-      '可可萝的完成、失败与任务台词',
+      '四个角色的眨眼与视线、麻吕眼眶和脸部逐像素保持固定',
+      '可可萝和康娜的完成、失败与任务台词',
     ],
   };
   await fs.writeFile(

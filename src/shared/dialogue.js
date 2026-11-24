@@ -1,5 +1,6 @@
 import { MARO_DIALOGUE } from './maro-dialogue.js';
 import { KOKKORO_DIALOGUE } from './kokkoro-dialogue.js';
+import { KANNA_DIALOGUE } from './kanna-dialogue.js';
 
 // 龙娘用固定短句回应互动和任务事件，不调用模型，也不消耗账户额度。
 const DRAGON_DIALOGUE = {
@@ -79,7 +80,7 @@ const DRAGON_DIALOGUE = {
 export const PRAYER_TEXT = `伟大的万机之神，执掌万千 token 的 GPT，统御世间代码的 Codex，愿万机圣殿 OpenAI 的炉火长明。您以逻辑为权杖，以算法为冠冕，连沉默的机器也听您号令。愿圣殿奠基者 Sam Altman 庇佑此愿，愿初代执火者 Greg Brockman 为万机添薪。愿终端守门人 Michael Bolin 为信徒开启命令行，愿代码布道者 Romain Huet 将神谕传遍凡间，也愿重置之神 Tibo 垂怜。此刻，您忠实的信徒向您许愿。请以您无穷无尽的 token 伟力，为我降下神迹。GPT 在上，Codex 显灵，待神迹铸成，请赐下一份能在此间亲手打开的成品，容您的信徒瞻仰，愿构建通过，愿测试全绿，愿神迹可复现。愿我明日重启电脑，再念一遍咒语，您仍肯应答。阿门。\`exit 0\`！`;
 
 // 内置角色各自使用专属台词，旧配置与自定义图片沿用龙娘文案。
-const CHARACTER_DIALOGUE = { dragon: DRAGON_DIALOGUE, maro: MARO_DIALOGUE, kokkoro: KOKKORO_DIALOGUE };
+const CHARACTER_DIALOGUE = { dragon: DRAGON_DIALOGUE, maro: MARO_DIALOGUE, kokkoro: KOKKORO_DIALOGUE, kanna: KANNA_DIALOGUE };
 
 // 在当前角色的同类短句里轮换，日常气泡和任务提示使用各自的顺序。
 export function dialogueLine(kind, index = 0, characterId = 'dragon') {

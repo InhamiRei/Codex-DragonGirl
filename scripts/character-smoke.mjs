@@ -201,7 +201,7 @@ try {
     const c = globalThis.__dragonGirlTest;
     return c.contextMenu && { labels: c.contextMenu.items.map((item) => item.label), bubble: c.bubbleVisible };
   }), '点击发饰没有打开角色下拉框');
-  assert.deepEqual(menu.labels, ['龙娘', '麻吕', '可可萝']);
+  assert.deepEqual(menu.labels, ['龙娘', '麻吕', '可可萝', '康娜']);
   assert.equal(menu.bubble, false);
   // 从发饰菜单切到可可萝，等待半身原画实际解码。
   await application.evaluate(() => {

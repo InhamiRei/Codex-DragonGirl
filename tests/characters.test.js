@@ -10,7 +10,8 @@ import { SettingsStore, normalizeSettings } from '../src/core/settings.js';
 import { imagePoint } from '../src/shared/hit-test.js';
 import { dialogueLine } from '../src/shared/dialogue.js';
 import { KOKKORO_DIALOGUE } from '../src/shared/kokkoro-dialogue.js';
-import { KOKKORO_FACE_BOUNDS } from '../src/renderer/kokkoro-expressions.js';
+import { KANNA_DIALOGUE } from '../src/shared/kanna-dialogue.js';
+import { KANNA_PORTRAIT, KOKKORO_PORTRAIT } from '../src/renderer/portrait-artwork.js';
 
 // 防止打包时误换成旧的低清网格或缺帧；首尾必须与用户确认的待机原图完全一致。
 test('三十帧均为 1254 像素且循环首尾复用待机原图', async () => {
@@ -37,27 +38,30 @@ test('三十帧均为 1254 像素且循环首尾复用待机原图', async () =>
 });
 
 // 表情只保存实际取样的脸部区域，仍以原图分辨率和 RGBA 格式交给合成器。
-test('可可萝表情帧保留原生脸部尺寸和透明通道', async () => {
-  const { width, height } = KOKKORO_FACE_BOUNDS;
-  for (const name of ['blink-half', 'blink-closed', 'success', 'failure']) {
-    const url = new URL('../assets/characters/kokkoro/' + name + '.png', import.meta.url);
-    const frame = await fs.readFile(url);
-    assert.equal(frame.subarray(1, 4).toString(), 'PNG', name);
-    assert.deepEqual([frame.readUInt32BE(16), frame.readUInt32BE(20), frame[24], frame[25]], [width, height, 8, 6], name);
-  }
-});
+for (const { id, face } of [KOKKORO_PORTRAIT, KANNA_PORTRAIT]) {
+  test(id + ' 的表情帧保留原生脸部尺寸和透明通道', async () => {
+    for (const name of ['blink-half', 'blink-closed', 'success', 'failure']) {
+      const url = new URL(`../assets/characters/${id}/${name}.png`, import.meta.url);
+      const frame = await fs.readFile(url);
+      assert.equal(frame.subarray(1, 4).toString(), 'PNG', name);
+      assert.deepEqual([frame.readUInt32BE(16), frame.readUInt32BE(20), frame[24], frame[25]], [face.width, face.height, 8, 6], name);
+    }
+  });
+}
 
 // 旧配置仍使用龙娘，任意路径或损坏角色编号不能被当作内置资源。
 test('内置角色选择兼容旧配置并拒绝任意路径', () => {
   assert.equal(normalizeSettings().characterId, 'dragon');
   assert.equal(normalizeSettings({ characterId: 'maro' }).characterId, 'maro');
   assert.equal(normalizeSettings({ characterId: 'kokkoro' }).characterId, 'kokkoro');
+  assert.equal(normalizeSettings({ characterId: 'kanna' }).characterId, 'kanna');
   assert.equal(normalizeSettings({ characterId: '../../auth.json' }).characterId, 'dragon');
   assert.equal(characterById('maro').name, '麻吕');
   assert.equal(characterByAsset(MARO_ASSET).id, 'maro');
   assert.equal(characterByAsset('dragon://app/assets/characters/kokkoro/idle.png').name, '可可萝');
+  assert.equal(characterByAsset('dragon://app/assets/characters/kanna/idle.png').name, '康娜');
   assert.equal(characterByAsset('dragon://app/user-assets/123.png'), null);
-  assert.deepEqual(CHARACTERS.map(({ id }) => id), ['dragon', 'maro', 'kokkoro']);
+  assert.deepEqual(CHARACTERS.map(({ id }) => id), ['dragon', 'maro', 'kokkoro', 'kanna']);
 });
 
 // 切换角色通过局部保存保留位置和音量，重启后仍读取到所选角色。
@@ -66,7 +70,7 @@ test('角色选择持久化而不覆盖其他用户偏好', async () => {
   try {
     const store = new SettingsStore(directory);
     await store.save({ volume: 0.17, followOffsets: { '/tmp/codex': { x: 0.2, y: 0.7 } } });
-    for (const characterId of ['maro', 'kokkoro', 'dragon']) {
+    for (const characterId of ['maro', 'kokkoro', 'kanna', 'dragon']) {
       await store.save((current) => ({ ...current, characterId, characterAsset: '' }));
       const saved = await new SettingsStore(directory).load();
       assert.equal(saved.characterId, characterId);
@@ -78,17 +82,20 @@ test('角色选择持久化而不覆盖其他用户偏好', async () => {
   }
 });
 
-// 可可萝的四类台词独立轮换，避免显示其他角色的气泡。
-test('可可萝使用独立的日常、完成、失败和取消台词', () => {
-  assert.equal(KOKKORO_DIALOGUE.chat.length, 24);
-  assert.equal(KOKKORO_DIALOGUE.complete.length + KOKKORO_DIALOGUE.error.length + KOKKORO_DIALOGUE.cancelled.length, 10);
-  for (const [kind, lines] of Object.entries(KOKKORO_DIALOGUE)) {
-    assert.equal(dialogueLine(kind, lines.length, 'kokkoro'), lines[0]);
-    assert.notEqual(lines[0], dialogueLine(kind, 0, 'dragon'));
-    assert.notEqual(lines[0], dialogueLine(kind, 0, 'maro'));
-    assert.equal(new Set(lines).size, lines.length);
-  }
-});
+// 日常和三类任务分别轮换，切换角色时不能混用其他角色的气泡。
+for (const [id, dialogue] of Object.entries({ kokkoro: KOKKORO_DIALOGUE, kanna: KANNA_DIALOGUE })) {
+  test(id + ' 使用独立的日常、完成、失败和取消台词', () => {
+    assert.equal(dialogue.chat.length, 24);
+    assert.equal(dialogue.complete.length + dialogue.error.length + dialogue.cancelled.length, 10);
+    for (const [kind, lines] of Object.entries(dialogue)) {
+      assert.deepEqual(lines.map((_, index) => dialogueLine(kind, index, id)), lines);
+      assert.equal(dialogueLine(kind, lines.length, id), lines[0]);
+      for (const other of CHARACTERS.filter((character) => character.id !== id))
+        assert.notEqual(lines[0], dialogueLine(kind, 0, other.id));
+      assert.equal(new Set(lines).size, lines.length);
+    }
+  });
+}
 
 // 抬手、慢慢捋发和放手使用不同节奏；覆盖每一帧边界，卡顿也不回放过期帧。
 test('捋发三十帧在五秒内按慢速节奏播放', () => {
