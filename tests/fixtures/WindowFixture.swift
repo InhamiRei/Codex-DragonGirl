@@ -93,15 +93,16 @@ func recordActivation() {
     window.orderFrontRegardless()
 }
 
-// 短时间连续移动宿主再回到原位，模拟标题栏拖动中的位置变化。
+// 用约 60Hz 的连续位移模拟拖动标题栏，再回到原位，便于识别低频采样造成的跳步。
 func glideHost() {
     let origin = window.frame.origin
+    let steps = 72
     var step = 0
-    let timer = Timer(timeInterval: 0.025, repeats: true) { timer in
+    let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { timer in
         step += 1
-        let distance = CGFloat(min(step, 48 - step) * 3)
+        let distance = CGFloat(min(step, steps - step) * 2)
         window.setFrameOrigin(NSPoint(x: origin.x - distance, y: origin.y))
-        if step == 48 {
+        if step == steps {
             timer.invalidate()
             try? Data().write(to: directory.appendingPathComponent("glide-complete"), options: .atomic)
         }

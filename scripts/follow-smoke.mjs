@@ -529,21 +529,25 @@ try {
     return offsets;
   });
   const glideOrigin = (await companionState()).character;
-  // 两端都统计连续移动期间角色窗口收到的不同坐标，避免只验收最终位置。
-  await application.evaluate(() => {
+  // macOS 读取实际窗口位置并统计往返更新，Windows 继续统计请求的不同位置。
+  await application.evaluate((_, isMac) => {
     const window = globalThis.__dragonGirlApp.companion.windows.get('character');
     const setBounds = window.setBounds.bind(window);
-    globalThis.__followMovePositions = new Set();
+    const positions = globalThis.__followMovePositions = [];
+    // 先移动窗口，再去掉连续重复的横坐标。
     window.setBounds = (bounds, animate) => {
-      globalThis.__followMovePositions.add(bounds.x);
       setBounds(bounds, animate);
+      const x = isMac ? window.getBounds().x : bounds.x;
+      if (positions.at(-1) !== x) positions.push(x);
     };
-  });
+  }, isMac);
   await send(host, 'glide');
   await until(async () => (await fs.stat(path.join(host.directory, 'glide-complete')).catch(() => null))?.isFile(), '连续移动未完成');
   await until(async () => JSON.stringify((await companionState()).character) === JSON.stringify(glideOrigin), '往返移动后角色未对齐');
-  const positions = await application.evaluate(() => globalThis.__followMovePositions.size);
-  assert.ok(positions >= 14, `连续移动只更新了 ${positions} 个位置，角色跟随滞后`);
+  const positions = await application.evaluate((_, isMac) => isMac
+    ? globalThis.__followMovePositions.length : new Set(globalThis.__followMovePositions).size, isMac);
+  // macOS 宿主在约 1.2 秒内移动 72 次，40ms 轮询无法达到这个下限。
+  assert.ok(positions >= (isMac ? 44 : 14), `连续移动只更新了 ${positions} 个位置，角色跟随滞后`);
   if (originalOffsets) await application.evaluate((_, offsets) => {
     const { monitor, dashboard } = globalThis.__dragonGirlApp;
     monitor.settings.followOffsets = offsets;
