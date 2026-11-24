@@ -106,7 +106,7 @@ export async function verifyKannaLinework(captures, artifacts) {
     ctx.putImageData(master, 0, 0);
     const base = ctx.getImageData(0, 0, art.width, art.height).data;
     const basePixels = new Uint32Array(base.buffer);
-    // 待机时原嘴点处应与邻近肤色连续。下面对半闭和闭眼帧的逐像素检查也会锁住这块皮肤。
+    // 待机的嘴部应与邻近肤色连续，下面对所有表情的逐像素检查也会锁住这块皮肤。
     for (let y = 850; y <= 870; y++) {
       for (let x = 562; x <= 583; x++) {
         const here = (y * art.width + x) * 4, nearby = here + 24 * 4;
@@ -118,13 +118,12 @@ export async function verifyKannaLinework(captures, artifacts) {
     const stamp = new OffscreenCanvas(art.face.width, art.face.height);
     const stampContext = stamp.getContext('2d', { willReadFrequently: true });
 
-    // 每种表情独立限定可编辑的原生区域。惊讶的高光比眨眼的范围更小。
+    // 每种表情只允许改动对应五官，完成的亮眼和腮红、失败的眉眼和泪珠都绕开嘴部。
     const eyes = [[297, 570, 568, 782], [650, 594, 944, 816]];
-    const mouth = [520, 835, 630, 906];
     const allowed = {
       half: eyes, closed: eyes,
-      happy: [[372, 626, 524, 762], [696, 648, 862, 800], [330, 762, 455, 826], [725, 802, 856, 863], mouth],
-      sad: [...eyes, [368, 464, 546, 566], [701, 474, 882, 606], mouth],
+      happy: [[372, 626, 524, 762], [696, 648, 862, 800], [330, 762, 455, 826], [725, 802, 856, 863]],
+      sad: [...eyes, [368, 464, 546, 566], [701, 474, 882, 606]],
     };
     const probes = {
       happy: [[370, 622], [425, 617], [490, 621], [735, 645], [775, 650], [842, 664]],
@@ -215,7 +214,7 @@ export async function verifyKannaLinework(captures, artifacts) {
   });
   await captures.dispose();
   assert.equal(report.changedOutsideFeatures + report.changedCheekInk + report.changedSilhouette, 0,
-    '表情改动了固定线稿：' + JSON.stringify(report.firstMismatch));
+    '表情改动了固定线稿或无口区域：' + JSON.stringify(report.firstMismatch));
   assert.ok(report.maxDifference <= 1.5, '惊讶与闭眼的笔宽差过大：' + JSON.stringify(report.widths));
   // 导出的透明整图和报告均来自刚验收的桌宠渲染层。
   const directory = path.join(artifacts, 'linework');

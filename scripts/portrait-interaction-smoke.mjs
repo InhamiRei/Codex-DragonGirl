@@ -188,13 +188,6 @@ async function saveComparison({ artwork, fixed, samples }, artifacts, gazeStrips
           if (open && irisPixels < sample[2] * sample[3] * 0.4) throw new Error('康娜完成表情没有露出蓝瞳');
           if (!open && irisPixels !== 0) throw new Error('闭眼画面有睁眼虹膜残影');
         }
-        // 从椭圆嘴内部取三个相隔的色点，防止完成帧误用待机的小点或闭嘴的笑线。
-        if (open) {
-          for (const x of [551, 573, 595]) {
-            const [r, g, b] = pixels.getImageData(x, 873, 1, 1).data;
-            if (r < 160 || r - g < 45 || b - g < 5) throw new Error('康娜完成表情没有微微张嘴');
-          }
-        }
       }
       const x = 16 + index % 3 * (width + 16);
       const y = 39 + Math.floor(index / 3) * (height + 58);

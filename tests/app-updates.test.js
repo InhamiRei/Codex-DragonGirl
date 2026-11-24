@@ -108,16 +108,66 @@ test('损坏下载或不受信任的重定向不能成为可安装文件', async
   assert.equal(opened.length, 0);
 });
 
-// 限流或断网不能显示为最新，恢复后可以重查；低版本不会触发下载。
-test('检查失败可以重试，回退的最新标签不提示降级', async (t) => {
+// 限流时保留失败状态并延迟自动检查，回退的版本不能触发下载。
+test('限流后延迟自动检查，回退的最新标签不提示降级', async (t) => {
   const { service } = await setup(t);
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
   service.fetch = async () => new Response('', { status: 429 });
-  await service.check();
+  service.start();
+  await service.pending;
   assert.equal(service.state.status, 'error');
   service.fetch = async () => Response.json(fixture('v1.6.7'));
-  await service.check();
+  t.mock.timers.tick(5 * 60 * 1000);
+  service.checkOnOpen();
+  await service.pending;
+  assert.equal(service.state.status, 'error');
+  t.mock.timers.tick(55 * 60 * 1000);
+  await service.pending;
   assert.equal(service.state.status, 'current');
   assert.equal(service.state.error, '');
+});
+
+// 首次断网后应自动发现新版，管理窗口也能刷新过期结果且不会重复发起检查。
+test('自动检查在断网后重试，打开管理窗口时刷新过期结果', async (t) => {
+  const { service, release } = await setup(t);
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  const fetch = service.fetch;
+  let attempts = 0;
+  // 只让启动时的请求断开，之后返回正常的 GitHub 发布信息。
+  service.fetch = async (...args) => {
+    attempts++;
+    if (attempts === 1) throw new TypeError('fetch failed');
+    return fetch(...args);
+  };
+  service.start();
+  await service.pending;
+  assert.equal(service.state.status, 'error');
+
+  t.mock.timers.tick(5 * 60 * 1000);
+  await service.pending;
+  assert.equal(service.state.status, 'available');
+  assert.equal(service.state.release.version, '1.10.0');
+
+  service.checkOnOpen();
+  assert.equal(attempts, 2);
+  t.mock.timers.tick(15 * 60 * 1000);
+  release.tag_name = 'v1.7.0';
+  service.checkOnOpen();
+  service.checkOnOpen();
+  await service.pending;
+  assert.equal(attempts, 3);
+  assert.equal(service.state.status, 'current');
+  assert.equal(service.state.release, null);
+
+  // 成功后恢复六小时检查，退出时取消下一次检查。
+  t.mock.timers.tick(6 * 60 * 60 * 1000 - 1);
+  assert.equal(attempts, 3);
+  t.mock.timers.tick(1);
+  await service.pending;
+  assert.equal(attempts, 4);
+  await service.stop();
+  t.mock.timers.tick(6 * 60 * 60 * 1000);
+  assert.equal(attempts, 4);
 });
 
 // 长期运行时保留通过核验的附件，新标签、撤回或同名替换都不能继续安装旧缓存。

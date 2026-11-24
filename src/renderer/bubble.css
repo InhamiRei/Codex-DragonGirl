@@ -18,6 +18,9 @@ body[data-layout="usage"] .bubble-header { display: flex; }
 .plan, .quota-title { min-width: 0; overflow-wrap: anywhere; }
 .message { flex-shrink: 0; width: 100%; max-width: 100%; margin: 0; font-size: 16px; line-height: 1.45; text-align: center; white-space: pre-wrap; overflow-wrap: anywhere; }
 body[data-layout="text"] .message { text-wrap: balance; }
+body[data-kind="notice"][data-compact="false"] .bubble { padding-inline: 10px; }
+body[data-kind="notice"][data-compact="false"] .bubble-content { width: 196px; container-type: inline-size; }
+body[data-kind="notice"][data-compact="false"] .message { font-size: clamp(13px, calc((100cqi - 2px) / 14), 14px); text-wrap: pretty; }
 body[data-kind="prayer"] { --prayer-line-height: 20px; }
 body[data-kind="prayer"] .bubble-content { height: min(calc(4 * var(--prayer-line-height)), 100%); overscroll-behavior: contain; overflow-anchor: none; }
 body[data-kind="prayer"] .message { line-height: var(--prayer-line-height); text-align: left; text-wrap: wrap; }

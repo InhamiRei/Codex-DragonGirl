@@ -36,7 +36,11 @@ async function launch(scale) {
     env, timeout: 60000,
   });
   await until(() => application.evaluate(() => globalThis.__dragonGirlTest?.ready.size === 2), '气泡窗口未就绪');
-  page = application.windows().find((window) => window.url().endsWith('/bubble.html'));
+  // 主进程就绪与 Playwright 接入渲染页是两件事，等两边都完成再测量文字。
+  await until(() => {
+    page = application.windows().find((window) => window.url().endsWith('/bubble.html'));
+    return page;
+  }, '气泡渲染页未连接');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   // 固定渲染页日期，真实计时器仍正常运行，截图和跨日断言不会随执行日期变化。
   await page.evaluate((now) => { Date.now = () => now; }, fixtureNow);
@@ -90,7 +94,9 @@ async function show(content, font = '', narrow = false) {
     document.documentElement.style.fontFamily = font;
     document.getElementById('bubble-content').style.width = narrow ? '152px' : '';
   }, { font, narrow });
-  await application.evaluate((_, content) => globalThis.__dragonGirlTest.showBubble(content, content.usage ? 'usage' : 'speech'), content);
+  await application.evaluate((_, content) => {
+    globalThis.__dragonGirlTest.showBubble(content, content.kind ?? (content.usage ? 'usage' : 'speech'));
+  }, content);
   await until(() => page.evaluate(async (text) => {
     const model = await window.dragonGirl.bootstrap();
     return model.text === text && model.measuredRevision === model.revision && document.body.dataset.ready === 'true';
@@ -102,6 +108,7 @@ async function metrics() {
   return page.evaluate(() => {
     const pane = document.getElementById('bubble-content');
     const card = document.getElementById('bubble').getBoundingClientRect();
+    const message = document.getElementById('message');
     const number = document.querySelector('.metric-value')?.getBoundingClientRect();
     const unit = document.querySelector('.metric-unit');
     const range = document.createRange();
@@ -120,6 +127,7 @@ async function metrics() {
     return {
       clientHeight: pane.clientHeight, scrollHeight: pane.scrollHeight,
       clientWidth: pane.clientWidth, scrollWidth: pane.scrollWidth,
+      messageLines: Math.round(message.offsetHeight / Number.parseFloat(getComputedStyle(message).lineHeight)),
       gutter: pane.offsetWidth - pane.clientWidth, scrollbar: getComputedStyle(pane).scrollbarWidth,
       compact: document.body.dataset.compact, outside,
       // 今日用量改为同字号的普通单行文字，不再要求数字对准气泡中线。
@@ -225,6 +233,14 @@ try {
       assert.ok(zero.meters.every((meter) => meter.segments.every((fill) => fill === '0%')), '0% 电量仍点亮了格子');
       assert.deepEqual(zero.resets, ['无限制', '重置时间未知']);
     }
+    // 截图中的通知在各档显示比例下都应按原文分成两行，文字完整落在椭圆内。
+    const completion = dialogueLine('complete', 2);
+    await show({ text: completion, kind: 'notice' });
+    const completionLayout = await metrics();
+    assert.equal(completionLayout.messageLines, 2, '任务完成提示在句内折行');
+    assert.ok(!completionLayout.outside && completionLayout.scrollHeight <= completionLayout.clientHeight + 1);
+    assert.equal(await page.locator('#message').textContent(), completion);
+
     // 保留真正超长的内容，隐藏滚动条后依然能用滚轮读到最后一行。
     const longText = '这是需要完整保留的长消息。'.repeat(30) + '最后一行';
     await show({ text: longText });
@@ -245,17 +261,18 @@ try {
     assert.ok(await page.locator('#bubble-content').evaluate((node) => node.scrollTop + node.clientHeight >= node.scrollHeight - 1));
     // 切到语录必须重新计时；常驻气泡保持显示，渲染层注入 Esc 时仍按关闭处理。
     if (scale === 1) {
-      // 两位角色的每类语录都实际渲染一轮，完整文案要能在椭圆里一次读完。
-      for (const characterId of ['dragon', 'maro']) {
+      // 四位角色的任务文案通过通知入口验证，每条最多三行并完整落在椭圆内。
+      for (const characterId of ['dragon', 'maro', 'kokkoro', 'kanna']) {
         for (const kind of ['chat', 'complete', 'cancelled', 'error']) {
           const first = dialogueLine(kind, 0, characterId);
           for (let index = 0; index < 100; index += 1) {
             const text = dialogueLine(kind, index, characterId);
             if (index && text === first) break;
-            await show({ text });
+            await show({ text, kind: kind === 'chat' ? 'speech' : 'notice' });
             const result = await metrics();
             assert.ok(result.scrollHeight <= result.clientHeight + 1, `语录需要滚动才能读完：${text}`);
             assert.equal(result.outside, false, `语录超出椭圆：${text}`);
+            if (kind !== 'chat') assert.ok(result.messageLines <= 3, `任务提示超过三行：${text}`);
             assert.equal(await page.locator('#message').textContent(), text, '语录显示不完整');
           }
         }

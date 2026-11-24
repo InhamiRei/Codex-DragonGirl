@@ -125,7 +125,8 @@ function contentFitsEllipse() {
 function measure(model, scrollTop = 0) {
   document.body.dataset.compact = 'false';
   contentPane.scrollTop = 0;
-  if (document.body.dataset.layout === 'usage' &&
+  // 通知先利用椭圆中央的宽度保留整句，文字碰到弧线或需要滚动时恢复较窄的内容区。
+  if ((document.body.dataset.layout === 'usage' || model.kind === 'notice') &&
       (contentPane.scrollHeight > contentPane.clientHeight + 1 || !contentFitsEllipse()))
     document.body.dataset.compact = 'true';
   const scrollable = contentPane.scrollHeight > contentPane.clientHeight + 1;

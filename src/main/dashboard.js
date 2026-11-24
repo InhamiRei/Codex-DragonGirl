@@ -157,6 +157,8 @@ export class Dashboard {
   async open() {
     if (this.stopping) return;
     this.startup?.retain();
+    // 新开或切回管理窗口时检查过期的发布信息。
+    this.updates?.checkOnOpen();
     if (this.window && !this.window.isDestroyed()) {
       if (this.opening) return this.opening;
       if (this.window.isMinimized()) this.window.restore();
