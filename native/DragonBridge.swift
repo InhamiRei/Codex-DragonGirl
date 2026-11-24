@@ -30,8 +30,9 @@ var lastOutput = ""
 var cachedModality: [pid_t: (windowIDs: [Int], modal: Bool?, checkedAt: TimeInterval)] = [:]
 // 单次诊断可只读 Quartz，用同一个原生桥验收没有辅助功能权限的路径。
 let quartzOnly = CommandLine.arguments.contains("--once") && CommandLine.arguments.contains("--quartz-only")
-// 拖动时加快窗口采样，静止时维持原先约 120 毫秒一次的查询频率。
-let trackingInterval: TimeInterval = 0.04
+// 移动期间约每帧读取一次宿主位置，静止时约每 120 毫秒检查窗口和遮挡状态。
+let trackingInterval: TimeInterval = 0.016
+let idleInterval: TimeInterval = 0.12
 var lastSnapshotAt: TimeInterval = -.infinity
 var lastHostMoveAt: TimeInterval = -.infinity
 var lastHostFrames: [Int: CGRect] = [:]
@@ -252,11 +253,11 @@ if CommandLine.arguments.contains("--permission") {
     emitSnapshot()
     // 应用切换立即同步；普通轮询继续覆盖不激活应用的置前、最小化与窗口移动。
     _ = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in emitSnapshot() }
-    // 按住左键或检测到连续移动时，以 40 毫秒间隔更新窗口位置。
+    // 左键按下时立即进入高频采样，松手后短暂保持，以跟上窗口的最后一次移动。
     let timer = Timer(timeInterval: trackingInterval, repeats: true) { _ in
         let now = ProcessInfo.processInfo.systemUptime
-        let tracking = !lastHostFrames.isEmpty && ((NSEvent.pressedMouseButtons & 1) != 0 || now - lastHostMoveAt < 0.2)
-        if tracking || now - lastSnapshotAt >= trackingInterval * 2.5 { emitSnapshot() }
+        let tracking = !lastHostFrames.isEmpty && (now - lastHostMoveAt < 0.2 || (NSEvent.pressedMouseButtons & 1) != 0)
+        if tracking || now - lastSnapshotAt >= idleInterval { emitSnapshot() }
     }
     RunLoop.main.add(timer, forMode: .common)
     RunLoop.main.run()
