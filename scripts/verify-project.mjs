@@ -17,7 +17,7 @@ const suite = [
     .map((name) => [name, [`scripts/${name}-smoke.mjs`]]),
   // 新角色从默认选择、逐帧几何与配色到眼部像素都进入正式发布验收。
   ...['character-smoke', 'dragon-config-smoke', 'maro-frame-audit', 'maro-interaction-smoke', 'maro-gaze-audit',
-    'kokkoro-interaction-smoke']
+    'portrait-interaction-smoke']
     .map((name) => [name, [`scripts/${name}.mjs`]]),
 ];
 

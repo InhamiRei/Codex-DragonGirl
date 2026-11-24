@@ -38,6 +38,8 @@ export class EyeTracker {
     this.supportsExpressions = options.expressions !== false;
     this.onFace = options.onFace;
     this.onBlink = options.onBlink;
+    // 独立眼皮的角色把表情画在上层，眼区画布只随瞳孔朝向变化。
+    this.gazeOnly = Boolean(this.onBlink && !this.supportsExpressions);
     this.supportsBodyFollow = options.bodyFollow !== false;
     this.foregroundMask = options.foregroundMask || null;
     this.gazeMask = options.gazeMask || null;
@@ -185,7 +187,8 @@ export class EyeTracker {
         const gazeWeight = gazeWeights ? (protection > 0 ? 0 : gazeWeights[pixelIndex])
           : eye.fixedFaceEdge ? weight * smoothEdge((ax - Math.max(faceX, eye.gazeMinFaceX) - 6) / 24) : weight;
         if (gazeWeights) gazeWeights[pixelIndex] = gazeWeight;
-        if (protection >= 1) continue;
+        // 独立眼皮自带完整的眨眼与表情，权重为零的位置始终露出底图。
+        if (protection >= 1 || (this.gazeOnly && gazeWeight === 0)) continue;
         // 眉毛和泪珠仍在同一眼区内绘制，眼睛外的像素不跟随视线拉扯。
         const tearRegion = this.supportsExpressions && index === 1 && Math.abs(ax - SAD_TEAR_X) <= 17 && ay >= 800 && ay <= 904;
         if (weight > 0 || (this.supportsExpressions && sadEyeWeight(ax, ay, index) > 0) || tearRegion)
@@ -316,23 +319,28 @@ export class EyeTracker {
 
   // 按角色的视线范围取样，双线性采样保持轮廓平滑，眨眼单独控制眼睑。
   paint() {
-    // 独立眼睑可以接管眨眼画面，时序和睁眼时的视线仍由同一个控制器管理。
-    const independentLids = this.onBlink && this.blink > 0;
-    const closure = independentLids ? 0 : this.blink;
+    // 独立眼皮决定何时完全盖住视线；未被盖住的瞳孔继续沿用同一个鼠标目标。
+    const gazeCovered = this.onBlink?.(this.blink);
+    const closure = this.onBlink ? 0 : this.blink;
     const amount = this.expression.amount;
     const preview = this.dragonFace && amount > 0;
     this.onFace?.(preview ? this.expressionName : null, amount, this.expressionTime, this.expression);
     for (const patch of this.patches) {
       const { canvas, context, output, pixels, columns, eye, width, height, scaleX, scaleY } = patch;
       // 新眼神已在原画上完成合成，视线画布在预览结束后才恢复覆盖眼部。
-      canvas.hidden = independentLids || preview
+      canvas.hidden = gazeCovered || preview
         || (Math.hypot(this.current.x, this.current.y) < 0.002 && closure === 0 && amount === 0);
       if (canvas.hidden) continue;
+      // 眼皮在上层单独播放。若瞳孔朝向未变，可直接显示上次绘好的眼区。
+      if (this.gazeOnly) {
+        if (patch.paintedGaze?.x === this.current.x && patch.paintedGaze.y === this.current.y) continue;
+        patch.paintedGaze = this.current;
+      }
       const renderer = this.expressionName === 'sad' ? patch.sad : patch.sparkles;
       const source = amount > 0 && renderer ? renderer.illuminate(patch.source, amount, this.expressionTime) : patch.source;
       // 带前景的眼区先清掉上一帧，固定的像素直接显示底下的原画。
       const masked = this.gazeMask || eye.fixedFaceEdge;
-      if (masked) output.data.fill(0);
+      if (masked && !this.gazeOnly) output.data.fill(0);
       for (const { x, y, index, gazeWeight, protection } of pixels) {
         if (masked && closure === 0 && gazeWeight === 0 && amount === 0) continue;
         let sx = x, sy = y;
@@ -380,7 +388,6 @@ export class EyeTracker {
       }
       context.putImageData(output, 0, 0);
     }
-    this.onBlink?.(this.blink);
     const name = amount > 0 ? this.expressionName : undefined;
     if (!this.supportsExpressions || this.character.dataset.expression === name) return;
     if (name) this.character.dataset.expression = name;

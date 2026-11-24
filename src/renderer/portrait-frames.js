@@ -1,33 +1,30 @@
-import { KOKKORO_ASSET } from '../shared/characters.js';
-
-// 表情素材无损保存 B 版的原生脸部像素，帽子、花饰和衣领由待机立绘绘制。
-const FILES = { half: 'blink-half.png', closed: 'blink-closed.png', happy: 'success.png', sad: 'failure.png' };
-const FACE = 'M 253 536 C 294 486 374 468 464 481 C 540 488 586 476 641 489 C 722 503 760 563 784 630 C 789 676 819 718 840 761 C 854 804 831 861 792 897 C 766 931 700 949 650 951 C 573 958 522 977 449 969 C 370 959 301 921 266 876 C 234 833 230 783 228 737 C 225 670 226 587 253 536 Z';
-export const KOKKORO_FACE_BOUNDS = { x: 197, y: 448, width: 692, height: 560 };
+// 表情文件只含原生脸部像素，头饰和衣领始终由待机立绘绘制。
+const FILES = { half: 'blink-half', closed: 'blink-closed', happy: 'success', sad: 'failure' };
 
 // 羽化只发生在远离眼白、眼线和嘴角的边缘，表情区整块采用同一张画。
-function faceMask() {
-  const { x, y, width, height } = KOKKORO_FACE_BOUNDS;
+function faceMask({ x, y, width, height, path }) {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext('2d');
   ctx.translate(-x, -y);
   ctx.filter = 'blur(11px)';
-  ctx.fill(new Path2D(FACE));
+  ctx.fill(new Path2D(path));
   return canvas;
 }
 
 // 在原生尺寸上合成并缓存表情。每张文件就是脸部区域，直接解码所需像素。
-export async function loadKokkoroFrames() {
-  const mask = faceMask();
-  const { width, height } = KOKKORO_FACE_BOUNDS;
-  const layers = await Promise.all(Object.entries(FILES).map(async ([name, file]) => {
+export async function loadPortraitFrames({ asset, face }, names = Object.keys(FILES)) {
+  const mask = face.path ? faceMask(face) : null;
+  const { width, height, extension = 'png' } = face;
+  const layers = await Promise.all(names.map(async (name) => {
     const image = new Image();
-    image.src = new URL(file, KOKKORO_ASSET).href;
+    image.src = new URL(FILES[name] + '.' + extension, asset).href;
     await image.decode();
     if (image.naturalWidth !== width || image.naturalHeight !== height)
-      throw new Error('可可萝表情帧尺寸与脸部区域不一致：' + file);
+      throw new Error('表情帧尺寸与脸部区域不一致：' + image.src);
+    // 已分离的五官直接使用文件的透明度，避免重复描画底图的头发和脸线。
+    if (!mask) return [name, image];
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;

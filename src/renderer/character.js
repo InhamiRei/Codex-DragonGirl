@@ -6,8 +6,10 @@ import { DragonMotion } from './dragon-motion.js';
 import { DragonFaces } from './dragon-expressions.js';
 import { FlipMotion } from '../shared/facing.js';
 import { CharacterSprites } from './character-sprites.js';
-import { KokkoroFace } from './kokkoro-face.js';
-import { KOKKORO_ASSET, characterByAsset, isCharacterMenuPoint, isDragonAsset } from '../shared/characters.js';
+import { PortraitFace } from './portrait-face.js';
+import { PORTRAIT_ARTWORK } from './portrait-artwork.js';
+import { REST_POSE } from './portrait-motion.js';
+import { characterByAsset, isCharacterMenuPoint, isDragonAsset } from '../shared/characters.js';
 import { EYE_ARTWORK } from '../shared/gaze.js';
 import { isDragonFace } from '../shared/expression.js';
 import { dragonEyeTone } from '../shared/dragon-gear.js';
@@ -56,6 +58,7 @@ let lastInteractive = null;
 let prayerReady = false;
 let prayerMotionReady = false;
 let prayerEyes;
+let dragonActionsReady;
 let prayerTone;
 let prayerProgress = null;
 let prayerFrame = 0;
@@ -65,8 +68,8 @@ const sprites = new CharacterSprites(character, portraitSlot, (next) => {
   mask = next || baseMask;
   updateInteractive();
 });
-// 可可萝沿用 B 版的透明命中图，只在脸部加眼区和动作图层。
-const kokkoro = new KokkoroFace(character, paintCharacter);
+// 局部表情沿用底图的透明命中区域，同时只保留当前角色的控制器。
+let portraitFace;
 
 // 从原图读取一次透明度，不按白色抠图，因此白发、衣服和眼睛高光都能正常响应。
 function buildAlphaMask(image) {
@@ -105,7 +108,7 @@ function routeCursor(point) {
   if (point) {
     eyes.follow(point);
     sprites.follow(point);
-    kokkoro.follow(point);
+    portraitFace?.follow(point);
   }
   updateInteractive();
 }
@@ -118,7 +121,9 @@ async function preparePrayer() {
     image.src = new URL('../../assets/characters/' + file, import.meta.url).href;
     return image;
   });
-  const images = [...prayerEyes, prayerHands.firstElementChild];
+  const hands = prayerHands.firstElementChild;
+  hands.src = new URL('../../assets/characters/codex-dragon-girl-prayer-hands.png', import.meta.url).href;
+  const images = [...prayerEyes, hands];
   const results = await Promise.allSettled(images.map((image) => image.decode()));
   const [portraitReady, halfReady, handsReady] = images.map((image, index) =>
     results[index].status === 'fulfilled'
@@ -245,9 +250,25 @@ function paintDragonFace(name, amount, elapsed, frame) {
   dragonFaces.paint(portraitArtwork, dragonMotion, name, amount, elapsed, layout.rect, !reducedMotion.matches);
 }
 
+// 康娜用等效的中心升降响应点头和按压，原画比例与笔宽固定。镜像仍共用原来的翻转进度。
+function gesturePose(swayScale = 1) {
+  const scaleY = pose.scaleY * swayScale;
+  if (portraitFace?.artwork.preserveScale) {
+    return { ...pose, scaleX: flip.value, scaleY: 1, translateY: layout.rect.height * (1 - scaleY) / 2 };
+  }
+  return { ...pose, scaleX: pose.scaleX * flip.value, scaleY, translateY: 0 };
+}
+
 // 目标依据固定锚点和按压姿态计算，身体跟随的微小位移不反过来改变目标方向。
 function configureEyes() {
   if (!layout || !decodedPortrait) return;
+  // 先清理旧角色的图层和计时器，正在解码的旧表情也不能接管新的立绘。
+  const artwork = PORTRAIT_ARTWORK.get(layout.asset);
+  if (portraitFace?.artwork !== artwork) {
+    portraitFace?.destroy();
+    portraitFace = artwork ? new PortraitFace(character, paintCharacter, artwork) : null;
+    if (lastCursor) portraitFace?.follow(lastCursor);
+  }
   if (prayerProgress !== null) {
     if (canPray()) return;
     stopPrayer();
@@ -259,12 +280,12 @@ function configureEyes() {
   }
   configureDragonMotion();
   const pressed = activePointer !== null;
-  const gazePose = { ...pose, scaleX: pose.scaleX * flip.value };
+  const gazePose = gesturePose();
   // 解码完成以前保留上一张立绘，等新画面提交后再让眼区动作接管。
   if (paintedAsset === layout.asset) eyes.configure(portraitArtwork, layout, gazePose, reducedMotion.matches, pressed);
   else eyes.reset();
   sprites.configure(layout, reducedMotion.matches, pressed, gazePose);
-  kokkoro.configure(decodedPortrait, layout, gazePose, reducedMotion.matches, pressed);
+  portraitFace?.configure(decodedPortrait, layout, gazePose, reducedMotion.matches, pressed);
 }
 
 // 发型随立绘地址一起参与缓存，瞳色单独参与绘制。
@@ -275,7 +296,12 @@ function portraitKey(model) {
 
 // 内置龙娘复用合成画布。普通图片解码后直接显示，两种来源都只加载一次。
 async function preparePortrait(asset) {
-  if (isDragonAsset(asset)) return loadDragonPortrait(asset);
+  if (isDragonAsset(asset)) {
+    // 首次选中龙娘时并行准备原画和专属动作，换发型复用已解码的泪眼及合掌图层。
+    dragonActionsReady ??= Promise.all([eyes.prepareSad(), preparePrayer()]);
+    const [image] = await Promise.all([loadDragonPortrait(asset), dragonActionsReady]);
+    return image;
+  }
   const image = new Image();
   image.src = asset;
   await image.decode();
@@ -378,16 +404,12 @@ function applyLayout(model) {
 function paintCharacter() {
   if (!layout) return;
   dragonFaces.updateMotion(portraitArtwork, dragonMotion, layout.rect);
-  // 可可萝的头身轻摆、眼区与透明点击区域共用同一变换。
-  const sway = kokkoro.pose;
-  renderedPose = {
-    ...pose, ...bodyPose,
-    translateX: bodyPose.translateX + sway.translateX,
-    translateY: bodyPose.translateY + sway.translateY - layout.rect.height * dragonMotion.breath,
-    angle: pose.angle + bodyPose.angle + sway.angle,
-    scaleX: pose.scaleX * flip.value,
-    scaleY: pose.scaleY * sway.scaleY,
-  };
+  // 身体轻摆、脸部图层与透明点击区域共用同一变换。
+  const sway = portraitFace?.pose ?? REST_POSE;
+  renderedPose = gesturePose(sway.scaleY);
+  renderedPose.translateX = bodyPose.translateX + sway.translateX;
+  renderedPose.translateY = renderedPose.translateY + bodyPose.translateY + sway.translateY - layout.rect.height * dragonMotion.breath;
+  renderedPose.angle = pose.angle + bodyPose.angle + sway.angle;
   const flipping = String(!flip.settled);
   if (character.dataset.flipping !== flipping) character.dataset.flipping = flipping;
   character.style.transform = `translate(${renderedPose.translateX}px, ${renderedPose.translateY}px) rotate(${renderedPose.angle}deg) scale(${renderedPose.scaleX}, ${renderedPose.scaleY})`;
@@ -506,9 +528,9 @@ async function showExpression(message) {
   const request = ++expressionRequest;
   if (layout.praying) return;
   const name = typeof message === 'string' ? message : message?.name;
-  // 可可萝只走自己的动作控制器，加载期间的最新动作由该控制器接续。
-  if (layout.asset === KOKKORO_ASSET) {
-    kokkoro.play(name);
+  // 半身立绘由同一个控制器播放和排队，表情素材取自当前角色。
+  if (portraitFace) {
+    portraitFace.play(name);
     return;
   }
   if (name === 'prayer') {
@@ -530,7 +552,7 @@ async function showExpression(message) {
 // 命中图先于窗口 ready 信号建立，启动时也不会短暂拦截透明区域。
 async function start() {
   const model = await bridge.bootstrap();
-  const [picture] = await Promise.all([preparePortrait(model.asset), eyes.prepareSad(), preparePrayer()]);
+  const picture = await preparePortrait(model.asset);
   displayPortrait(picture, model, portraitKey(model));
   applyLayout(model);
   stage.dataset.gesture = 'idle';
@@ -591,7 +613,7 @@ async function start() {
     dragonMotion.reset();
     eyes.reset();
     sprites.destroy();
-    kokkoro.destroy();
+    portraitFace?.destroy();
   });
   bridge.ready();
 }

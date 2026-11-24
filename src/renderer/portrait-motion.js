@@ -1,8 +1,7 @@
 import { gazeTarget, stepGaze } from '../shared/gaze.js';
-import { KOKKORO_EYE_ARTWORK } from './kokkoro-eyes.js';
 
 const CENTER = { x: 0, y: 0 };
-const REST = { translateX: 0, translateY: 0, angle: 0, scaleY: 1 };
+export const REST_POSE = { translateX: 0, translateY: 0, angle: 0, scaleY: 1 };
 
 // 左右位移和侧倾使用较小的幅度，呼吸和上下跟随各自沿用竖直幅度。
 const HORIZONTAL_AMPLITUDE = 0.448;
@@ -14,11 +13,13 @@ const GESTURES = {
   sad: { duration: 420, depth: 0.019 },
 };
 
-export class KokkoroMotion {
+export class PortraitMotion {
   // 只更新角色容器姿态，帽子、身体与当前表情在同一次变换里移动。
-  constructor(onPose) {
+  constructor(onPose, artwork) {
     this.onPose = onPose;
-    this.pose = REST;
+    this.artwork = artwork;
+    this.horizontalAmplitude = HORIZONTAL_AMPLITUDE * (artwork.horizontalMotionScale ?? 1);
+    this.pose = REST_POSE;
     this.lean = CENTER;
     this.frame = 0;
     this.tick = this.tick.bind(this);
@@ -47,7 +48,7 @@ export class KokkoroMotion {
 
   // 以未摆动的锚点计算目标，翻转后肩膀依旧朝屏幕上的鼠标方向靠过去。
   updateTarget() {
-    const aim = this.track ? gazeTarget(this.point, this.rect, this.gesture, KOKKORO_EYE_ARTWORK) : CENTER;
+    const aim = this.track ? gazeTarget(this.point, this.rect, this.gesture, this.artwork) : CENTER;
     this.target = { x: aim.x * Math.sign(this.gesture.scaleX), y: aim.y };
   }
 
@@ -72,9 +73,9 @@ export class KokkoroMotion {
       const progress = action ? Math.min(1, Math.max(0, (time - this.actionStarted) / action.duration)) : 1;
       const nod = action ? action.depth * Math.sin(Math.PI * progress) ** 2 : 0;
       this.pose = {
-        translateX: HORIZONTAL_AMPLITUDE * this.rect.width * (0.012 * x + 0.004 * sway),
+        translateX: this.horizontalAmplitude * this.rect.width * (0.012 * x + 0.004 * sway),
         translateY: VERTICAL_AMPLITUDE * this.rect.height * 0.0035 * y,
-        angle: HORIZONTAL_AMPLITUDE * (2.6 * x + (0.86 * sway + 0.14 * drift) * (1 - Math.abs(x) * 0.24)),
+        angle: this.horizontalAmplitude * (2.6 * x + (0.86 * sway + 0.14 * drift) * (1 - Math.abs(x) * 0.24)),
         scaleY: 1 + VERTICAL_AMPLITUDE * (0.012 * breath - 0.010 * y) - nod,
       };
       this.onPose();
@@ -87,8 +88,8 @@ export class KokkoroMotion {
     cancelAnimationFrame(this.frame);
     this.frame = 0;
     this.lean = CENTER;
-    if (this.pose === REST) return;
-    this.pose = REST;
+    if (this.pose === REST_POSE) return;
+    this.pose = REST_POSE;
     this.onPose();
   }
 }

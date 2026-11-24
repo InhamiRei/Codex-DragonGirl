@@ -1,16 +1,20 @@
-import { KOKKORO_ASSET } from '../shared/characters.js';
-import { createKokkoroEyes, KOKKORO_EYE_ARTWORK } from './kokkoro-eyes.js';
-import { KOKKORO_FACE_BOUNDS, loadKokkoroFrames } from './kokkoro-expressions.js';
-import { KokkoroMotion } from './kokkoro-motion.js';
+import { createPortraitEyes } from './portrait-eyes.js';
+import { loadPortraitFrames } from './portrait-frames.js';
+import { PortraitMotion } from './portrait-motion.js';
 
 // 表情定格与身体节奏各自计时，动作结束后恢复视线和眨眼。
 const ACTIONS = { happy: 2200, sad: 3200 };
 
-export class KokkoroFace {
-  // 只有切到可可萝才创建画布、解码表情帧和建立视线标定。
-  constructor(character, onPose) {
+export class PortraitFace {
+  // 每次选中角色才使用它的脸部标定，画布和表情都延迟到需要时加载。
+  constructor(character, onPose, artwork) {
     this.character = character;
-    this.motion = new KokkoroMotion(onPose);
+    this.artwork = artwork;
+    this.frameKey = artwork.id + 'Frame';
+    this.expressionKey = artwork.id + 'Expression';
+    this.motion = new PortraitMotion(onPose, artwork);
+    this.frames = new Map();
+    this.requestedFrames = new Set();
     this.timer = 0;
   }
 
@@ -21,13 +25,12 @@ export class KokkoroFace {
 
   // 换角色、隐藏、拖动和关闭动态表情时取消动作和排队中的请求。
   configure(image, model, pose, reducedMotion, pressed) {
-    if (model.asset !== KOKKORO_ASSET && this.view?.model.asset !== KOKKORO_ASSET) return;
     const settings = model.appearance?.settings || {};
     this.view = { image, model, pose, reducedMotion, pressed };
-    const visible = model.asset === KOKKORO_ASSET && model.visible !== false && !document.hidden && !pressed;
+    const visible = model.visible !== false && !document.hidden && !pressed;
     this.allowed = visible && settings.expressionsEnabled !== false;
-    this.ready = visible && image.src === KOKKORO_ASSET
-      && image.naturalWidth === KOKKORO_EYE_ARTWORK.width && image.naturalHeight === KOKKORO_EYE_ARTWORK.height;
+    this.ready = visible && image.src === this.artwork.asset
+      && image.naturalWidth === this.artwork.width && image.naturalHeight === this.artwork.height;
     if (!this.allowed) {
       this.pending = null;
       this.stop();
@@ -38,20 +41,28 @@ export class KokkoroFace {
       return;
     }
     // 眨眼或表情启用时预热帧素材，两个开关都关闭时只加载待机立绘。
-    if (!this.loading && (this.allowed || (!reducedMotion && settings.blinkEnabled !== false))) this.prepareFrames();
+    this.prepareFrames(!reducedMotion && settings.blinkEnabled !== false, this.allowed);
     if (!this.action) this.syncEyes();
   }
 
-  // 表情加载完成时只接续当前角色的最后一次触发，切走或隐藏时直接丢弃。
-  prepareFrames() {
-    this.loading = loadKokkoroFrames().then((frames) => {
+  // 眨眼与任务表情可各自启用，已请求的帧不会重复解码。两项同时开启时共用一次脸部遮罩。
+  prepareFrames(blink, actions) {
+    const needBlink = blink && !this.requestedFrames.has('half');
+    const needActions = actions && !this.requestedFrames.has('happy');
+    if (!needBlink && !needActions) return;
+    const names = [];
+    if (needBlink) names.push('half', 'closed');
+    if (needActions) names.push('happy', 'sad');
+    for (const name of names) this.requestedFrames.add(name);
+    loadPortraitFrames(this.artwork, names).then((frames) => {
       if (this.destroyed) return;
-      this.frames = frames;
-      if (this.pending) this.play(this.pending);
-      else this.syncEyes();
+      for (const [name, layer] of frames) this.frames.set(name, layer);
+      if (this.frames.has(this.pending)) this.play(this.pending);
+      else if (!this.action) this.syncEyes();
     }).catch((error) => {
-      this.pending = null;
-      console.warn('可可萝表情素材暂不可用：', error.message);
+      for (const name of names) this.requestedFrames.delete(name);
+      if (names.includes(this.pending)) this.pending = null;
+      console.warn('角色表情素材暂不可用：', error.message);
     });
   }
 
@@ -65,37 +76,41 @@ export class KokkoroFace {
   // 眨眼和视线各用已有的偏好开关，在表情帧加载完成前先提供正常的视线。
   syncEyes() {
     if (!this.ready) return;
-    this.eyes ??= createKokkoroEyes(this.character, (amount) => this.paintBlink(amount));
+    if (!this.eyes) {
+      this.eyes = createPortraitEyes(this.character, this.artwork, (amount) => this.paintBlink(amount));
+      this.eyes.follow(this.point);
+    }
     const { image, model, pose, reducedMotion, pressed } = this.view;
-    const appearance = this.frames ? model.appearance : {
+    const appearance = this.frames.has('closed') ? model.appearance : {
       ...model.appearance,
       settings: { ...model.appearance?.settings, blinkEnabled: false },
     };
     this.eyes.configure(image, { ...model, appearance }, pose, reducedMotion, pressed);
-    this.eyes.follow(this.point);
   }
 
-  // 眨眼依次显示半闭、全闭、半闭，隐去的眼白始终只来自当前帧。
+  // 切换眼皮并告诉视线控制器是否遮住瞳孔。康娜的半闭眼仍露出当前朝向的虹膜。
   paintBlink(amount) {
-    if (this.action) return;
-    this.showFrame(amount >= 0.82 ? 'closed' : amount >= 0.15 ? 'half' : null);
+    if (this.action) return true;
+    const frame = amount >= 0.82 ? 'closed' : amount >= 0.15 ? 'half' : null;
+    this.showFrame(frame);
+    return this.artwork.blinkOverGaze ? frame === 'closed' : amount > 0;
   }
 
   // 一次只显示一张表情帧，按同一坐标跟随角色缩放或镜像。
   showFrame(name) {
     if (this.currentFrame === name) return;
-    const layer = this.frames?.get(name);
+    const layer = this.frames.get(name);
     if (!layer) {
       if (this.canvas) this.canvas.hidden = true;
-      delete this.character.dataset.kokkoroFrame;
+      delete this.character.dataset[this.frameKey];
       this.currentFrame = null;
       return;
     }
     if (!this.canvas) {
-      const { x, y, width, height } = KOKKORO_FACE_BOUNDS;
-      const artwork = KOKKORO_EYE_ARTWORK;
+      const artwork = this.artwork;
+      const { x, y, width, height } = artwork.face;
       this.canvas = document.createElement('canvas');
-      this.canvas.className = 'kokkoro-face';
+      this.canvas.className = 'portrait-face ' + artwork.id + '-face';
       this.canvas.width = width;
       this.canvas.height = height;
       this.canvas.setAttribute('aria-hidden', 'true');
@@ -109,14 +124,14 @@ export class KokkoroFace {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.ctx.drawImage(layer, 0, 0);
     this.canvas.hidden = false;
-    this.character.dataset.kokkoroFrame = name;
+    this.character.dataset[this.frameKey] = name;
     this.currentFrame = name;
   }
 
   // 手动预览、轻点和主任务通知共用入口，最新一次触发替换当前动作。
   play(name) {
     if (!this.allowed || !Object.hasOwn(ACTIONS, name)) return;
-    if (!this.ready || !this.frames) {
+    if (!this.ready || !this.frames.has(name)) {
       this.pending = name;
       return;
     }
@@ -125,7 +140,7 @@ export class KokkoroFace {
     clearTimeout(this.timer);
     this.action = name;
     this.motion.setAction(name);
-    this.character.dataset.kokkoroExpression = name;
+    this.character.dataset[this.expressionKey] = name;
     this.showFrame(name);
     this.timer = setTimeout(() => {
       this.stop();
@@ -141,7 +156,7 @@ export class KokkoroFace {
     this.action = null;
     this.motion.setAction(null);
     this.showFrame(null);
-    delete this.character.dataset.kokkoroExpression;
+    delete this.character.dataset[this.expressionKey];
   }
 
   // 页面关闭时清理动作、眨眼、视线和缓存。
@@ -151,8 +166,9 @@ export class KokkoroFace {
     this.motion.reset();
     this.pending = null;
     this.eyes?.reset();
+    this.showFrame(null);
     for (const patch of this.eyes?.patches || []) patch.canvas.remove();
     this.canvas?.remove();
-    this.frames?.clear();
+    this.frames.clear();
   }
 }

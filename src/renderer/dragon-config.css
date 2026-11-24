@@ -1,7 +1,7 @@
 .companion-chooser {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  width: min(100%, 314px);
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  width: min(100%, 422px);
   gap: 7px;
   margin: 0 auto;
 }
@@ -62,6 +62,16 @@
   --gear-highlight-fill: #edf6e6;
   --gear-highlight-text: #385633;
   --gear-highlight-shadow: #647f4d25;
+}
+#dragon-config[data-character='kanna'] {
+  --rail: #c1a2ca;
+  --rail-active: #92649c;
+  --rail-dot-active: #d5b2dc;
+  --gear-border: #e5d2e9;
+  --gear-highlight-border: #c69ecd;
+  --gear-highlight-fill: #f8edf8;
+  --gear-highlight-text: #68406d;
+  --gear-highlight-shadow: #98699d25;
 }
 .dragon-wardrobe {
   display: grid;
