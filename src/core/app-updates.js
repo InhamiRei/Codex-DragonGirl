@@ -11,7 +11,11 @@ const repository = 'InhamiRei/Codex-DragonGirl';
 const releases = `https://github.com/${repository}/releases`;
 const latestApi = `https://api.github.com/repos/${repository}/releases/latest`;
 const stableVersion = /^v?(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/;
-const interval = 6 * 60 * 60 * 1000;
+// 后台检查、打开窗口时刷新和网络失败重试采用各自的间隔，限流时延长等待。
+const backgroundInterval = 6 * 60 * 60 * 1000;
+const foregroundInterval = 15 * 60 * 1000;
+const retryInterval = 5 * 60 * 1000;
+const rateLimitInterval = 60 * 60 * 1000;
 const downloadHosts = new Set(['github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com', 'github-releases.githubusercontent.com']);
 const cacheName = /^Codex-DragonGirl-(\d+\.\d+\.\d+)-(?:macOS-arm64\.dmg|Windows-x64(?:-Setup\.exe|\.zip))(?:\.[a-f\d-]{36}\.part)?$/;
 
@@ -68,15 +72,33 @@ export class AppUpdates extends EventEmitter {
     super();
     Object.assign(this, { current, platform, arch, directory, fetch, markDownload, openFile, openPage });
     this.lifetime = new AbortController();
+    this.started = false;
+    this.nextForegroundCheck = 0;
     this.state = { status: 'idle', current, installed, release: null, percent: 0, error: '' };
   }
 
   // 桌宠长期运行时也会发现新版本，自动检查只读取发布信息。
   start() {
-    if (this.timer) return;
+    if (this.started || this.lifetime.signal.aborted) return;
+    this.started = true;
     void this.check();
-    this.timer = setInterval(() => void this.check(), interval);
-    this.timer.unref();
+  }
+
+  // 管理窗口打开时刷新过期的发布信息，短时间内反复打开会共用同一份结果。
+  checkOnOpen() {
+    if (this.started && Date.now() >= this.nextForegroundCheck) void this.check();
+  }
+
+  // 根据检查结果重设定时器，下载或安装占用通道时等当前操作结束。
+  scheduleCheck(delay, foregroundDelay = delay) {
+    if (!this.started || this.lifetime.signal.aborted) return;
+    clearTimeout(this.timer);
+    this.nextForegroundCheck = Date.now() + foregroundDelay;
+    const timer = setTimeout(async () => {
+      while (this.timer === timer && this.pending) await this.pending;
+      if (this.timer === timer) void this.check();
+    }, delay).unref();
+    this.timer = timer;
   }
 
   // 阶段变化时推送完整快照；连续下载进度单独传一个整数。
@@ -101,12 +123,17 @@ export class AppUpdates extends EventEmitter {
     const previous = this.state;
     const downloaded = previous.status === 'ready' || previous.status === 'opened';
     return this.run(async () => {
+      // 网络错误和无效响应保留这次重试，检查成功后再恢复常规频率。
+      this.scheduleCheck(retryInterval);
       this.update({ status: 'checking', error: '' });
       const response = await this.fetch(latestApi, { redirect: 'error', credentials: 'omit', cache: 'no-store',
         headers: { Accept: 'application/vnd.github+json' },
         signal: AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(15000)]) });
-      if (!response.ok) throw new Error(response.status === 403 || response.status === 429
-        ? 'GitHub 暂时限制了检查频率，请稍后重试。' : `获取版本失败（HTTP ${response.status}），请稍后重试。`);
+      if (response.status === 403 || response.status === 429) {
+        this.scheduleCheck(rateLimitInterval);
+        throw new Error('GitHub 暂时限制了检查频率，请稍后重试。');
+      }
+      if (!response.ok) throw new Error(`获取版本失败（HTTP ${response.status}），请稍后重试。`);
       const data = await response.json();
       if (typeof data?.tag_name !== 'string' || !stableVersion.test(data.tag_name) || data.draft || data.prerelease)
         throw new Error('最新正式版的发布信息不完整，请稍后重试。');
@@ -115,6 +142,7 @@ export class AppUpdates extends EventEmitter {
       const sameFile = downloaded && release?.asset && release.asset.url === previous.release?.asset?.url
         && release.asset.digest === previous.release.asset.digest && release.asset.size === previous.release.asset.size;
       await this.cleanCache(release?.asset?.name);
+      this.scheduleCheck(backgroundInterval, foregroundInterval);
       this.update({ release, status: sameFile ? previous.status : release ? 'available' : 'current', percent: sameFile ? 100 : 0 });
     }, downloaded ? previous.status : previous.release ? 'available' : 'error');
   }
@@ -219,7 +247,9 @@ export class AppUpdates extends EventEmitter {
 
   // 退出时终止网络请求，并等待临时文件清理完毕。
   async stop() {
-    clearInterval(this.timer);
+    this.started = false;
+    clearTimeout(this.timer);
+    this.timer = null;
     this.lifetime.abort();
     await this.pending;
   }
