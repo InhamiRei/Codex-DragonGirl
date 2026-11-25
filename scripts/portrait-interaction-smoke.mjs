@@ -6,6 +6,7 @@ import path from 'node:path';
 import { KANNA_PORTRAIT, KOKKORO_PORTRAIT } from '../src/renderer/portrait-artwork.js';
 import { dialogueLine } from '../src/shared/dialogue.js';
 import { verifyKannaBlinkGaze, verifyKannaLinework, watchKannaLinework } from './kanna-linework.mjs';
+import { verifyKannaOutfits } from './kanna-outfit-smoke.mjs';
 
 const root = process.cwd();
 const executablePath = process.env.DRAGONGIRL_TEST_EXECUTABLE;
@@ -67,7 +68,7 @@ async function gazePixels() {
   return page.evaluate(async () => {
     const { PORTRAIT_ARTWORK } = await import('dragon://app/src/renderer/portrait-artwork.js');
     const source = document.getElementById('portrait');
-    const artwork = PORTRAIT_ARTWORK.get(source.src);
+    const artwork = PORTRAIT_ARTWORK.get(source.dataset.asset);
     return [...document.querySelectorAll('.portrait-eye-layer')].map((layer, index) => {
       const eye = artwork.eyes[index];
       const canvas = document.createElement('canvas');
@@ -238,8 +239,9 @@ async function verifyPortrait(sample) {
       DRAGONGIRL_DATA_DIR: data, DRAGONGIRL_FIXTURE_HOME: home,
     };
     delete env.ELECTRON_RUN_AS_NODE;
-    application = await electron.launch({ ...(executablePath ? { executablePath } : {}),
-      args: executablePath ? [] : [root], env, timeout: 30000 });
+    const launch = { ...(executablePath ? { executablePath } : {}),
+      args: executablePath ? [] : [root], env, timeout: 30000 };
+    application = await electron.launch(launch);
     await until(() => application.evaluate(() => {
       const app = globalThis.__dragonGirlApp;
       // 手动启动会在桌宠 ready 之后显示管理窗口，等它显示后再测按压，避免中途失焦。
@@ -271,9 +273,9 @@ async function verifyPortrait(sample) {
     });
     await page.waitForFunction(({ asset, width }) => {
       const image = document.getElementById('portrait');
-      return image.src === asset && image.complete && image.naturalWidth === width;
+      return image?.src === asset && image.complete && image.naturalWidth === width;
     }, artwork);
-    // 记录真实播放过的康娜表情，最后导出同画幅的惊讶与闭眼定稿。
+    // 记录康娜原版立绘播放过的表情，供换装后比较像素。
     const linework = id === 'kanna' ? await watchKannaLinework(page, artwork) : null;
     if (linework) {
       // 实际按住再松开，弹簧反馈仍有位移，轻点触发表情时也保持原来的宽高。
@@ -341,7 +343,7 @@ async function verifyPortrait(sample) {
     assert.ok(decoded.includes(artwork.asset), '未记录到本次立绘解码');
     assert.deepEqual(decoded.filter(url => /\/(blink-half|blink-closed|success|failure)\.png$/.test(url)), [],
       '关闭眨眼和动态表情时仍加载了表情帧');
-    assert.deepEqual(decoded.filter(url => /codex-dragon-girl-(?:sad|prayer(?:-half|-hands)?)\.png$/.test(url)), [],
+    assert.deepEqual(decoded.filter(url => /codex-dragon-girl-(?:(?:sad|prayer(?:-half|-hands)?)\.png|prayer-eyes\.webp)$/.test(url)), [],
       '半身角色启动时解码了龙娘专属动作');
     await settings({ blinkEnabled: true });
 
@@ -422,7 +424,14 @@ async function verifyPortrait(sample) {
     await until(() => page.locator('.portrait-face').isHidden(), '定格没有自动恢复');
     await saveComparison(sample, artifacts, gazeStrips);
     for (const strip of gazeStrips) await strip.dispose();
-    if (linework) await verifyKannaLinework(linework, artifacts);
+    let savedOutfit;
+    if (linework) {
+      await verifyKannaLinework(linework, artifacts);
+      // 原版动作验收先隐藏了管理窗口，换装验收再从同一正常入口打开。
+      await application.evaluate(() => globalThis.__dragonGirlApp.dashboard.open());
+      const dashboard = application.windows().find((window) => window.url().endsWith('/dashboard.html'));
+      savedOutfit = await verifyKannaOutfits(page, dashboard, clickMenu, data, artifacts);
+    }
     // 表情播放中从原生菜单换角色，旧眼层和定格必须随之清理，新角色能立即接续预览。
     const next = portraits.find((entry) => entry.artwork.id !== id);
     await clickMenu('失败', '动作');
@@ -434,6 +443,17 @@ async function verifyPortrait(sample) {
     await clickMenu('完成', '动作');
     await page.locator(`#character[data-${next.artwork.id}-frame="happy"]`).waitFor();
     assert.deepEqual(errors, []);
+    if (savedOutfit) {
+      // 切回角色和完全重启两条路径都应从偏好恢复已选服饰。
+      const selectedOutfit = '#portrait[data-outfit="' + savedOutfit + '"]';
+      await clickMenu(name, '切换角色');
+      await page.locator(selectedOutfit).waitFor();
+      await application.close();
+      application = await electron.launch(launch);
+      const reopened = await until(() => application.windows().find((window) => window.url().endsWith('/character.html')),
+        '重启后没有找到所选角色窗口');
+      await reopened.locator(selectedOutfit).waitFor();
+    }
     console.log(name + '的视线、鼠标带动头身、待机轻摆、眨眼、完成点头、失败与任务台词全部通过。');
   } finally {
     await application?.close().catch(() => {});

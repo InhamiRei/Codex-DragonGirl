@@ -1,5 +1,6 @@
 import { EYE_ARTWORK, stepGaze } from '../shared/gaze.js';
 import { isDragonAsset } from '../shared/characters.js';
+import { dragonOutfit } from '../shared/dragon-gear.js';
 
 // 圈出耳尖、呆毛和发梢的局部动作范围，支点藏在发束接合处。
 const PATCHES = [
@@ -20,6 +21,7 @@ const REBOUND_DURATION = 950;
 const EAR_TAP_CYCLE = 240;
 const EAR_TAP_AMPLITUDES = [34, 28];
 const HEART_EAR_OFFSET = 43;
+const MAX_COWLICK_SHIFT = 22;
 // 双耳和呆毛按位移判断是否归零，发尖按旋转角判断。
 const SHIFT_MINIMUMS = [0.01, 0.01, 0.00015, 0.00015];
 
@@ -214,6 +216,8 @@ export class DragonMotion {
     const height = nativeResolution ? imageHeight : Math.max(2, Math.round(model.rect.height * scale));
     if (image !== this.image || width !== this.width || height !== this.height) {
       this.image = image;
+      // 呆毛收进帽子后，视线转向只带动露在外面的耳朵和发梢。
+      this.cowlickCovered = Boolean(dragonOutfit(image.dataset?.outfit).hat);
       this.width = width;
       this.height = height;
       if (!this.canvas.hidden) this.paint(this.shifts);
@@ -322,7 +326,7 @@ export class DragonMotion {
       this.locks[index] = next;
       return -part.side * part.angle * Math.max(-0.3, Math.min(1, next.x));
     });
-    const changed = this.paint([ears, this.cowlick.x * 22, ...locks]) || breath !== this.breath;
+    const changed = this.paint([ears, this.cowlick.x * MAX_COWLICK_SHIFT, ...locks]) || breath !== this.breath;
     this.breath = breath;
     if (changed) this.onPose();
     this.frame = this.direction.settled && this.cowlick.settled && this.hairFlow.settled
@@ -356,7 +360,7 @@ export class DragonMotion {
   paint(shifts) {
     this.shifts = shifts;
     const ears = shifts[0] + (HEART_EAR_OFFSET - shifts[0]) * this.earTuck;
-    const values = [ears, shifts[1], shifts[2], shifts[3]];
+    const values = [ears, this.cowlickCovered ? 0 : shifts[1], shifts[2], shifts[3]];
     let active = false;
     for (let drive = 0; drive < values.length; drive += 1) {
       if (Math.abs(values[drive]) >= SHIFT_MINIMUMS[drive]) active = true;

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { MARO_OUTFITS, MARO_OUTFIT_OFFSETS } from '../src/shared/maro-outfits.js';
 
 const root = process.cwd();
 const data = await fs.mkdtemp(path.join(os.tmpdir(), 'maro-frame-audit-'));
@@ -28,6 +29,8 @@ try {
     const { CharacterSprites } = await import('dragon://app/src/renderer/character-sprites.js');
     const { MARO_HAIR_ASSETS, HAIR_FRAME_TIMES, hairNodAt } = await import('dragon://app/src/shared/characters.js');
     const { spriteBounds, spriteCrown, spritePalette, spriteLandmarks } = await import('dragon://app/src/shared/sprite-calibration.js');
+    const { MARO_OUTFITS } = await import('dragon://app/src/shared/maro-outfits.js');
+    const { loadMaroOutfitLayer, paintMaroOutfitLayer } = await import('dragon://app/src/renderer/maro-outfit.js');
     const sprites = new CharacterSprites(document.createElement('div'), new Image(), () => {});
     const prepareStart = performance.now();
     await sprites.prepare();
@@ -83,6 +86,165 @@ try {
       return channels.map((values) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)]);
     }
     const referenceHair = hairColor(baseline.pixels);
+    // 发束边缘的深色线稿靠颜色邻域识别，单独检查靠衣领和手臂的轮廓。
+    function nearHairFill(pixels, width, x, y, foreground) {
+      for (let row = Math.max(0, y - 5); row <= Math.min(width - 1, y + 5); row += 1) {
+        for (let column = Math.max(0, x - 5); column <= Math.min(width - 1, x + 5); column += 1) {
+          const pixel = row * width + column;
+          if (foreground?.[pixel] === 2) continue;
+          const offset = pixel * 4;
+          const r = pixels[offset], g = pixels[offset + 1], b = pixels[offset + 2];
+          if (pixels[offset + 3] > 24 && r >= 170 && r - g >= 30 && g - b >= 13) return true;
+        }
+      }
+      return false;
+    }
+    // 连通区域用于区分手掌、脸颊和原校服织线，颈部单独标记以检查新领口的遮挡。
+    function connectedForeground(pixels, size) {
+      const candidates = new Uint8Array(size * size);
+      const foreground = new Uint8Array(candidates.length);
+      const component = new Int32Array(candidates.length);
+      const neckAnchor = 884 * size + 589;
+      const faceAnchor = 752 * size + 586;
+      for (let point = 0; point < candidates.length; point += 1) {
+        const offset = point * 4;
+        const r = pixels[offset], g = pixels[offset + 1], b = pixels[offset + 2];
+        candidates[point] = pixels[offset + 3] > 24 && r > 167 && r - g >= 18 && g - b >= 6;
+      }
+      for (let start = 0; start < candidates.length; start += 1) {
+        if (!candidates[start]) continue;
+        component[0] = start;
+        candidates[start] = 0;
+        let count = 1;
+        for (let index = 0; index < count; index += 1) {
+          const point = component[index];
+          const x = point % size, y = Math.floor(point / size);
+          for (let row = Math.max(0, y - 1); row <= Math.min(size - 1, y + 1); row += 1) {
+            for (let column = Math.max(0, x - 1); column <= Math.min(size - 1, x + 1); column += 1) {
+              const neighbor = row * size + column;
+              if (!candidates[neighbor]) continue;
+              candidates[neighbor] = 0;
+              component[count++] = neighbor;
+            }
+          }
+        }
+        if (count < 300) continue;
+        const points = component.subarray(0, count);
+        const label = points.includes(neckAnchor) ? 2 : points.includes(faceAnchor) ? 3 : 1;
+        for (let index = 0; index < count; index += 1) foreground[component[index]] = label;
+      }
+      return foreground;
+    }
+    // 取原脸颊最低点，给下颌的抗锯齿描边留出余量。
+    function chinRows(foreground, size) {
+      const chin = new Uint16Array(size);
+      for (let y = 790; y < 868; y += 1) for (let x = 495; x <= 704; x += 1) {
+        if (foreground[y * size + x] === 3) chin[x] = y;
+      }
+      return chin;
+    }
+    // 旧水手领墨线同时贴着绿领和原颈，只对下颌下方的两小段领缝放行。
+    function oldCollarInk(pixels, foreground, chin, size, x, y) {
+      const atCollarSide = (x >= 502 && x <= 556) || (x >= 642 && x <= 698);
+      if (!atCollarSide || y < 811 || y > 937) return false;
+      const jaw = Math.max(...chin.subarray(x - 2, x + 3));
+      if (!jaw || y <= jaw + 5) return false;
+      let neck = false, green = false;
+      for (let row = y - 8; row <= y + 8; row += 1) for (let column = x - 8; column <= x + 8; column += 1) {
+        const point = row * size + column;
+        const offset = point * 4;
+        if (Math.abs(row - y) <= 7 && Math.abs(column - x) <= 7 && foreground[point] === 2) neck = true;
+        const g = pixels[offset + 1];
+        if (pixels[offset + 3] > 24 && g >= pixels[offset] + 2 && g >= pixels[offset + 2] + 4) green = true;
+      }
+      return neck && green;
+    }
+    // 用同一生产合成器逐像素检查衣料以外的画面、眼口与原透明轮廓。
+    async function auditOutfits() {
+      const size = sprites.stills.idle.canvas.width;
+      // 在发梢外侧记录原生像素，防止旧衬衫从这些位置漏出。
+      const shoulders = [[318, 954], [804, 930], [823, 963], [835, 931]];
+      const edgeSamples = {
+        'cardigan-redraw': [165, shoulders],
+        'bun-hoodie-redraw': [205, shoulders],
+      };
+      // 验证卫衣右侧领线和帽片的接合处仍然连续。
+      const seamSamples = {
+        'bun-hoodie-redraw': [
+          [638, 872, 0, 125], [650, 864, 0, 125], [666, 852, 0, 125], [676, 845, 0, 125],
+          [680, 816, 0, 145], [679, 821, 0, 145],
+        ],
+      };
+      // 待机右侧下颌过去有帽片颜色越过描线，直接对照原画像素。
+      const jawSamples = [[685, 803], [687, 804]];
+      const surface = new OffscreenCanvas(size, size);
+      const context = surface.getContext('2d', { willReadFrequently: true });
+      const matte = new OffscreenCanvas(size, size).getContext('2d', { willReadFrequently: true });
+      const uniqueFrames = [...Object.values(sprites.stills), ...sprites.hair.slice(1, -1)];
+      const results = [];
+      for (const frame of uniqueFrames) {
+        context.clearRect(0, 0, size, size);
+        context.drawImage(frame.canvas, 0, 0);
+        const before = context.getImageData(0, 0, size, size).data;
+        const foreground = connectedForeground(before, size);
+        const chin = chinRows(foreground, size);
+        for (const outfit of MARO_OUTFITS.slice(1)) {
+          const hasHood = outfit.id === 'bun-hoodie-redraw';
+          const layer = await loadMaroOutfitLayer(outfit, frame.pose);
+          context.clearRect(0, 0, size, size);
+          context.drawImage(frame.canvas, 0, 0);
+          paintMaroOutfitLayer(context, layer);
+          matte.clearRect(0, 0, size, size);
+          matte.drawImage(layer.image, layer.x, layer.y);
+          const patch = matte.getImageData(0, 0, size, size).data;
+          const after = context.getImageData(0, 0, size, size).data;
+          const changes = { clothing: 0, outside: 0, head: 0, hair: 0, hairOutline: 0, skin: 0, alpha: 0 };
+          if (hasHood && frame.pose === 'idle') {
+            for (const [x, y] of jawSamples) {
+              const offset = (y * size + x) * 4;
+              if (after.subarray(offset, offset + 4).some((channel, index) => channel !== before[offset + index]))
+                changes.head += 1;
+            }
+          }
+          const [limit, samples] = edgeSamples[outfit.id] ?? [0, []];
+          const edgePinholes = frame.pose === 'idle'
+            ? samples.filter(([x, y]) => after[(y * size + x) * 4 + 1] >= limit).length : 0;
+          const seamDefects = frame.pose === 'idle' ? (seamSamples[outfit.id] ?? []).filter(([x, y, low, high]) => {
+            const red = after[(y * size + x) * 4];
+            return red < low || red > high;
+          }).length : 0;
+          for (let pixel = 0; pixel < size * size; pixel += 1) {
+            const offset = pixel * 4;
+            if (after[offset + 3] !== before[offset + 3]) changes.alpha += 1;
+            const r = before[offset], g = before[offset + 1], b = before[offset + 2];
+            if (after[offset] === r && after[offset + 1] === g && after[offset + 2] === b) continue;
+            const x = pixel % size, y = Math.floor(pixel / size);
+            if (patch[offset + 3] === 0) changes.outside += 1;
+            else changes.clothing += 1;
+            // 抬起的袖口在两侧，中央头发、刘海、眼睛、脸颊和创可贴一直来自原帧。
+            const chinShadow = x >= 546 && x <= 632 && y >= 813 && y <= 868 && r < 153;
+            if ((y < 803 && x >= 329 && x <= 790) || foreground[pixel] === 3 || chinShadow) changes.head += 1;
+            // 仅允许当前颈部连通区被新衣遮挡，抬到领口的手仍逐像素检查。
+            // 右后帽片高于主领口，覆盖范围需要位于原下颌以下。
+            const hoodJoin = hasHood && x >= 672 && x <= 703 && y >= 803 && y <= 854
+              && chin[x] > 0 && y > Math.max(...chin.subarray(x - 2, x + 3)) + 4;
+            const neckArea = hoodJoin || (hasHood && y >= 839 && y <= 1041 && x >= 495 && x <= 702);
+            const newNeckline = neckArea && foreground[pixel] === 2;
+            if (!newNeckline && before[offset + 3] > 24 && r > 175 && r - g > 34 && g - b > 10)
+              changes.hair += 1;
+            if (before[offset + 3] > 24 && r < 157 && r - g > 12 && g - b > 7
+              && nearHairFill(before, size, x, y, neckArea ? foreground : null)
+              && !(hasHood && oldCollarInk(before, foreground, chin, size, x, y)))
+              changes.hairOutline += 1;
+            if (!newNeckline && foreground[pixel] && r > 218 && r - g >= 18 && g - b >= 8)
+              changes.skin += 1;
+          }
+          results.push({ outfit: outfit.id, pose: frame.pose, ...changes, edgePinholes, seamDefects });
+        }
+      }
+      return results;
+    }
+    const outfits = await auditOutfits();
     // 每页六帧，对照待机、高清源图以及浅深两种背景，确认透明边缘没有彩色杂点。
     for (let group = 0; group < 5; group += 1) {
       const board = document.createElement('canvas');
@@ -138,7 +300,8 @@ try {
       pages.push(board.toDataURL('image/png').split(',')[1]);
     }
     sprites.destroy();
-    return { pages, frames, nativeFrames, metrics, prepareMilliseconds, referenceBounds, referenceCrown, referenceHair, referenceLandmarks, referenceColors };
+    return { pages, frames, nativeFrames, metrics, outfits, prepareMilliseconds, referenceBounds, referenceCrown,
+      referenceHair, referenceLandmarks, referenceColors };
   });
   await fs.mkdir(path.join(artifacts, 'frames'), { recursive: true });
   await fs.mkdir(path.join(artifacts, 'native-frames'), { recursive: true });
@@ -151,6 +314,15 @@ try {
   delete result.pages; delete result.frames; delete result.nativeFrames;
   await fs.writeFile(path.join(artifacts, 'frame-audit.json'), JSON.stringify(result, null, 2));
   assert.equal(result.metrics.length, 30);
+  assert.equal(result.outfits.length, (MARO_OUTFITS.length - 1) * Object.keys(MARO_OUTFIT_OFFSETS).length);
+  for (const { outfit, pose, clothing, outside, head, hair, hairOutline, skin, alpha, edgePinholes, seamDefects } of result.outfits) {
+    const label = outfit + ' / ' + pose;
+    assert.ok(clothing > 80000, label + ' 缺少完整衣料');
+    assert.deepEqual({ outside, head, hair, hairOutline, skin, alpha },
+      { outside: 0, head: 0, hair: 0, hairOutline: 0, skin: 0, alpha: 0 }, label);
+    assert.equal(edgePinholes, 0, label + ' 衣料边缘露出原校服的米白衣料');
+    assert.equal(seamDefects, 0, label + ' 领线、袖口或手腕的交界仍有残线');
+  }
   assert.ok(result.metrics.every((item) => [item.sourceWidth, item.sourceHeight, item.renderWidth, item.renderHeight]
     .every((size) => size === 1254)), '源图或显示画布不是 1254 像素');
   assert.ok(result.metrics[0].exactIdle && result.metrics.at(-1).exactIdle, '首尾与待机不一致');
@@ -167,7 +339,7 @@ try {
   assert.ok(result.metrics[18].actualHeadOffsetPixels > 10 && headSteps[17] <= 2,
     '第十八至十九帧仍然突然抬头');
   assert.ok(result.metrics.at(-1).actualHeadOffsetPixels === 0, '动作结束后未回到待机位置');
-  console.log(JSON.stringify({ frames: result.metrics.length, firstExact: result.metrics[0].exactIdle,
+  console.log(JSON.stringify({ frames: result.metrics.length, outfitLayers: result.outfits.length, firstExact: result.metrics[0].exactIdle,
     lastExact: result.metrics.at(-1).exactIdle,
     maxCrownDistance: Math.max(...result.metrics.map((item) => item.crownDistance)),
     maxHairDifference: Math.max(...result.metrics.flatMap((item) => item.hairDelta.map(Math.abs))),

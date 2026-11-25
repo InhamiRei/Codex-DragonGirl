@@ -179,18 +179,79 @@
   object-fit: contain;
   filter: drop-shadow(0 0 7px #9b8fdb70);
 }
+.dragon-gear-picker {
+  --gear-option-width: 112px;
+  --gear-option-gap: 10px;
+  margin: 24px auto 0;
+}
 .dragon-gear-options {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 10px;
+  gap: var(--gear-option-gap);
   max-width: 730px;
-  margin: 24px auto 0;
+  margin: 0 auto;
   padding: 3px;
 }
 .dragon-gear-option {
-  width: 112px;
+  width: var(--gear-option-width);
   min-height: 88px;
+}
+.dragon-gear-picker[data-outfits] {
+  --outfit-page-size: 36px;
+  --outfit-step: calc(var(--gear-option-width) + var(--gear-option-gap));
+  --outfit-room: calc(100% - 2 * (var(--outfit-page-size) + var(--gear-option-gap)));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gear-option-gap);
+}
+.dragon-gear-picker[data-outfits] .dragon-gear-options {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  justify-content: safe center;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+  padding: 9px calc(var(--gear-option-gap) / 2);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: calc(var(--gear-option-gap) / 2);
+}
+.dragon-gear-picker[data-paged] .dragon-gear-options {
+  width: var(--outfit-room);
+  width: max(var(--outfit-step), round(down, var(--outfit-room), var(--outfit-step)));
+}
+.dragon-gear-picker[data-outfits] .dragon-gear-option {
+  flex: none;
+  scroll-snap-align: start;
+}
+.dragon-outfit-page {
+  display: none;
+  flex: 0 0 var(--outfit-page-size);
+  width: var(--outfit-page-size);
+  height: var(--outfit-page-size);
+  min-height: 0;
+  padding: 0;
+  color: #745793;
+  background: #fcfaff;
+  border-color: var(--gear-border, #d7c8e9);
+  border-radius: 50%;
+}
+.dragon-gear-picker[data-paged] .dragon-outfit-page {
+  display: inline-flex;
+}
+.dragon-outfit-page[aria-disabled='false']:hover {
+  color: #503378;
+  background: #eee5f9;
+  border-color: #b39ad6;
+}
+.dragon-outfit-page[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
 }
 .dragon-gear-option[data-selected] {
   border-color: var(--gear-highlight-border, #b39ad6);

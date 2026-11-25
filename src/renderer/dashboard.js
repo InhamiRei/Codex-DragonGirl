@@ -1003,8 +1003,11 @@ async function start() {
       return settings;
     },
     // 换装独立保存，偏好页里还没提交的表单草稿不随之重置。
-    saveGear: async (selection) => {
-      state.settings = await call('dragon-equipment', selection);
+    saveGear: async ({ characterId, ...selection }) => {
+      const command = { kanna: 'kanna-outfit', maro: 'maro-outfit' }[characterId];
+      state.settings = command
+        ? await call(command, selection.itemId)
+        : await call('dragon-equipment', selection);
       return state.settings;
     },
     toast,

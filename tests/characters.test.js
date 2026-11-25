@@ -7,6 +7,8 @@ import { CHARACTERS, MARO_ASSET, MARO_HAIR_ASSETS, MARO_FRAME_SIZE, characterByI
   hairNodAt, HAIR_FRAME_TIMES, HAIR_DURATION, HAIR_FRAME_DURATIONS,
   isCharacterMenuPoint } from '../src/shared/characters.js';
 import { SettingsStore, normalizeSettings } from '../src/core/settings.js';
+import { KANNA_OUTFITS, KANNA_OUTFIT_REGION } from '../src/shared/kanna-outfits.js';
+import { MARO_OUTFITS, MARO_OUTFIT_OFFSETS, findMaroOutfit, maroGroomingPose, maroOutfitLayer } from '../src/shared/maro-outfits.js';
 import { imagePoint } from '../src/shared/hit-test.js';
 import { dialogueLine } from '../src/shared/dialogue.js';
 import { KOKKORO_DIALOGUE } from '../src/shared/kokkoro-dialogue.js';
@@ -37,6 +39,42 @@ test('三十帧均为 1254 像素且循环首尾复用待机原图', async () =>
   }
 });
 
+// 发布资源必须覆盖全部原表情和捋发中间姿势，尺寸、裁切偏移与透明通道一一对应。
+test('麻吕服饰保留原版默认值并为每个现有姿势提供无损图层', async () => {
+  assert.equal(normalizeSettings().maroOutfitId, 'original');
+  assert.equal(normalizeSettings({ maroOutfitId: 'winter' }).maroOutfitId, 'original');
+  assert.deepEqual(MARO_OUTFITS.map(({ id, name }) => [id, name]), [
+    ['original', '原版服饰'], ['cardigan-redraw', '焦糖开衫'], ['bun-hoodie-redraw', '红豆包卫衣'],
+  ]);
+  // 保留款沿用原选款，已移除款和陌生编号回退到原版服饰。
+  for (const id of ['cardigan', 'bun-hoodie']) {
+    const replacement = id + '-redraw';
+    assert.equal(normalizeSettings({ maroOutfitId: id }).maroOutfitId, replacement);
+    assert.equal(findMaroOutfit(id), findMaroOutfit(replacement));
+  }
+  for (const id of ['gym', 'gym-redraw']) {
+    assert.equal(normalizeSettings({ maroOutfitId: id }).maroOutfitId, 'original');
+    assert.equal(findMaroOutfit(id), undefined);
+  }
+  assert.equal(findMaroOutfit('winter'), undefined);
+  const poses = ['idle', 'success', 'failure', ...MARO_HAIR_ASSETS.slice(1, -1)
+    .map((_, index) => maroGroomingPose(index + 1))];
+  assert.deepEqual(Object.keys(MARO_OUTFIT_OFFSETS), poses);
+  for (const outfit of MARO_OUTFITS.slice(1)) {
+    assert.equal(normalizeSettings({ maroOutfitId: outfit.id }).maroOutfitId, outfit.id);
+    for (const pose of poses) {
+      const [x, y, width, height] = MARO_OUTFIT_OFFSETS[pose];
+      assert.ok(x >= 0 && y >= 0 && x + width <= MARO_FRAME_SIZE && y + height <= MARO_FRAME_SIZE, pose);
+      const layer = await fs.readFile(new URL('../' + maroOutfitLayer(outfit, pose), import.meta.url));
+      assert.equal(layer.toString('ascii', 8, 16), 'WEBPVP8L', pose);
+      assert.equal(layer[20], 0x2f, pose);
+      const header = layer.readUInt32LE(21);
+      assert.deepEqual([(header & 0x3fff) + 1, ((header >>> 14) & 0x3fff) + 1, (header >>> 28) & 1],
+        [width, height, 1], pose);
+    }
+  }
+});
+
 // 表情只保存实际取样的脸部区域，仍以原图分辨率和 RGBA 格式交给合成器。
 for (const { id, face } of [KOKKORO_PORTRAIT, KANNA_PORTRAIT]) {
   test(id + ' 的表情帧保留原生脸部尺寸和透明通道', async () => {
@@ -49,11 +87,32 @@ for (const { id, face } of [KOKKORO_PORTRAIT, KANNA_PORTRAIT]) {
   });
 }
 
+// 发布版康娜的衣料区域避开表情，三套合成图保留原画尺寸和透明通道。
+test('康娜服饰兼容旧设置并包含原版与三套透明合成图', async () => {
+  assert.equal(normalizeSettings().kannaOutfitId, 'original');
+  assert.equal(normalizeSettings({ kannaOutfitId: 'apron' }).kannaOutfitId, 'original');
+  assert.deepEqual(KANNA_OUTFITS.map(({ id }) => id), ['original', 'school', 'sports', 'yukata']);
+  const { x, y, width, height, mask } = KANNA_OUTFIT_REGION;
+  assert.ok(x >= 0 && y >= KANNA_PORTRAIT.face.y + KANNA_PORTRAIT.face.height);
+  assert.ok(x + width <= KANNA_PORTRAIT.width && y + height <= KANNA_PORTRAIT.height);
+  for (const { id } of KANNA_OUTFITS) assert.equal(normalizeSettings({ kannaOutfitId: id }).kannaOutfitId, id);
+  for (const file of [mask, ...KANNA_OUTFITS.slice(1).map(({ image }) => image)]) {
+    const image = await fs.readFile(new URL('../' + file, import.meta.url));
+    const size = file === mask ? [width, height] : [KANNA_PORTRAIT.width, KANNA_PORTRAIT.height];
+    assert.equal(image.subarray(1, 4).toString(), 'PNG', file);
+    assert.deepEqual([image.readUInt32BE(16), image.readUInt32BE(20), image[24], image[25]], [...size, 8, 6], file);
+  }
+});
+
 // 旧配置仍使用龙娘，任意路径或损坏角色编号不能被当作内置资源。
 test('内置角色选择兼容旧配置并拒绝任意路径', () => {
   assert.equal(normalizeSettings().characterId, 'dragon');
   assert.equal(normalizeSettings({ characterId: 'maro' }).characterId, 'maro');
-  assert.equal(normalizeSettings({ characterId: 'kokkoro' }).characterId, 'kokkoro');
+  // 读取保存过游侠装的设置时，角色选择和其他偏好继续生效。
+  const restored = normalizeSettings({ characterId: 'kokkoro', kokkoroOutfitId: 'ranger', kannaOutfitId: 'school' });
+  assert.equal(restored.characterId, 'kokkoro');
+  assert.equal(restored.kannaOutfitId, 'school');
+  assert.equal(Object.hasOwn(restored, 'kokkoroOutfitId'), false);
   assert.equal(normalizeSettings({ characterId: 'kanna' }).characterId, 'kanna');
   assert.equal(normalizeSettings({ characterId: '../../auth.json' }).characterId, 'dragon');
   assert.equal(characterById('maro').name, '麻吕');
