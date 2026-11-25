@@ -267,7 +267,8 @@ async function verifyOutfitPaging(page, pet, win, row, artifacts) {
       assert.ok(await next.isVisible());
     }
     await win.evaluate((window) => { window.setSize(880, 660); window.webContents.setZoomFactor(1); });
-    await page.waitForFunction(() => innerWidth === 880 && document.querySelector('.dragon-gear-picker[data-paged]'));
+    // 系统窗口边框会占用部分宽度，等内容进入窄布局后逐页核对卡片。
+    await page.waitForFunction(() => innerWidth < 900 && document.querySelector('.dragon-gear-picker[data-paged]'));
     await slot.click();
     await slot.click();
     assert.deepEqual(await visibleOutfits(row), outfitNames.slice(-4));
