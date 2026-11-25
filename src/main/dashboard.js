@@ -81,6 +81,8 @@ export class Dashboard {
       bubbleFor: (c) => this.bubbleFor(c),
       saveFollowOffset: (c, offset) => this.saveFollowOffset(c, offset),
       stackWindows: (host, overlays, owned) => monitor.stackWindows(host, overlays, owned),
+      // 完成气泡只返回该角色当前跟随的窗口。
+      focusCompletedHost: (pid, host, bubble) => monitor.focusCompletedHost(pid, host, bubble),
       prayerWaveTarget: (c) => this.prayerWaveTarget(c),
       selectCharacter: (id) => this.selectCharacter(id),
     };
@@ -125,7 +127,8 @@ export class Dashboard {
       const pet =
         [this.primary, ...this.pets.values()].find((c) => c.instanceId === notice.home) || this.primary;
       const text = notice.dialogueKind ? pet.nextDialogue(notice.dialogueKind) : notice.text;
-      pet.notify(notice.event, text);
+      // 主任务完成用独立台词类型识别；借用主角色显示的其他实例通知不改变窗口焦点。
+      pet.notify(notice.event, text, { focusOnClick: notice.dialogueKind === 'complete' && pet.instanceId === notice.home });
       if (notice.expression) pet.showExpression(notice.expression);
       if (notice.system && Notification.isSupported()) {
         const n = new Notification({ title: `GPT龙娘 · ${notice.name}`, body: text, silent: true });

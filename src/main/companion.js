@@ -89,6 +89,7 @@ export class Companion {
     this.bubbleVisible = false;
     this.dialogueCounts = new Map();
     this.bubbleKind = null;
+    this.completionClick = null;
     this.bubbleModel = {
       text: '',
       usage: null,
@@ -295,7 +296,7 @@ export class Companion {
     });
     ipcMain.on('dg:close-bubble', (event) => locate(event, 'bubble')?.hideBubble());
     // 推进消息只路由到发送它的气泡实例，角色页或其他窗口不能跨实例触发对话。
-    ipcMain.on('dg:advance-bubble', (event) => locate(event, 'bubble')?.advanceBubble());
+    ipcMain.on('dg:advance-bubble', (event) => void locate(event, 'bubble')?.clickBubble());
     // 只有所属气泡正常播完才释放震荡波，上一轮的完成消息无效。
     ipcMain.on('dg:prayer-typed', (event, typingId) => locate(event, 'bubble')?.finishPrayerTyping(typingId, true));
     ipcMain.on('dg:bubble-measured', (event, measurement) =>
@@ -491,7 +492,7 @@ export class Companion {
   }
 
   // 所有气泡共用显示和计时逻辑，内容来源用于避免通知被后台数据覆盖。
-  showBubble(content, kind) {
+  showBubble(content, kind, { focusOnClick = false } = {}) {
     if (!this.visible || this.suppressedByFollow || !this.ready.has('bubble')) return;
     this.cancelPrayerWave();
     const opening = !this.bubbleVisible;
@@ -499,6 +500,9 @@ export class Companion {
     // 显示轮次独立于内容版本，后台额度更新与气泡内换句不能被当作重新打开。
     if (opening) this.bubbleModel.showId += 1;
     this.bubbleVisible = true;
+    // 每条完成通知有独立的点击状态，迟到的聚焦结果不能收起后来出现的气泡。
+    this.completionClick = focusOnClick ? { instanceId: this.instanceId, pending: false } : null;
+    this.syncCompletionFocusable();
     this.positionBubble(true);
     clearTimeout(this.bubbleTimer);
     // 祷文由释放震荡波的流程收起，普通气泡仍使用各自的自动关闭设置。
@@ -614,6 +618,47 @@ export class Companion {
     else this.hideBubble();
   }
 
+  // 仅当 Windows 完成气泡仍属于当前跟随实例，且有可定位的宿主时，允许点击激活。
+  canFocusCompletion() {
+    const hostId = this.followTarget?.id;
+    return process.platform === 'win32' && this.followMode === true && !this.suppressedByFollow
+      && !!this.completionClick && this.completionClick.instanceId === this.instanceId
+      && !!this.delegate?.focusCompletedHost && Number.isSafeInteger(this.followPID) && this.followPID > 0
+      && Number.isSafeInteger(hostId) && hostId > 0;
+  }
+
+  // 完成气泡仍通过 showInactive 静默弹出，只有用户点击时才可激活窗口。
+  syncCompletionFocusable() {
+    if (process.platform !== 'win32') return;
+    const window = this.windows.get('bubble');
+    const focusable = this.canFocusCompletion();
+    if (!window || window.isDestroyed() || window.isFocusable() === focusable) return;
+    window.setFocusable(focusable);
+    if (focusable) window.setSkipTaskbar(true);
+  }
+
+  // 点击完成气泡时把焦点交回宿主，同一条通知的重复点击合并为一次。
+  async clickBubble() {
+    const completion = this.completionClick;
+    if (completion?.pending) return;
+    if (!this.canFocusCompletion()) {
+      this.advanceBubble();
+      return;
+    }
+    if (!this.canInteract('bubble')) return;
+    completion.pending = true;
+    clearTimeout(this.bubbleTimer);
+    try {
+      const bubbleId = this.windows.get('bubble').getMediaSourceId().split(':')[1];
+      await this.delegate.focusCompletedHost(this.followPID, this.followTarget.id, bubbleId);
+    } catch (error) {
+      console.error('返回跟随窗口失败：', error.message);
+    } finally {
+      // 宿主关闭或系统拒绝切换时也允许收起被点击的气泡。
+      if (this.completionClick === completion) this.advanceBubble();
+    }
+  }
+
   // 布局基于实际角色宽度和当前工作区，显示器切换或小屏自动缩小时也会更新比例。
   bubbleLimits() {
     const { width, height, scale } = bubbleDimensions(this.character?.width, this.display?.workArea);
@@ -681,8 +726,10 @@ export class Companion {
   hideBubble({ keepWave = false } = {}) {
     clearTimeout(this.bubbleTimer);
     this.bubbleVisible = false;
+    this.completionClick = null;
     this.setInteractive('bubble', false);
     this.hideWindow('bubble');
+    this.syncCompletionFocusable();
     if (!keepWave) this.cancelPrayerWave();
     this.finishPrayerTyping(this.bubbleModel.typingId);
   }
@@ -979,6 +1026,7 @@ export class Companion {
     if (this.followMode === enabled) return;
     if (this.gesture?.active) this.cancelGesture();
     this.followMode = enabled;
+    this.syncCompletionFocusable();
     this.contextMenu?.closePopup(this.windows.get('character'));
     for (const window of this.windows.values()) window.setAlwaysOnTop(!enabled, 'floating');
     // 同一管道中的桌面恢复命令会覆盖尚未执行的旧跟随请求，避免切换后被迟到请求降级。
@@ -1048,6 +1096,7 @@ export class Companion {
     this.followTarget = frame;
     this.followOffset = offset;
     this.applyFollowPlacement();
+    this.syncCompletionFocusable();
   }
 
   // 手动拖动和菜单重置共用宿主锚点，立即应用，再由管理层按账户保存。
@@ -1125,11 +1174,11 @@ export class Companion {
   }
 
   // 事件声和状态提示复用角色窗口，不额外创建音频后台进程。
-  notify(event, text) {
+  notify(event, text, { focusOnClick = false } = {}) {
     this.windows.get('character')?.webContents.send('dg:sound', event);
     // 祷文与震荡波期间暂停显示任务通知，提示音仍然照常播放。
     if (text && this.state.speechEnabled && !this.prayerWave && !(this.bubbleVisible && this.bubbleKind === 'prayer'))
-      this.showBubble(text, 'notice');
+      this.showBubble(text, 'notice', { focusOnClick });
   }
 
   // 测试只读快照包含窗口布局和当前开关，不暴露任意系统操作。

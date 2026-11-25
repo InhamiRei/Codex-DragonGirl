@@ -735,6 +735,16 @@ export class Monitor extends EventEmitter {
         stdio: 'ignore',
       }).on('error', () => {});
   }
+  // 用刚获焦的气泡启动短命令，请求聚焦准确窗口句柄并限制等待时间。
+  focusCompletedHost(pid, host, bubble) {
+    return new Promise((resolve) => {
+      const bridge = spawn(nativeBridgePath(ROOT), ['--focus-from-bubble', String(pid), String(host), String(process.pid), bubble], {
+        windowsHide: true, stdio: 'ignore', timeout: 1500,
+      });
+      bridge.once('error', () => resolve(false));
+      bridge.once('exit', (code) => resolve(code === 0));
+    });
+  }
   // 权限只在用户点击入口时请求，后台统计无需此权限。
   requestPermission() {
     spawn(nativeBridgePath(ROOT), ['--permission'], { stdio: 'ignore', windowsHide: true }).on(

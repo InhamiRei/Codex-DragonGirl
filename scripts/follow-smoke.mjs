@@ -311,6 +311,45 @@ async function checkWindowsSwitching(host, cover) {
     }
     assert.equal(await count(), before + 1, '角色的不透明部分也把点击交给了宿主');
   } finally { await send(host, 'end-input'); }
+
+  // 让另一个应用处于前台，同时露出宿主上的气泡位置，走真实完成通知和系统鼠标消息。
+  await application.evaluate(() => globalThis.__dragonGirlApp.companion.hideBubble());
+  await sizeCover(hostX + Math.round(hostWidth * .16));
+  await clickWindow(cover);
+  await application.evaluate(() => {
+    const { monitor, companion } = globalThis.__dragonGirlApp;
+    monitor.emit('notice', { home: companion.instanceId, event: 'complete', dialogueKind: 'complete' });
+  });
+  await expectStack(host, cover, true);
+  await send(host, 'foreground');
+  assert.equal(await fs.readFile(path.join(host.directory, 'foreground'), 'utf8'), cover.id, '弹出完成气泡抢占了前台焦点');
+  const bubblePage = application.windows().find(page => page.url().endsWith('/bubble.html'));
+  const card = await bubblePage.locator('#bubble').boundingBox();
+  assert.ok(card, '完成气泡未渲染');
+  // 夹具输入采用物理像素，把可见椭圆的中心从页面坐标换算到桌面。
+  const point = await application.evaluate(({ screen }, { x, y, width, height }) => {
+    const window = globalThis.__dragonGirlApp.companion.windows.get('bubble').getContentBounds();
+    return screen.dipToScreenPoint({ x: Math.round(window.x + x + width / 2), y: Math.round(window.y + y + height / 2) });
+  }, card);
+  try {
+    await send(host, `hover-input ${point.x} ${point.y}`);
+    await until(() => application.evaluate(() => globalThis.__dragonGirlApp.companion.interactive.get('bubble')), '完成气泡未解除鼠标穿透');
+    await send(host, `click-input ${ids.bubble}`);
+    await until(async () => {
+      await send(host, 'foreground');
+      const foreground = await fs.readFile(path.join(host.directory, 'foreground'), 'utf8');
+      const state = await companionState();
+      return foreground === host.id && !state.windows.bubble.visible && state.follow.mode && String(state.follow.frame?.id) === host.id;
+    }, '单击完成气泡未收起并切回跟随的聊天窗口');
+  } finally { await send(host, 'end-input'); }
+  // 子代理和主任务共用提示音，子代理完成提示仍须使用普通气泡样式。
+  await application.evaluate(() => {
+    const { monitor, companion } = globalThis.__dragonGirlApp;
+    monitor.emit('notice', { home: companion.instanceId, event: 'complete', text: '子代理完成' });
+  });
+  await until(async () => (await companionState()).windows.bubble.visible, '子代理完成气泡未显示');
+  assert.equal(await application.evaluate(() => globalThis.__dragonGirlApp.companion.windows.get('bubble').isFocusable()), false);
+  await application.evaluate(() => globalThis.__dragonGirlApp.companion.hideBubble());
 }
 
 // 管理页与桌宠属于同一个应用；它遮住角色时也必须排在整组前面，并保持可输入。
@@ -777,7 +816,8 @@ try {
   report.checks.push('特效位于角色后方、窗口桥中断立即收起并在自动重连后恢复');
   report.checks.push('同进程管理页遮挡角色与气泡并保留焦点');
   if (!isMac) report.checks.push('Windows 大型非模态面板、阻塞对话框与最大化宿主聚焦', '真实点击透明角落交给宿主、脸部打开气泡',
-    '同进程置顶工具窗实际遮挡角色与气泡，主窗最小化时收起，聚焦恢复原主窗');
+    '同进程置顶工具窗实际遮挡角色与气泡，主窗最小化时收起，聚焦恢复原主窗',
+    '完成气泡静默弹出，实点一次切回准确的跟随窗口并收起');
   await fs.mkdir(path.join(root, '.artifacts'), { recursive: true });
   await fs.writeFile(path.join(root, '.artifacts/follow-report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));

@@ -386,6 +386,22 @@ internal static class DragonBridge
         }
     }
 
+    // 校验跟随窗口与气泡的进程归属；用户已经切到其他窗口时保留新的前台焦点。
+    private static int FocusFromBubble(int pid, long hostId, int owner, long bubbleId)
+    {
+        IntPtr host = new IntPtr(hostId), bubble = new IntPtr(bubbleId);
+        uint hostPid, bubblePid;
+        if (GetWindowThreadProcessId(host, out hostPid) == 0 || hostPid != (uint)pid
+            || GetWindowThreadProcessId(bubble, out bubblePid) == 0 || bubblePid != (uint)owner
+            || !IsWindowVisible(host) || IsIconic(host) || !IsWindowEnabled(host) || !IsWindowVisible(bubble)) return 1;
+
+        using (Process process = Process.GetProcessById(pid))
+            if (!IsTarget(process)) return 1;
+        IntPtr foreground = GetForegroundWindow();
+        if (foreground == host) return 0;
+        return foreground == bubble && SetForegroundWindow(host) ? 0 : 1;
+    }
+
     // 命令中的每个角色编号都必须属于启动桥的 Electron 进程，拒绝操作其他应用窗口。
     private static List<IntPtr> OwnedHandles(object value, int owner)
     {
@@ -507,6 +523,15 @@ internal static class DragonBridge
             if (args.Length == 1 && args[0] == "--permission") { Console.WriteLine("true"); return 0; }
             int pid;
             if (args.Length == 2 && args[0] == "--focus" && int.TryParse(args[1], out pid)) return Focus(pid);
+            // 只有进程与窗口编号齐全时才接受气泡发起的焦点切换。
+            int owner;
+            long hostId, bubbleId;
+            if (args.Length == 5 && args[0] == "--focus-from-bubble"
+                && int.TryParse(args[1], out pid) && pid > 0
+                && long.TryParse(args[2], out hostId) && hostId > 0
+                && int.TryParse(args[3], out owner) && owner > 0
+                && long.TryParse(args[4], out bubbleId) && bubbleId > 0)
+                return FocusFromBubble(pid, hostId, owner, bubbleId);
             if (args.Length == 1 && args[0] == "--once") { Console.WriteLine(Snapshot()); return 0; }
             if (args.Length == 2 && args[0] == "--owner" && int.TryParse(args[1], out pid) && pid > 0)
             {
