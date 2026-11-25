@@ -29,6 +29,8 @@ function mockWindow(initialBounds) {
     loadURL: async () => {},
     isDestroyed: () => false,
     isVisible: () => visible,
+    // 位置测试使用不可激活的窗口，完成气泡的焦点切换由窗口层级用例覆盖。
+    isFocusable: () => false,
     getBounds: () => bounds,
     setBounds: (next) => { bounds = next; },
     setAlwaysOnTop: () => {},

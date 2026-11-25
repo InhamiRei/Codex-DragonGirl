@@ -10,6 +10,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const output = path.join(root, 'output');
 const manifest = JSON.parse(await fs.readFile(path.join(output, 'release-manifest-Windows-x64.json'), 'utf8'));
 const temp = await fs.mkdtemp(path.join(os.tmpdir(), '龙娘 安装验证-'));
+let verificationError;
 
 // 仅读取 DOS 文件头和 PE 签名、架构字段，校验 Electron 主程序无需整份载入。
 async function peMachine(file) {
@@ -48,14 +49,18 @@ try {
     'follow-smoke.mjs', 'bubble-refresh-smoke.mjs', 'facing-smoke.mjs', 'menu-smoke.mjs',
     'eyes-smoke.mjs', 'blink-smoke.mjs', 'expression-smoke.mjs', 'sad-smoke.mjs',
     'account-tests-smoke.mjs', 'performance-smoke.mjs', 'character-smoke.mjs', 'dragon-config-smoke.mjs',
-    'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs', 'portrait-interaction-smoke.mjs',
+    'maro-frame-audit.mjs', 'maro-interaction-smoke.mjs', 'maro-gaze-audit.mjs',
   ];
-  for (const script of scripts) {
-    console.log(`验收 ${script}`);
-    // 六款发型各自启动验收窗口，沿用整套项目检查为单项提供的四分钟时限。
-    const timeout = script === 'dragon-config-smoke.mjs' ? 240000 : 120000;
+  // 半身角色分别运行，避免两套窗口、动画与换装用例共用一个计时器。
+  const portrait = 'portrait-interaction-smoke.mjs';
+  const cases = [...scripts.map(script => [script]), [portrait, 'kokkoro'], [portrait, 'kanna']];
+  for (const [script, ...parameters] of cases) {
+    const label = [script, ...parameters].join(' ');
+    console.log(`验收 ${label}`);
+    // 含多次原生窗口启动和取样的用例沿用整套项目检查的四分钟时限。
+    const timeout = script === 'dragon-config-smoke.mjs' || script === portrait ? 240000 : 120000;
     // Windows 复用五实例重置卡用例，完整应用用例中的 macOS CLI 夹具仅在 Mac 上运行。
-    const args = [path.join(root, 'scripts', script)];
+    const args = [path.join(root, 'scripts', script), ...parameters];
     if (script === 'app-smoke.mjs') args.push('--reset-tooltip-only');
     const result = spawnSync(process.execPath, args, {
       env, encoding: 'utf8', timeout,
@@ -63,7 +68,7 @@ try {
     if (result.status !== 0) {
       // 即使外层终止超时进程，也保留用例最后的操作与错误，便于定位具体窗口。
       const details = [result.error?.message, result.stdout?.trim(), result.stderr?.trim()].filter(Boolean).join('\n');
-      throw new Error(`${script} 验收失败：${details || result.signal || result.status}`);
+      throw new Error(`${label} 验收失败：${details || result.signal || result.status}`);
     }
     console.log(result.stdout.trim());
   }
@@ -76,6 +81,13 @@ try {
   report.checks.push('三分钟音效导入、波形裁剪与播放、修复及升级后保留音效分配');
   await fs.writeFile(path.join(output, 'verification-Windows-x64.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
+} catch (error) {
+  verificationError = error;
+  throw error;
 } finally {
-  await fs.rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  // 超时后临时进程可能仍占用文件，同时报告清理错误和最先失败的用例。
+  await fs.rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(error => {
+    if (!verificationError) throw error;
+    console.error('清理验收临时目录失败：' + error.message);
+  });
 }

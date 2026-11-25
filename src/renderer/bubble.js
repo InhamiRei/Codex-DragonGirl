@@ -25,6 +25,7 @@ let renderedRevision = -1;
 let renderedShowId = -1;
 let animatedShowId = -1;
 let prayerTyping = null;
+let speechTransition = null;
 
 // 所有动态内容都通过文本节点写入，账户名称与自定义模板不能注入 HTML。
 function element(tag, className, text) {
@@ -257,11 +258,39 @@ function drawOutline(model) {
   tail.style.top = `${below ? BUBBLE_SIZE.height - tailTop - BUBBLE_FRAME.thoughtHeight : tailTop}px`;
 }
 
-// 内容版本只负责排版，显示轮次才负责入场动画；可见内容刷新始终在原位完成。
+// 在同一个气泡内切换语录时，先淡出旧内容，再淡入新句子，期间保留椭圆和泡链。
+function updateBubble(model) {
+  const showId = model.showId ?? 0;
+  // 旧布局不能覆盖已经排队的新台词，淡出期间只保留最新的同一轮内容。
+  if (model.revision < (speechTransition?.model.revision ?? renderedRevision) || showId < renderedShowId) return;
+  const changingToSpeech = showId === renderedShowId && document.body.dataset.ready === 'true'
+    && document.body.dataset.kind === 'usage' && model.kind === 'speech' && !reducedMotion.matches;
+  if (!changingToSpeech) {
+    speechTransition?.animation.cancel();
+    speechTransition = null;
+    render(model);
+    return;
+  }
+  if (speechTransition) {
+    speechTransition.model = model;
+    return;
+  }
+  const animation = contentPane.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 85, easing: 'ease-in', fill: 'forwards' });
+  const transition = { model, animation };
+  speechTransition = transition;
+  animation.onfinish = () => {
+    if (speechTransition !== transition) return;
+    speechTransition = null;
+    animation.cancel();
+    render(transition.model);
+    if (!reducedMotion.matches)
+      contentPane.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: 'ease-out', fill: 'backwards' });
+  };
+}
+
+// 内容版本只负责排版，显示轮次独立控制整颗气泡的入场动画。
 function render(model) {
   const showId = model.showId ?? 0;
-  // 丢弃迟到的启动快照或旧布局，防止已显示的新内容被旧消息覆盖并重新隐藏。
-  if (model.revision < renderedRevision || showId < renderedShowId) return;
   const opening = showId !== renderedShowId;
   const keepVisible = !opening && document.body.dataset.ready === 'true';
   const sameTyping = prayerTyping !== null && prayerTyping.id === model.typingId;
@@ -272,8 +301,11 @@ function render(model) {
   if (opening) {
     renderedShowId = showId;
     // 只有新一轮打开才结束旧动画，后台更新不能打断正在进行的淡入或把透明度跳回零。
-    for (const node of [outline, bubble, tail])
+    for (const node of [outline, bubble, tail, contentPane])
       for (const animation of node.getAnimations()) animation.cancel();
+  } else if (document.body.dataset.kind === 'speech' && model.kind !== 'speech') {
+    // 新通知覆盖语录时立即恢复内容的正常透明度。
+    for (const animation of contentPane.getAnimations()) animation.cancel();
   }
   document.body.dataset.side = model.side;
   document.body.dataset.horizontal = model.horizontal || 'left';
@@ -321,8 +353,8 @@ async function start() {
   // 设计画布大小固定，切换语录、额度或角色比例时只更新实际缩放值。
   document.documentElement.style.setProperty('--max-width', `${BUBBLE_SIZE.width}px`);
   document.documentElement.style.setProperty('--max-height', `${BUBBLE_SIZE.height}px`);
-  bridge.onBubble(render);
-  render(await bridge.bootstrap());
+  bridge.onBubble(updateBubble);
+  updateBubble(await bridge.bootstrap());
   bridge.onCursor(point => routeCursor(point, point.refresh === true));
   bridge.onInputState((enabled) => {
     lastInteractive = enabled;

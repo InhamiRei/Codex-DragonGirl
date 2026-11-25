@@ -24,9 +24,15 @@ function fixture(t, order) {
   const calls = [];
   // 测试窗口只记录边界调用，不创建系统窗口或移动鼠标。
   function window(id) {
+    let focusable = false;
     return {
       isDestroyed: () => false,
       getMediaSourceId: () => `window:${id}:0`,
+      isFocusable: () => focusable,
+      // 记录气泡的激活范围，确认角色窗口没有随着它修改样式。
+      setFocusable(value) { focusable = value; calls.push([id, 'focusable', value]); },
+      // 允许激活也要继续从任务栏隐藏气泡。
+      setSkipTaskbar(value) { calls.push([id, 'skip-taskbar', value]); },
       // 只有显式模式切换才允许由 Electron 修改默认置顶属性。
       setAlwaysOnTop(value) { calls.push([id, 'topmost', value]); },
     };
@@ -75,4 +81,46 @@ test('Windows 宿主已最小化或关闭时停止排序并请求隐藏', (t) =>
   const { pet, calls } = fixture(t, [3, 2, 9]);
   pet.syncWindowStacking();
   assert.deepEqual(calls, [['follow', null]]);
+});
+
+// 切换实例后，旧完成气泡不能激活新实例；普通气泡和角色保留不可激活样式。
+test('Windows 只有当前跟随实例的完成气泡允许激活', (t) => {
+  const { pet, calls } = fixture(t, [1, 2, 3]);
+  pet.instanceId = 'first';
+  pet.followPID = 7;
+  pet.delegate.focusCompletedHost = () => {};
+  pet.syncCompletionFocusable();
+  assert.deepEqual(calls, []);
+  pet.completionClick = { instanceId: 'first', pending: false };
+  pet.syncCompletionFocusable();
+  pet.instanceId = 'second';
+  pet.syncCompletionFocusable();
+  assert.deepEqual(calls, [[3, 'focusable', true], [3, 'skip-taskbar', true], [3, 'focusable', false]]);
+});
+
+// 聚焦命令按句柄只发送一次，旧请求结束时不能干扰新气泡，当前请求失败也会正常收起。
+test('Windows 完成气泡忽略重复点击和旧聚焦结果', async (t) => {
+  const { pet, calls } = fixture(t, [1, 2, 3]);
+  let finishFocus;
+  pet.followPID = 7;
+  pet.instanceId = 'first';
+  pet.completionClick = { instanceId: 'first', pending: false };
+  // 在原生桥边界挂起请求，模拟用户连续点击或收到下一条通知。
+  pet.delegate.focusCompletedHost = (...args) => {
+    calls.push(args);
+    return new Promise((resolve) => { finishFocus = resolve; });
+  };
+  pet.canInteract = () => true;
+  pet.advanceBubble = () => calls.push('close');
+  const oldClick = pet.clickBubble();
+  await pet.clickBubble();
+  assert.deepEqual(calls, [[7, 1, '3']]);
+  pet.completionClick = { instanceId: 'first', pending: false };
+  finishFocus(true);
+  await oldClick;
+  assert.deepEqual(calls, [[7, 1, '3']]);
+  const newClick = pet.clickBubble();
+  finishFocus(false);
+  await newClick;
+  assert.deepEqual(calls, [[7, 1, '3'], [7, 1, '3'], 'close']);
 });

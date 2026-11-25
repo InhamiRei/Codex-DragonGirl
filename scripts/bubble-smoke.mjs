@@ -289,22 +289,36 @@ try {
         plan: 'Plus', quotas: [{ label: '周额度', remaining: 89 }], quotaNote: '', tokens: '12',
       } };
       await show(sample);
+      // 从真实渲染页记录两段透明度动画，确认额度先淡出、语录随后淡入。
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await page.evaluate(() => {
+        const pane = document.getElementById('bubble-content');
+        const animate = pane.animate.bind(pane);
+        window.__speechFades = [];
+        pane.animate = (frames, options) => {
+          window.__speechFades.push([document.body.dataset.kind, ...frames.map(frame => frame.opacity)]);
+          return animate(frames, options);
+        };
+      });
       await application.evaluate(() => { globalThis.__dragonGirlTest.appearance.settings.bubbleSeconds = 1.5; });
       await page.locator('#message').click();
       await until(() => application.evaluate(() => globalThis.__dragonGirlTest.bubbleKind === 'speech'), '定时用量未切换为语录');
       // 跨过原气泡的一秒期限，确认旧计时器没有把新语录提前关闭。
       await new Promise((resolve) => setTimeout(resolve, 1100));
       assert.equal(await application.evaluate(() => globalThis.__dragonGirlTest.bubbleVisible), true, '语录沿用旧气泡计时器而提前关闭');
+      assert.deepEqual(await page.evaluate(() => window.__speechFades), [['usage', 1, 0], ['speech', 0, 1]], '换句未平滑过渡');
       await until(() => application.evaluate(() => !globalThis.__dragonGirlTest.bubbleVisible), '语录超过新期限仍未自动收起');
       await application.evaluate(() => {
         const c = globalThis.__dragonGirlTest;
         c.appearance.settings = { ...c.appearance.settings, pinnedBubble: true, bubbleSeconds: 1 };
       });
       await show(sample);
+      await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.locator('#message').click();
       await until(() => application.evaluate(() => globalThis.__dragonGirlTest.bubbleKind === 'speech'), '常驻用量未切换为语录');
       await new Promise((resolve) => setTimeout(resolve, 1100));
       assert.equal(await application.evaluate(() => globalThis.__dragonGirlTest.bubbleVisible), true, '常驻语录仍被自动收起');
+      assert.equal(await page.evaluate(() => window.__speechFades.length), 2, '减少动态效果时仍然播放换句动画');
       await page.locator('#bubble').press('Escape');
       await until(() => application.evaluate(() => !globalThis.__dragonGirlTest.bubbleVisible), '渲染层未处理注入的 Esc');
       await application.evaluate((_, settings) => { globalThis.__dragonGirlTest.appearance.settings = settings; }, settings);
