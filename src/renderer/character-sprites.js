@@ -2,10 +2,14 @@ import { MARO_ASSET, MARO_FRAME_SIZE, MARO_HAIR_ASSETS, HAIR_FRAMES, HAIR_DURATI
   HAIR_FRAME_TIMES, hairFrameAt, hairNodAt } from '../shared/characters.js';
 import { spritePalette, spriteColorLookup, applySpritePalette, spriteLandmarks,
   spriteRegistration, registeredSpriteRow } from '../shared/sprite-calibration.js';
+import { MARO_OUTFIT_OFFSETS, maroGroomingPose, maroOutfit } from '../shared/maro-outfits.js';
 import { createMaroEyes } from './maro-eyes.js';
+import { loadMaroOutfitLayer, paintMaroOutfitLayer } from './maro-outfit.js';
 
 const ROOT = 'dragon://app/assets/characters/maro/';
 const SIZE = MARO_FRAME_SIZE;
+const FULL_FRAME = [0, 0, SIZE, SIZE];
+const STILL_POSES = { idle: 'idle', happy: 'success', sad: 'failure' };
 
 // 麻吕使用独立原画与透明逐帧动画，绝不复用龙娘专用的眼睛贴片。
 export class CharacterSprites {
@@ -29,6 +33,7 @@ export class CharacterSprites {
     this.hairSource = 'idle';
     this.pendingExpression = null;
     this.eyes = createMaroEyes(character);
+    this.outfit = maroOutfit();
   }
 
   // 解码前验证每张图的原生尺寸，高清源图和显示画布都保持 1254 像素。
@@ -45,19 +50,20 @@ export class CharacterSprites {
   prepare() {
     if (this.loading) return this.loading;
     this.loading = (async () => {
-      const images = await Promise.all(['idle.png', 'success.png', 'failure.png'].map((name) => this.loadImage(ROOT + name)));
+      const poses = Object.entries(STILL_POSES);
+      const images = await Promise.all(poses.map(([, pose]) => this.loadImage(ROOT + pose + '.png')));
       if (this.destroyed) return;
       this.idleImage = images[0];
       const idle = this.rawFrame(images[0]);
       const referencePalette = spritePalette(idle.rgba.data);
-      this.stills = Object.fromEntries(['idle', 'happy', 'sad'].map((name, index) => {
+      this.stills = Object.fromEntries(poses.map(([name, pose], index) => {
         const raw = index === 0 ? idle : this.rawFrame(images[index]);
         // 点击完成和失败表情也使用待机色板，不能只校准捋发动画。
         if (index > 0) {
           applySpritePalette(raw.rgba.data, spriteColorLookup(spritePalette(raw.rgba.data), referencePalette, referencePalette));
           raw.context.putImageData(raw.rgba, 0, 0);
         }
-        const frame = this.makeFrame(raw.canvas, null, name === 'idle');
+        const frame = this.makeFrame(raw.canvas, null, pose);
         raw.canvas.width = raw.canvas.height = 1;
         return [name, frame];
       }));
@@ -87,7 +93,7 @@ export class CharacterSprites {
   }
 
   // 原画按高清尺寸缓存；命中图独立缩小以节省内存，不会降低显示图像的分辨率。
-  makeFrame(image, placement, keepPixels = false) {
+  makeFrame(image, placement, pose) {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = SIZE;
     const context = canvas.getContext('2d', { willReadFrequently: true });
@@ -110,7 +116,7 @@ export class CharacterSprites {
     for (let index = 0; index < alpha.length; index += 1) alpha[index] = rgba[index * 4 + 3];
     if (!alpha.some((value) => value > 24) || !alpha.some((value) => value === 0))
       throw new Error('麻吕素材缺少真实透明区域');
-    return { canvas, pixels: keepPixels ? context.getImageData(0, 0, SIZE, SIZE).data : null,
+    return { canvas, pose, pixels: pose === 'idle' ? context.getImageData(0, 0, SIZE, SIZE).data : null,
       mask: { width: 256, height: 256, alpha } };
   }
 
@@ -138,7 +144,8 @@ export class CharacterSprites {
         this.calibration[index] = { index, sourceWidth: image.naturalWidth, sourceHeight: image.naturalHeight,
           headOffsetY, placement, landmarks };
         // 首尾直接使用待机原画，进入和退出动作时不会切换脸型、位置或清晰度。
-        this.hair[index] = index === 0 || index === HAIR_FRAMES - 1 ? idle : this.makeFrame(canvas, placement);
+        this.hair[index] = index === 0 || index === HAIR_FRAMES - 1
+          ? idle : this.makeFrame(canvas, placement, maroGroomingPose(index));
         canvas.width = canvas.height = 1;
         image.src = '';
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -167,11 +174,15 @@ export class CharacterSprites {
       this.canvas.hidden = true;
       this.portrait.style.visibility = '';
       this.lastPaint = null;
+      this.outfitRequest = this.outfitLayers = null;
+      this.outfit = maroOutfit();
       delete this.character.dataset.spriteState;
       delete this.character.dataset.spriteFrame;
+      delete this.character.dataset.outfit;
       this.onMask(null);
       return;
     }
+    this.configureOutfit();
     if (!this.loaded) {
       if (!this.preparing) {
         this.preparing = true;
@@ -191,12 +202,42 @@ export class CharacterSprites {
       this.cancel();
       this.state = 'idle';
     }
-    this.paint(this.state === 'hair' ? this.hair[this.hairIndex || 0] : this.stills[this.state]);
+    this.paintCurrent();
     if (!this.canGroom()) {
       clearTimeout(this.idleTimer);
       this.idleTimer = 0;
     }
     this.scheduleIdle();
+  }
+
+  // 所有换装帧到齐后一次提交；加载期间继续显示上一套，正在播放的动作保持进度。
+  configureOutfit() {
+    const outfit = maroOutfit(this.model.appearance?.settings?.maroOutfitId);
+    if (this.outfitRequest?.outfit === outfit) return;
+    const request = { outfit };
+    this.outfitRequest = request;
+    if (outfit === this.outfit) return;
+    if (!outfit.layerDirectory) {
+      this.outfit = outfit;
+      this.outfitLayers = null;
+      return;
+    }
+    const poses = Object.keys(MARO_OUTFIT_OFFSETS);
+    void Promise.all(poses.map(async (pose) => [pose, await loadMaroOutfitLayer(outfit, pose)]))
+      .then((layers) => {
+        if (this.destroyed || this.outfitRequest !== request) return;
+        this.outfit = outfit;
+        this.outfitLayers = new Map(layers);
+        if (this.loaded) this.paintCurrent();
+      })
+      .catch((error) => {
+        if (this.outfitRequest === request) console.warn('麻吕服装素材暂不可用：', error.message);
+      });
+  }
+
+  // 应用服饰和普通布局更新都使用同一幅当前帧，完成与失败的停留时间沿用原计时器。
+  paintCurrent() {
+    this.paint(this.state === 'hair' ? this.hair[this.hairIndex] : this.stills[this.state]);
   }
 
   // 主进程发送的全屏鼠标坐标同样传给麻吕，包含窗口外和副屏负坐标。
@@ -298,15 +339,21 @@ export class CharacterSprites {
     this.canvas.hidden = false;
     this.portrait.style.visibility = 'hidden';
     this.character.dataset.spriteState = this.state;
+    this.character.dataset.outfit = this.outfit.id;
     if (this.state === 'hair') this.character.dataset.spriteFrame = String(this.hairIndex);
     else delete this.character.dataset.spriteFrame;
     this.syncEyes();
-    if (this.lastPaint === frame) return;
+    const frameChanged = this.lastPaint !== frame;
+    if (!frameChanged && this.lastPaintOutfit === this.outfit) return;
     this.lastPaint = frame;
-    this.context.clearRect(0, 0, SIZE, SIZE);
+    this.lastPaintOutfit = this.outfit;
+    // 同一姿势中换衣只重绘衣料矩形，头部画布与命中蒙版沿用当前帧。
+    const [x, y, width, height] = frameChanged ? FULL_FRAME : MARO_OUTFIT_OFFSETS[frame.pose];
+    this.context.clearRect(x, y, width, height);
     this.context.imageSmoothingQuality = 'high';
-    this.context.drawImage(frame.canvas, 0, 0);
-    this.onMask(frame.mask);
+    this.context.drawImage(frame.canvas, x, y, width, height, x, y, width, height);
+    paintMaroOutfitLayer(this.context, this.outfitLayers?.get(frame.pose));
+    if (frameChanged) this.onMask(frame.mask);
   }
 
   // 完成或中断后恢复同一张待机原画，不将最后一张动作帧误留在桌面。
@@ -331,6 +378,7 @@ export class CharacterSprites {
     this.eyes.reset();
     for (const patch of this.eyes.patches) patch.canvas.remove();
     this.pendingExpression = null;
+    this.outfitRequest = this.outfitLayers = null;
     this.cancel();
     for (const frame of new Set([...(this.hair || []), ...Object.values(this.stills || {})])) {
       if (frame) frame.canvas.width = frame.canvas.height = 1;

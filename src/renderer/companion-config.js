@@ -1,7 +1,10 @@
 import { CHARACTERS, characterById } from '../shared/characters.js';
-import { DRAGON_GEAR, dragonEyeTone, dragonHairstyle } from '../shared/dragon-gear.js';
+import { DRAGON_GEAR, dragonEyeTone, dragonHairstyle, dragonOutfit } from '../shared/dragon-gear.js';
+import { KANNA_OUTFITS, kannaOutfit } from '../shared/kanna-outfits.js';
 import { loadDragonPortrait, paintDragonPortrait } from './dragon-portrait.js';
 import { EYE_ARTWORK } from '../shared/gaze.js';
+import { MARO_OUTFITS, maroOutfit } from '../shared/maro-outfits.js';
+import { loadMaroOutfitLayer, paintMaroOutfitLayer } from './maro-outfit.js';
 
 const ASSET_ORIGIN = 'dragon://app/';
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -22,9 +25,10 @@ const ORIGINAL_GEAR = {
       { id: 'tuft', label: '翘发', target: [278, 152] },
       { id: 'eyes', label: '瞳孔', target: [440, 620] },
       { id: 'hair', label: '发型', target: [843, 272] },
-      { id: 'clothes', label: '服饰', target: [686, 932] },
+      { id: 'clothes', label: '服饰', target: [686, 932], setting: 'maroOutfitId', choices: MARO_OUTFITS },
     ],
   },
+  // 兔帽、瞳孔、发饰和服饰各用原版部件，连线沿用原画坐标。
   kokkoro: {
     size: [1299, 1211],
     parts: [
@@ -41,7 +45,7 @@ const ORIGINAL_GEAR = {
       { id: 'horns', label: '龙角', target: [265, 287] },
       { id: 'eyes', label: '瞳孔', target: [452, 682] },
       { id: 'beads', label: '发珠', target: [1005, 999] },
-      { id: 'clothes', label: '服饰', target: [740, 1164] },
+      { id: 'clothes', label: '服饰', target: [740, 1164], setting: 'kannaOutfitId', choices: KANNA_OUTFITS },
     ],
   },
 };
@@ -89,7 +93,16 @@ export class CompanionConfigView {
     this.chooser = root.querySelector('#companion-chooser');
     this.wardrobe = root.querySelector('.dragon-wardrobe');
     this.columns = [root.querySelector('#dragon-equipment-left'), root.querySelector('#dragon-equipment-right')];
+    this.picker = root.querySelector('.dragon-gear-picker');
     this.options = root.querySelector('#dragon-gear-options');
+    this.previousPage = this.picker.querySelector('[data-page="previous"]');
+    this.nextPage = this.picker.querySelector('[data-page="next"]');
+    // 翻页和触控板滚动只浏览卡片，服饰选择继续由卡片本身提交。
+    this.previousPage.addEventListener('click', () => this.pageOutfits(-1));
+    this.nextPage.addEventListener('click', () => this.pageOutfits(1));
+    this.options.addEventListener('scroll', () => this.updateOutfitPages(), { passive: true });
+    this.options.addEventListener('keydown', (event) => this.focusOutfit(event));
+    new ResizeObserver(() => this.updateOutfitPages()).observe(this.picker);
     this.portrait = root.querySelector('#dragon-config-portrait');
     this.slots = new Map();
     this.characterButtons = new Map();
@@ -120,7 +133,7 @@ export class CompanionConfigView {
     this.update(settings);
   }
 
-  // 角色改变时重建四张部件卡，立绘和连线都以该角色的原生画幅定位。
+  // 角色改变时重建部件卡，立绘和连线都以该角色的原生画幅定位。
   renderCharacter(character) {
     this.character = character;
     // 以当前预览角色为准，为头像小卡、部件卡和连线提供同一套配色。
@@ -136,14 +149,15 @@ export class CompanionConfigView {
     this.portrait.setAttribute('aria-label', character.name + '外观预览');
     delete this.portrait.dataset.asset;
     delete this.portrait.dataset.hairstyle;
+    delete this.portrait.dataset.outfit;
     delete this.portrait.dataset.tone;
     this.eyeTone = undefined;
     this.preview = null;
 
-    // 每个固定部件只展示原版，分类卡和展开项读取同一张角色专属缩略图。
+    // 固定部件沿用原版图，可切换的服饰从内置清单读取。
     const gear = original ? original.parts.map((part) => ({
       ...part,
-      choices: [{ name: '原版' + part.label, icon: `assets/characters/${character.id}/gear/${part.id}.webp` }],
+      choices: part.choices ?? [{ name: '原版' + part.label, icon: `assets/characters/${character.id}/gear/${part.id}.webp` }],
     })) : DRAGON_GEAR;
     for (const [index, slot] of gear.entries()) {
       const { tile, visual, image } = gearView('dragon-slot', 'button', slot.choices[0], slot.label);
@@ -152,9 +166,9 @@ export class CompanionConfigView {
       tile.setAttribute('aria-expanded', 'false');
       tile.addEventListener('click', () => {
         this.showSlot(this.activeSlot === slot ? null : slot);
-        if (character.id === 'dragon') this.updateDragonGear();
+        this.updateGear();
       });
-      // 龙娘的瞳孔附加自选色标记，发型显示当前款式的缩略图。
+      // 龙娘的瞳孔附加自选色标记，各款发型和服饰直接显示对应缩略图。
       if (slot.setting === 'dragonEyeId') {
         this.eyeSwatch = document.createElement('span');
         this.eyeSwatch.className = 'dragon-gear-swatch';
@@ -162,10 +176,9 @@ export class CompanionConfigView {
         this.eyeSwatch.setAttribute('aria-hidden', 'true');
         visual.append(this.eyeSwatch);
       }
-      if (slot.setting === 'dragonHairstyleId') this.hairIcon = image;
       const left = index < 2;
       this.columns[left ? 0 : 1].append(tile);
-      this.slots.set(slot.id, { tile, ...addGearLink(tile), left, target: slot.target ?? GEAR_TARGETS[slot.id] });
+      this.slots.set(slot.id, { tile, image, ...addGearLink(tile), left, target: slot.target ?? GEAR_TARGETS[slot.id] });
     }
     this.updateGearLinks();
   }
@@ -191,35 +204,96 @@ export class CompanionConfigView {
     this.slots.get(this.activeSlot?.id)?.tile.setAttribute('aria-expanded', 'false');
     this.activeSlot = slot;
     this.draftColor = null;
-    this.options.hidden = !this.activeSlot;
+    this.picker.hidden = !slot;
+    this.picker.toggleAttribute('data-outfits', slot?.setting === 'dragonOutfitId');
+    this.picker.removeAttribute('data-paged');
     this.options.replaceChildren();
     this.color = null;
-    this.hairOptions = null;
+    this.choiceOptions = null;
     if (!slot) return;
     this.slots.get(slot.id).tile.setAttribute('aria-expanded', 'true');
     this.options.setAttribute('aria-label', slot.setting ? '选择' + slot.label : slot.label + '原版');
     if (slot.setting === 'dragonEyeId') {
       this.showEyeOptions(slot);
-    } else if (slot.setting === 'dragonHairstyleId') {
-      this.showHairstyleOptions(slot);
+    } else if (slot.setting) {
+      this.showGearOptions(slot);
     } else {
       const { tile } = gearView('dragon-gear-option', 'div', slot.choices[0]);
       tile.dataset.selected = '';
       this.options.append(tile);
     }
     if (this.pending) this.setOptionsDisabled(true);
+    if (slot.setting === 'dragonOutfitId') {
+      this.options.scrollTo({ left: 0, behavior: 'instant' });
+      this.updateOutfitPages();
+    }
   }
 
-  // 每张发型缩略图都是可用键盘操作的按钮，已选款式无需再次保存。
-  showHairstyleOptions(slot) {
-    this.hairOptions = new Map();
+  // 按整行可用宽度判断是否需要箭头，按钮出现后再用实际视口计算两个端点。
+  updateOutfitPages() {
+    if (this.activeSlot?.setting !== 'dragonOutfitId' || !this.picker.clientWidth) return;
+    const row = this.options;
+    const paged = row.scrollWidth > this.picker.clientWidth + 1;
+    const wasPaged = this.picker.hasAttribute('data-paged');
+    this.picker.toggleAttribute('data-paged', paged);
+    if (!paged) return;
+    // 宽窗口原本能展示全部服饰，缩窄后让正在穿的那套继续可见。
+    if (!wasPaged) {
+      const selected = row.querySelector('[aria-pressed="true"]');
+      if (selected) this.revealOutfit(selected);
+    }
+    const atStart = String(row.scrollLeft <= 1);
+    const atEnd = String(row.scrollLeft + row.clientWidth >= row.scrollWidth - 1);
+    if (this.previousPage.ariaDisabled !== atStart) this.previousPage.ariaDisabled = atStart;
+    if (this.nextPage.ariaDisabled !== atEnd) this.nextPage.ariaDisabled = atEnd;
+  }
+
+  // 翻到相邻的一屏，最后一屏未排满时向左仍回到上一屏的起点。
+  pageOutfits(direction) {
+    const button = direction < 0 ? this.previousPage : this.nextPage;
+    if (button.ariaDisabled === 'true') return;
+    const row = this.options;
+    const page = direction < 0
+      ? Math.ceil((row.scrollLeft - 1) / row.clientWidth) - 1
+      : Math.floor((row.scrollLeft + 1) / row.clientWidth) + 1;
+    row.scrollTo({ left: page * row.clientWidth, behavior: 'instant' });
+    this.updateOutfitPages();
+  }
+
+  // 仅在卡片越过可见边缘时横向滚动，保持预览在页面上的位置。
+  revealOutfit(tile) {
+    const box = tile.getBoundingClientRect(), viewport = this.options.getBoundingClientRect();
+    if (box.left < viewport.left || box.right > viewport.right)
+      tile.scrollIntoView({ block: 'nearest', inline: 'nearest', container: 'nearest', behavior: 'instant' });
+  }
+
+  // 方向键在卡片之间移动焦点，回车或空格沿用按钮原有的试穿操作。
+  focusOutfit(event) {
+    if (this.activeSlot?.setting !== 'dragonOutfitId' || event.altKey || event.ctrlKey || event.metaKey) return;
+    const tile = event.target.closest('.dragon-gear-option');
+    if (!tile) return;
+    const neighbors = { ArrowLeft: tile.previousElementSibling, ArrowRight: tile.nextElementSibling,
+      Home: this.options.firstElementChild, End: this.options.lastElementChild };
+    if (!Object.hasOwn(neighbors, event.key)) return;
+    event.preventDefault();
+    const next = neighbors[event.key];
+    if (next) {
+      next.focus({ preventScroll: true });
+      this.revealOutfit(next);
+    }
+  }
+
+  // 发型和服饰共用键盘可操作的款式按钮，保存时只提交当前部件。
+  showGearOptions(slot) {
+    const characterId = this.character.id;
+    this.choiceOptions = new Map();
     for (const item of slot.choices) {
       const { tile } = gearView('dragon-gear-option', 'button', item);
       tile.addEventListener('click', () => {
         if (tile.getAttribute('aria-pressed') !== 'true')
-          void this.commit(() => this.saveGear({ slotId: slot.id, itemId: item.id }));
+          void this.commit(() => this.saveGear({ characterId, slotId: slot.id, itemId: item.id }));
       });
-      this.hairOptions.set(item.id, tile);
+      this.choiceOptions.set(item.id, tile);
       this.options.append(tile);
     }
   }
@@ -267,22 +341,45 @@ export class CompanionConfigView {
       const pressed = String(id === character.id && !settings.characterAsset);
       if (button.getAttribute('aria-pressed') !== pressed) button.setAttribute('aria-pressed', pressed);
     }
-    if (character.id === 'dragon') this.updateDragonGear();
-    else this.queuePreview({ image: character.image });
+    this.updateGear();
   }
 
-  // 仅为龙娘更新发型按钮、瞳色标记和配色预览。
-  updateDragonGear() {
-    const settings = this.settings;
-    const hairstyle = dragonHairstyle(settings.dragonHairstyleId);
-    const icon = ASSET_ORIGIN + hairstyle.icon;
-    if (this.hairIcon.src !== icon) this.hairIcon.src = icon;
-    for (const [id, tile] of this.hairOptions ?? []) {
-      const selected = id === hairstyle.id;
+  // 同步当前款式的缩略图与立绘，固定部件角色直接绘制原画。
+  updateGear() {
+    const { id, image } = this.character;
+    if (id === 'dragon') {
+      this.updateDragonGear();
+      return;
+    }
+    let outfit;
+    if (id === 'kanna') outfit = kannaOutfit(this.settings.kannaOutfitId);
+    if (id === 'maro') outfit = maroOutfit(this.settings.maroOutfitId);
+    if (outfit) this.updateChoice('clothes', outfit);
+    this.queuePreview({ image, outfit });
+  }
+
+  // 分类卡始终显示穿戴中的部件，只有展开的那一组需要同步按钮状态。
+  updateChoice(slotId, item) {
+    const image = this.slots.get(slotId).image;
+    const icon = ASSET_ORIGIN + item.icon;
+    if (image.src !== icon) image.src = icon;
+    if (this.activeSlot?.id !== slotId) return;
+    for (const [id, tile] of this.choiceOptions) {
+      const selected = id === item.id;
       if (tile.getAttribute('aria-pressed') === String(selected)) continue;
       tile.toggleAttribute('data-selected', selected);
       tile.setAttribute('aria-pressed', String(selected));
+      if (selected && slotId === 'clothes') this.revealOutfit(tile);
     }
+  }
+
+  // 独立读取发型、服饰和瞳色，让换装与调色共用同一张试穿预览。
+  updateDragonGear() {
+    const settings = this.settings;
+    const hairstyle = dragonHairstyle(settings.dragonHairstyleId);
+    const outfit = dragonOutfit(settings.dragonOutfitId);
+    this.updateChoice('hair', hairstyle);
+    this.updateChoice('clothes', outfit);
     const savedTone = dragonEyeTone(settings);
     if (this.eyeTone !== savedTone) {
       this.eyeTone = savedTone;
@@ -305,36 +402,43 @@ export class CompanionConfigView {
         picker.toggleAttribute('data-selected', tone !== null);
       }
     }
-    this.queuePreview({ image: hairstyle.image, hairstyle, tone });
+    this.queuePreview({ image: hairstyle.image, hairstyle, outfit, tone });
   }
 
   // 同一帧多次调色时只排队最后一个立绘请求。
   queuePreview(preview) {
-    if (this.preview?.image === preview.image && this.preview.tone === preview.tone) return;
+    if (this.preview?.image === preview.image && this.preview.outfit === preview.outfit && this.preview.tone === preview.tone) return;
     this.preview = preview;
     cancelAnimationFrame(this.previewFrame);
     this.previewFrame = requestAnimationFrame(() => void this.updatePortrait(preview));
   }
 
-  // 切换角色、发型或瞳色时只绘制最新的立绘请求，保留原画透明像素。
+  // 切换角色或装备时只绘制最新的立绘请求，保留原画透明像素。
   async updatePortrait(preview) {
-    const { image, hairstyle, tone } = preview;
+    const { image, hairstyle, outfit, tone } = preview;
     const asset = ASSET_ORIGIN + image;
     try {
       if (hairstyle) {
-        const portrait = await loadDragonPortrait(asset);
+        const portrait = await loadDragonPortrait(asset, outfit);
         if (this.preview !== preview) return;
         paintDragonPortrait(this.portrait, portrait, tone);
         this.portrait.dataset.hairstyle = hairstyle.id;
+        this.portrait.dataset.outfit = outfit.id;
         this.portrait.dataset.tone = tone ?? 'original';
       } else {
         const portrait = new Image();
-        portrait.src = asset;
-        await portrait.decode();
+        portrait.src = outfit?.image ? ASSET_ORIGIN + outfit.image : asset;
+        // 各角色预览沿用桌宠对应的成图，麻吕还要叠加待机衣料。
+        const [, layer] = await Promise.all([
+          portrait.decode(),
+          outfit?.layerDirectory ? loadMaroOutfitLayer(outfit, 'idle') : null,
+        ]);
         if (this.preview !== preview) return;
         const context = this.portrait.getContext('2d');
         context.clearRect(0, 0, this.portrait.width, this.portrait.height);
         context.drawImage(portrait, 0, 0);
+        paintMaroOutfitLayer(context, layer);
+        if (outfit) this.portrait.dataset.outfit = outfit.id;
       }
       this.portrait.dataset.asset = asset;
     } catch {

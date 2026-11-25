@@ -962,7 +962,15 @@
               </figure>
               <div class="dragon-equipment" id="dragon-equipment-right" role="group" aria-label="右侧装备"></div>
             </div>
-            <div class="dragon-gear-options" id="dragon-gear-options" role="group" hidden></div>
+            <div class="dragon-gear-picker" hidden>
+              <button type="button" class="dragon-outfit-page" data-page="previous" aria-label="上一页服饰" title="上一页服饰" aria-controls="dragon-gear-options">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5.5-6.5 6.5 6.5 6.5" /></svg>
+              </button>
+              <div class="dragon-gear-options" id="dragon-gear-options" role="group"></div>
+              <button type="button" class="dragon-outfit-page" data-page="next" aria-label="下一页服饰" title="下一页服饰" aria-controls="dragon-gear-options">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 5.5 6.5 6.5-6.5 6.5" /></svg>
+              </button>
+            </div>
           </section>
           <footer class="page-footer"><span id="updated"></span></footer>
         </div>

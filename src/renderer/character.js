@@ -9,17 +9,18 @@ import { CharacterSprites } from './character-sprites.js';
 import { PortraitFace } from './portrait-face.js';
 import { PORTRAIT_ARTWORK } from './portrait-artwork.js';
 import { REST_POSE } from './portrait-motion.js';
-import { characterByAsset, isCharacterMenuPoint, isDragonAsset } from '../shared/characters.js';
+import { KANNA_ASSET, characterByAsset, isCharacterMenuPoint, isDragonAsset } from '../shared/characters.js';
 import { EYE_ARTWORK } from '../shared/gaze.js';
 import { isDragonFace } from '../shared/expression.js';
-import { dragonEyeTone } from '../shared/dragon-gear.js';
-import { loadDragonPortrait, tintedDragonPortrait } from './dragon-portrait.js';
+import { DRAGON_PRAYER_EYES, dragonEyeTone, dragonHairstyle, dragonOutfit } from '../shared/dragon-gear.js';
+import { kannaOutfit } from '../shared/kanna-outfits.js';
+import { loadDragonPortrait, tintedDragonPortrait, tintDragonEyes } from './dragon-portrait.js';
 
 // 将短过渡计入原来的祈祷时长，中间停留在定稿姿势。
 const PRAYER_DURATION = 2400;
 const PRAYER_ENTER = 360;
 const PRAYER_EXIT = 320;
-// 半闭眼与闭眼共用眼区，合掌期间保留当前发型。
+// 眼部图集两列分别是闭眼与半闭眼，两行分别适配长鬓前发与齐刘海。
 const PRAYER_EYE_AREA = [319, 602, 718, 273];
 const bridge = window.dragonGirl;
 const stage = document.getElementById('stage');
@@ -56,8 +57,8 @@ let renderedPose = pose;
 let lastCursor = null;
 let lastInteractive = null;
 let prayerReady = false;
-let prayerMotionReady = false;
 let prayerEyes;
+let prayerRow;
 let dragonActionsReady;
 let prayerTone;
 let prayerProgress = null;
@@ -115,27 +116,22 @@ function routeCursor(point) {
 
 // 提前解码闭眼、半闭眼和手部图层，尺寸一致才可在原画坐标中合成。
 async function preparePrayer() {
-  const sources = ['codex-dragon-girl-prayer.png', 'codex-dragon-girl-prayer-half.png'];
-  prayerEyes = sources.map((file) => {
-    const image = new Image();
-    image.src = new URL('../../assets/characters/' + file, import.meta.url).href;
-    return image;
-  });
+  prayerEyes = new Image();
+  prayerEyes.src = new URL('../../' + DRAGON_PRAYER_EYES, import.meta.url).href;
   const hands = prayerHands.firstElementChild;
   hands.src = new URL('../../assets/characters/codex-dragon-girl-prayer-hands.png', import.meta.url).href;
-  const images = [...prayerEyes, hands];
-  const results = await Promise.allSettled(images.map((image) => image.decode()));
-  const [portraitReady, halfReady, handsReady] = images.map((image, index) =>
-    results[index].status === 'fulfilled'
-      && image.naturalWidth === EYE_ARTWORK.width && image.naturalHeight === EYE_ARTWORK.height);
-  prayerReady = portraitReady && handsReady;
-  prayerMotionReady = halfReady && handsReady;
-  if (prayerMotionReady) {
-    prayerHalf.width = EYE_ARTWORK.width;
-    prayerHalf.height = EYE_ARTWORK.height;
+  const decoded = await Promise.allSettled([prayerEyes.decode(), hands.decode()]);
+  prayerReady = decoded.every(({ status }) => status === 'fulfilled')
+    && prayerEyes.naturalWidth === PRAYER_EYE_AREA[2] * 2 && prayerEyes.naturalHeight === PRAYER_EYE_AREA[3] * 2
+    && hands.naturalWidth === EYE_ARTWORK.width && hands.naturalHeight === EYE_ARTWORK.height;
+  if (!prayerReady) {
+    console.warn('无法加载祈祷表情素材');
+    return;
   }
-  if (!prayerReady) console.warn('无法加载祈祷表情素材');
-  else if (!prayerMotionReady) console.warn('无法加载祈祷动作素材');
+  for (const canvas of [prayerPortrait, prayerHalf]) {
+    canvas.width = EYE_ARTWORK.width;
+    canvas.height = EYE_ARTWORK.height;
+  }
 }
 
 // 只在已解码的内置龙娘可见时播放，按压、换图或关闭动态表情都会结束预览。
@@ -147,7 +143,7 @@ function canPray() {
 
 // 动作素材齐全且应用动画已开启时，才启用光束与合掌过渡。
 function canAnimatePrayer() {
-  return prayerMotionReady && layout.appearance?.settings?.motion !== false;
+  return prayerReady && layout.appearance?.settings?.motion !== false;
 }
 
 // 集中取消待机计时和过渡帧，连选时直接接上当前动作进度。
@@ -174,7 +170,7 @@ function paintPrayer(progress) {
   const closed = progress >= 0.42;
   // 光随抬手出现，放手时一起淡出，合掌期间由样式驱动光束。
   character.style.setProperty('--prayer-energy-opacity', String(progress));
-  prayerHalf.toggleAttribute('hidden', !prayerMotionReady || progress < 0.12 || closed);
+  prayerHalf.toggleAttribute('hidden', progress < 0.12 || closed);
   prayerPortrait.toggleAttribute('hidden', !closed);
   const lift = Math.max(0, (progress - 0.12) / 0.88);
   prayerHands.style.setProperty('--prayer-hands-offset', `${19 * (1 - lift)}%`);
@@ -288,37 +284,51 @@ function configureEyes() {
   portraitFace?.configure(decodedPortrait, layout, gazePose, reducedMotion.matches, pressed);
 }
 
-// 发型随立绘地址一起参与缓存，瞳色单独参与绘制。
-function portraitKey(model) {
-  const tone = isDragonAsset(model.asset) ? dragonEyeTone(model.appearance?.settings) : null;
-  return `${model.asset}|${tone ?? ''}`;
+// 原画地址决定发型，服饰决定轮廓，瞳色决定虹膜。启动和热切换使用同一个绘制标识。
+function portraitRequest(model) {
+  const settings = model.appearance?.settings;
+  const outfit = isDragonAsset(model.asset) ? dragonOutfit(settings?.dragonOutfitId) : null;
+  const kanna = model.asset === KANNA_ASSET ? kannaOutfit(settings?.kannaOutfitId) : null;
+  const tone = outfit ? dragonEyeTone(settings) : null;
+  return { outfit, kanna, tone, key: `${model.asset}|${(outfit ?? kanna)?.id ?? ''}|${tone ?? ''}` };
 }
 
-// 内置龙娘复用合成画布。普通图片解码后直接显示，两种来源都只加载一次。
-async function preparePortrait(asset) {
-  if (isDragonAsset(asset)) {
-    // 首次选中龙娘时并行准备原画和专属动作，换发型复用已解码的泪眼及合掌图层。
+// 龙娘沿用发型服饰合成，康娜穿不同衣服时继续使用原画取样眼脸。
+async function preparePortrait(asset, { outfit, kanna }) {
+  if (outfit) {
+    // 首次选择龙娘时才解码专属动作，之后的发型与服饰组合复用同一份眼睑和手部素材。
     dragonActionsReady ??= Promise.all([eyes.prepareSad(), preparePrayer()]);
-    const [image] = await Promise.all([loadDragonPortrait(asset), dragonActionsReady]);
-    return image;
+    const [image] = await Promise.all([loadDragonPortrait(asset, outfit), dragonActionsReady]);
+    return { raw: image };
   }
-  const image = new Image();
-  image.src = asset;
-  await image.decode();
-  return image;
+  const cachedRaw = kanna && paintedAsset === asset ? decodedPortrait : null;
+  const raw = cachedRaw ?? new Image();
+  if (!cachedRaw) raw.src = asset;
+  // 康娜服饰图与她的原版立绘尺寸一致，可以继续使用原图的表情坐标。
+  const garment = kanna?.image ? new Image() : null;
+  if (garment) garment.src = new URL('../../' + kanna.image, import.meta.url).href;
+  const clothes = garment?.decode().then(() => garment);
+  const [, dressed] = await Promise.all([cachedRaw ? null : raw.decode(), clothes?.catch((error) => {
+    console.warn('角色服饰暂不可用：', error.message);
+    return null;
+  })]);
+  const aligned = dressed && (dressed.naturalWidth ?? dressed.width) === raw.naturalWidth
+    && (dressed.naturalHeight ?? dressed.height) === raw.naturalHeight;
+  return { raw, dressed: aligned ? dressed : null };
 }
 
-// 同时提交画面与透明命中，只调瞳色时复用透明度。
-function displayPortrait(raw, model, key) {
+// 新衣的透明轮廓用于鼠标命中，视线与表情继续从对应角色的原画取样。
+function displayPortrait({ raw, dressed }, model, { key, outfit, kanna, tone }) {
   const { asset } = model;
-  const dragon = isDragonAsset(asset);
-  const tone = dragon ? dragonEyeTone(model.appearance?.settings) : null;
-  const geometryChanged = !baseMask || raw !== decodedPortrait;
-  const nextMask = geometryChanged ? buildAlphaMask(raw) : baseMask;
-  const image = tintedDragonPortrait(raw, tone);
+  const outfitId = kanna ? (dressed ? kanna.id : 'original') : outfit?.id;
+  const geometryChanged = !baseMask || raw !== decodedPortrait
+    || (kanna && outfitId !== portraitArtwork?.dataset.outfit);
+  const nextMask = geometryChanged ? buildAlphaMask(dressed ?? raw) : baseMask;
+  const image = dressed ?? tintedDragonPortrait(raw, tone);
   image.id = 'portrait';
   image.dataset.asset = asset;
-  if (dragon) {
+  if (outfitId) image.dataset.outfit = outfitId;
+  if (outfit) {
     image.dataset.tone = tone ?? 'original';
     image.setAttribute('aria-hidden', 'true');
   } else {
@@ -330,35 +340,39 @@ function displayPortrait(raw, model, key) {
   decodedPortrait = raw;
   portraitArtwork = image;
   paintedAsset = asset;
-  if (dragon && prayerReady) preparePrayerFrames(tone);
+  if (outfit && prayerReady) {
+    const style = dragonHairstyle(model.appearance?.settings?.dragonHairstyleId);
+    preparePrayerFrames(style.shortForelock ? 1 : 0, tone);
+  }
   paintedKey = key;
   if (geometryChanged) mask = baseMask = nextMask;
   if (prayerProgress !== null) paintPrayer(prayerProgress);
 }
 
-// 两帧都只覆盖眼区，半闭帧随当前瞳色重绘。
-function preparePrayerFrames(tone) {
-  if (prayerPortrait.width !== EYE_ARTWORK.width) {
-    prayerPortrait.width = EYE_ARTWORK.width;
-    prayerPortrait.height = EYE_ARTWORK.height;
-    prayerPortrait.getContext('2d').drawImage(prayerEyes[0], ...PRAYER_EYE_AREA, ...PRAYER_EYE_AREA);
-  }
-  if (prayerMotionReady && prayerTone !== tone) {
-    const artwork = tintedDragonPortrait(prayerEyes[1], tone);
-    const context = prayerHalf.getContext('2d');
-    context.clearRect(...PRAYER_EYE_AREA);
-    context.drawImage(artwork, ...PRAYER_EYE_AREA, ...PRAYER_EYE_AREA);
-    prayerTone = tone;
-  }
+// 仅复制两只眼睛附近的不透明像素，让当前刘海、帽饰、领口自然露出。
+function paintPrayerEyes(canvas, column, row, tone) {
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  const [, , width, height] = PRAYER_EYE_AREA;
+  context.clearRect(...PRAYER_EYE_AREA);
+  context.drawImage(prayerEyes, column * width, row * height, width, height, ...PRAYER_EYE_AREA);
+  tintDragonEyes(context, tone);
+}
+
+// 换前发时同时换两帧，只调瞳色时重画仍露出虹膜的半闭帧。
+function preparePrayerFrames(row, tone) {
+  if (prayerRow !== row) paintPrayerEyes(prayerPortrait, 0, row, null);
+  if (prayerRow !== row || prayerTone !== tone) paintPrayerEyes(prayerHalf, 1, row, tone);
+  prayerRow = row;
+  prayerTone = tone;
 }
 
 // 只提交最后一次解码请求，在调色和读取命中图以前丢弃过期结果。
-async function loadPortrait(model, key) {
-  const request = assetLoading = { key };
+async function loadPortrait(model, request) {
+  assetLoading = request;
   try {
-    const raw = await preparePortrait(model.asset);
+    const picture = await preparePortrait(model.asset, request);
     if (assetLoading !== request) return;
-    displayPortrait(raw, model, key);
+    displayPortrait(picture, model, request);
     configureEyes();
     paintCharacter();
     routeCursor(lastCursor);
@@ -388,9 +402,9 @@ function applyLayout(model) {
   stage.dataset.status = model.appearance?.status || 'idle';
   const definition = characterByAsset(model.asset);
   stage.setAttribute('aria-label', `${definition?.name || '桌面角色'}，可以拖动，轻点说话，右键切换角色`);
-  const artworkKey = portraitKey(model);
-  if (paintedKey === artworkKey) assetLoading = null;
-  else if (assetLoading?.key !== artworkKey) void loadPortrait(model, artworkKey);
+  const request = portraitRequest(model);
+  if (paintedKey === request.key) assetLoading = null;
+  else if (assetLoading?.key !== request.key) void loadPortrait(model, request);
   paintPose(pose);
   character.style.left = `${model.rect.x}px`;
   character.style.top = `${model.rect.y}px`;
@@ -552,8 +566,9 @@ async function showExpression(message) {
 // 命中图先于窗口 ready 信号建立，启动时也不会短暂拦截透明区域。
 async function start() {
   const model = await bridge.bootstrap();
-  const picture = await preparePortrait(model.asset);
-  displayPortrait(picture, model, portraitKey(model));
+  const request = portraitRequest(model);
+  const picture = await preparePortrait(model.asset, request);
+  displayPortrait(picture, model, request);
   applyLayout(model);
   stage.dataset.gesture = 'idle';
   bridge.onSound((event) => {

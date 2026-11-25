@@ -3,7 +3,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { AUDIO_FILES } from '../src/shared/audio-library.js';
 import { CHARACTERS } from '../src/shared/characters.js';
-import { DRAGON_FOREGROUND, DRAGON_GEAR, DRAGON_HAIRSTYLES } from '../src/shared/dragon-gear.js';
+import { DRAGON_CROWN_MASK, DRAGON_FOREGROUND, DRAGON_GEAR, DRAGON_HAIRSTYLES, DRAGON_OUTFITS, DRAGON_PRAYER_EYES } from '../src/shared/dragon-gear.js';
+import { KANNA_OUTFITS, KANNA_OUTFIT_REGION } from '../src/shared/kanna-outfits.js';
+import { MARO_OUTFITS, MARO_OUTFIT_OFFSETS, maroOutfitLayer } from '../src/shared/maro-outfits.js';
 import { fileDigest } from '../src/core/file-digest.js';
 
 // 发布包只收录运行模块、内置角色、原声和出处。README 海报与开发验收文件留在仓库。
@@ -66,8 +68,18 @@ async function releaseFiles(root, nativeExtension) {
   const gearArtwork = new Set([
     ...CHARACTERS.flatMap(({ image, avatar }) => [image, avatar]),
     DRAGON_FOREGROUND,
-    ...DRAGON_HAIRSTYLES.flatMap(({ image, artwork }) => [image, artwork]),
+    DRAGON_PRAYER_EYES,
+    DRAGON_CROWN_MASK,
+    ...DRAGON_HAIRSTYLES.flatMap(({ image, artwork, temple, bodice }) => [image, artwork, temple, bodice]),
+    ...DRAGON_OUTFITS.flatMap(({ overlay, shortHem }) => overlay ? [overlay, shortHem] : []),
     ...DRAGON_GEAR.flatMap(({ choices }) => choices.map(({ icon }) => icon)),
+    KANNA_OUTFIT_REGION.mask,
+    ...KANNA_OUTFITS.map(({ icon }) => icon),
+    ...KANNA_OUTFITS.flatMap(({ image }) => image ? [image] : []),
+    // 麻吕的服饰逐帧覆盖捋发与任务表情，随应用打包全部必要素材。
+    ...MARO_OUTFITS.map(({ icon }) => icon),
+    ...MARO_OUTFITS.filter(({ layerDirectory }) => layerDirectory).flatMap((outfit) =>
+      Object.keys(MARO_OUTFIT_OFFSETS).map((pose) => maroOutfitLayer(outfit, pose))),
   ]);
   await Promise.all([...gearArtwork].map((file) => fs.access(path.join(root, file))));
   return [

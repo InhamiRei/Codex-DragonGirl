@@ -188,6 +188,9 @@ try {
     const image = document.getElementById('portrait');
     return image instanceof HTMLCanvasElement && image.width === 1330;
   }), '龙娘原画未解码');
+  // 原版龙娘就绪后换上南瓜发夹，再从发夹果实中央打开同一个角色菜单。
+  await appearance({ dragonOutfitId: 'pumpkin-witch' });
+  await page.locator('#portrait[data-outfit="pumpkin-witch"]').waitFor({ state: 'visible' });
   await page.bringToFront();
   const bounds = await application.evaluate(() => globalThis.__dragonGirlTest.windows.get('character').getContentBounds());
   await until(() => page.evaluate((bounds) => innerWidth === bounds.width && innerHeight === bounds.height

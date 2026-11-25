@@ -16,6 +16,8 @@ import { AccountTests } from '../core/account-tests.js';
 import { extractTestHtml } from '../shared/account-tests.js';
 import { CHARACTERS } from '../shared/characters.js';
 import { DRAGON_GEAR, parseDragonEyeColor } from '../shared/dragon-gear.js';
+import { kannaOutfit } from '../shared/kanna-outfits.js';
+import { findMaroOutfit } from '../shared/maro-outfits.js';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const DASHBOARD_URL = 'dragon://app/src/renderer/dashboard.html';
 // 用量气泡沿用自己的紧凑数字精度，同一进程中的多个角色共用格式器。
@@ -377,6 +379,26 @@ export class Dashboard {
     return settings;
   }
 
+  // 康娜的服饰单独保存，通过现有外观通道同步主桌宠和其他实例。
+  async selectKannaOutfit(id) {
+    const outfit = kannaOutfit(id);
+    if (outfit.id !== id) throw new Error('找不到可切换的康娜服饰');
+    const settings = await this.monitor.saveSettings((current) => ({ ...current, kannaOutfitId: outfit.id }),
+      { refreshUsage: false });
+    await this.updatePets();
+    return settings;
+  }
+
+  // 接受旧款编号并保存对应的重绘款，通过现有外观通道同步所有窗口。
+  async selectMaroOutfit(id) {
+    const outfit = findMaroOutfit(id);
+    if (!outfit) throw new Error('找不到可切换的麻吕服饰');
+    const settings = await this.monitor.saveSettings((current) => ({ ...current, maroOutfitId: outfit.id }),
+      { refreshUsage: false });
+    await this.updatePets();
+    return settings;
+  }
+
   // 跟随模式取所属宿主，桌面模式优先取前台 Codex，找不到有效窗口时不创建特效层。
   prayerWaveTarget(pet) {
     const hosts = this.monitor.processes;
@@ -547,6 +569,8 @@ export class Dashboard {
       return this.monitor.settings;
     }
     if (command === 'dragon-equipment') return this.selectDragonGear(value ?? undefined);
+    if (command === 'kanna-outfit') return this.selectKannaOutfit(value);
+    if (command === 'maro-outfit') return this.selectMaroOutfit(value);
     // 界面版本来自当前运行的应用元数据，发行升级后无需再手动修改页面文案。
     if (command === 'snapshot') return { ...this.monitor.snapshot(), appearance: this.primary.state, appVersion: app.getVersion() };
     if (command === 'refresh') return this.monitor.refreshAll();
@@ -560,12 +584,15 @@ export class Dashboard {
       return true;
     }
     if (command === 'settings' || command === 'replace-settings') {
-      // 普通表单保留最新的拖动位置和龙娘外观，避免旧草稿覆盖刚应用的发型与瞳色。
+      // 普通表单保留最新的拖动位置和桌宠外观，避免旧草稿覆盖刚应用的装备。
       const persist = (settings) => this.monitor.saveSettings(command === 'replace-settings'
         ? settings : (current) => ({
             ...settings,
             followOffsets: current.followOffsets,
+            kannaOutfitId: current.kannaOutfitId,
+            maroOutfitId: current.maroOutfitId,
             dragonHairstyleId: current.dragonHairstyleId,
+            dragonOutfitId: current.dragonOutfitId,
             dragonEyeId: current.dragonEyeId,
             dragonEyeColor: current.dragonEyeColor,
           }));

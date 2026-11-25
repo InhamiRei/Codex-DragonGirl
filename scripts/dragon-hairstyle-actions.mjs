@@ -67,6 +67,25 @@ async function look(application, pet, direction) {
   }), EYE_ARTWORK.eyes);
 }
 
+// 随视线转向时露出的呆毛会摆动，帽顶和耳侧的小发夹固定在原位。
+async function verifyHeadwearDuringTurn(pet, outfit) {
+  const [tuftMoved, pinMoved] = await pet.locator('#dragon-motion:not([hidden])').evaluate((canvas) => {
+    const { width, height } = canvas;
+    const reference = new OffscreenCanvas(width, height).getContext('2d');
+    reference.imageSmoothingQuality = 'high';
+    reference.drawImage(document.getElementById('portrait'), 0, 0, width, height);
+    const moving = canvas.getContext('2d');
+    return [[579, 8, 314, 206], [1013, 524, 172, 121]].map(([x, y, w, h]) => {
+      const area = [Math.floor(x * width / 1330), Math.floor(y * height / 1182),
+        Math.ceil(w * width / 1330), Math.ceil(h * height / 1182)];
+      const still = reference.getImageData(...area).data;
+      return moving.getImageData(...area).data.some((value, i) => Math.abs(value - still[i]) > 16);
+    });
+  });
+  assert.equal(tuftMoved, !outfit.hat, outfit.name + '转向时帽顶或呆毛的动作不正确');
+  assert.equal(pinMoved, false, outfit.name + '转向时耳侧的装饰发生了位移');
+}
+
 // 比较不参与耳朵和发梢变形的发型区域，防止表情画布错用其他发型的立绘。
 async function verifyHairLayer(pet, selector, name) {
   const layer = pet.locator(selector);
@@ -92,6 +111,16 @@ async function verifyHairLayer(pet, selector, name) {
         }
       }
     }
+    // 除蛋包饭的盘子外，领口与胸针都应沿用试穿后的颜色。
+    if (action !== 'omurice') {
+      for (let y = 1040; y < 1150; y += 8) {
+        for (let x = 590; x < 741; x += 8) {
+          const at = (Math.floor(y * height / 1182) * width + Math.floor(x * width / 1330)) * 4;
+          sampled++;
+          if ([0, 1, 2].some((channel) => Math.abs(original[at + channel] - painted[at + channel]) > 48)) changed++;
+        }
+      }
+    }
     return { sampled, changed };
   }, name);
   assert.ok(changed / sampled < 0.02, name + ' 播放时发型轮廓改变：' + changed + '/' + sampled);
@@ -113,7 +142,7 @@ async function verifyPrayer(application, pet) {
       const observer = new MutationObserver(() => {
         if (canvas.hidden) return;
         const context = canvas.getContext('2d');
-        window.__hairstylePrayerFrames[id] = [[95, 421], [1216, 1019], [490, 714]].map(([x, y]) =>
+        window.__hairstylePrayerFrames[id] = [[95, 421], [1216, 1019], [635, 634], [1023, 664], [490, 714]].map(([x, y]) =>
           context.getImageData(x, y, 1, 1).data[3]);
       });
       observer.observe(canvas, { attributes: true, attributeFilter: ['hidden'] });
@@ -127,19 +156,21 @@ async function verifyPrayer(application, pet) {
   const frames = await pet.evaluate(() => window.__hairstylePrayerFrames);
   for (const id of ['prayer-half', 'prayer-portrait']) {
     const alpha = frames[id];
-    assert.ok(alpha && alpha[0] === 0 && alpha[1] === 0 && alpha[2] > 220,
+    assert.ok(alpha && alpha.slice(0, 4).every((value) => value === 0) && alpha[4] > 220,
       '合掌眼睑没有在预期位置绘制：' + JSON.stringify(frames));
   }
 }
 
 // 对当前选中的发型逐一检查视线、轻戳、自然眨眼、各个表情、合掌与镜像。
-export async function verifyHairstyleActions(application, pet) {
+export async function verifyHairstyleActions(application, pet, outfit) {
   await configureActions(application, {
     motion: true, eyeTracking: true, blinkEnabled: false, expressionsEnabled: true, autoFlip: false, flip: false,
   });
   const left = await look(application, pet, -1);
   const right = await look(application, pet, 1);
   assert.ok(right.every((x, index) => x - left[index] > 0.015), '两眼没有随光标向右移动：' + JSON.stringify({ left, right }));
+  if (outfit.hat || outfit.id === 'pumpkin-witch' || outfit.id === 'gingerbread-baker')
+    await verifyHeadwearDuringTurn(pet, outfit);
 
   await configureActions(application, { eyeTracking: false });
   await pet.locator('#dragon-motion').waitFor({ state: 'hidden' });
