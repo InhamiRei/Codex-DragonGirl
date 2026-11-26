@@ -8,6 +8,7 @@ import test from 'node:test';
 import { Worker } from 'node:worker_threads';
 import { normalizeSettings } from '../src/core/settings.js';
 import { Monitor } from '../src/main/monitor.js';
+import { completionBubble } from '../src/shared/presentation.js';
 
 // 生成真实 JSONL 结构，避免提醒监听依赖模拟的日志解析器。
 function logLine(type, payload, timestamp = new Date().toISOString(), ordinal) {
@@ -17,6 +18,16 @@ function logLine(type, payload, timestamp = new Date().toISOString(), ordinal) {
 // 主任务和子代理使用同一种任务结果，子代理身份来自会话首行。
 function finish(turn, timestamp) {
   return logLine('event_msg', { type: 'task_complete', turn_id: turn }, timestamp);
+}
+
+// 新旧日志共享计数字段，缓存始终包含在输入内。
+function usage(input, output, cached) {
+  return { input_tokens: input, output_tokens: output, cached_input_tokens: cached, total_tokens: input + output };
+}
+
+// 旧版 Codex 在本轮期间保存会话累计。
+function legacyUsage(total, timestamp) {
+  return logLine('event_msg', { type: 'token_count', info: { total_token_usage: total } }, timestamp);
 }
 
 // 采用 Codex 的日期目录布局，核对跨日路径使用的本地日期。
@@ -145,7 +156,8 @@ test('独立监听跳过旧完成，及时发现短会话且不依赖账本进�
   await fs.mkdir(sessions, { recursive: true });
   const old = new Date(Date.now() - 10000).toISOString();
   await fs.writeFile(resumed, logLine('session_meta', { id: 'resumed' }, old)
-    + finish('history', old) + logLine('event_msg', { type: 'task_started', turn_id: 'resumed-turn' }, old));
+    + legacyUsage(usage(1000, 200, 500), old) + finish('history', old)
+    + logLine('event_msg', { type: 'task_started', turn_id: 'resumed-turn' }, old));
   await monitor.settingsStore.save({ manualHomes: [home], notifications: false });
   const notices = [];
   monitor.on('notice', (notice) => notices.push(notice));
@@ -166,10 +178,23 @@ test('独立监听跳过旧完成，及时发现短会话且不依赖账本进�
   await fs.writeFile(child, logLine('session_meta', { id: 'child', source: { subagent: {} } })
     + logLine('token_usage_record', { response_id: 'child-request', usage: { total_tokens: 42 } })
     + finish('child-turn'));
+  const turnId = 'short-turn';
   await fs.writeFile(short, logLine('session_meta', { id: 'short' })
-    + logLine('event_msg', { type: 'error', turn_id: 'short-turn' }) + finish('short-turn'));
+    + logLine('event_msg', { type: 'task_started', turn_id: turnId })
+    + logLine('event_msg', { type: 'error', turn_id: turnId })
+    + logLine('token_usage_record', { turn_id: turnId, response_id: 'first', usage: usage(8200, 400, 6378),
+      turn_token_usage: usage(8200, 400, 6378) })
+    + legacyUsage(usage(50000, 2000, 20000))
+    + logLine('token_usage_record', { turn_id: turnId, response_id: 'second', usage: usage(10000, 1000, 8000),
+      turn_token_usage: usage(18200, 1400, 14378) })
+    // 迟到的另一轮快照不能把当前主任务的状态和统计切走。
+    + logLine('token_usage_record', { turn_id: 'older-turn', response_id: 'replayed', usage: usage(700, 30, 200),
+      turn_token_usage: usage(25000, 5000, 10000) })
+    + finish(turnId));
   await until(() => detected.some((task) => task.thread === 'child') && notices.length, '新建即结束的主任务没有提醒');
   assert.deepEqual(notices.map((notice) => notice.dialogueKind), ['complete']);
+  assert.deepEqual(notices[0].turnUsage, { input: 18200, output: 1400, cached: 14378 });
+  assert.equal(completionBubble(notices[0].turnUsage).text, '任务完成啦！ 本轮 · 输入 18.2K · 输出 1.4K · 缓存命中 79%');
   assert.ok(detected.some((task) => task.thread === 'short'));
   assert.equal(monitor.indexedAt, lastIndex);
 
@@ -187,12 +212,13 @@ test('独立监听跳过旧完成，及时发现短会话且不依赖账本进�
   await fs.appendFile(short, finish('short-turn'));
   await fs.copyFile(short, path.join(recent, 'short-copy.jsonl'));
   await fs.appendFile(child, finish('child-turn'));
-  await fs.appendFile(resumed, finish(undefined));
+  await fs.appendFile(resumed, legacyUsage(usage(1250, 240, 600)) + finish(undefined));
   await until(() => notices.length >= 2, '账本停止后没有收到恢复会话的提醒');
   assert.ok(detected.some((task) => task.thread === 'resumed' && task.turn === 'resumed-turn'));
   assert.ok(detected.filter((task) => task.thread === 'short').length >= 2);
   assert.ok(detected.every((task) => task.turn !== 'history'));
   assert.deepEqual(notices.map((notice) => notice.dialogueKind), ['complete', 'complete']);
+  assert.deepEqual(notices[1].turnUsage, { input: 250, output: 40, cached: 100 });
   assert.equal(monitor.mainTaskNotices.length + monitor.subagentTaskNotices.length, 0);
 });
 
@@ -223,6 +249,14 @@ test('目录监听静默漏事件时也能及时读到新建即完成的会话',
 
   // 首次扫描完成后才落盘，后续只能靠近期目录的常规检查发现新文件。
   const delivered = once(worker, 'message', { signal: AbortSignal.timeout(5000) });
-  await fs.writeFile(path.join(recent, 'short.jsonl'), logLine('session_meta', { id: 'short' }) + finish('next'));
-  assert.deepEqual((await delivered)[0].tasks.map(({ thread }) => thread), ['short']);
+  // 按响应编号去重；无效的轮次快照不能覆盖有效的独立请求计数。
+  const firstRequest = logLine('token_usage_record', { turn_id: 'next', response_id: 'retry', usage: usage(200, 10, 100) });
+  await fs.writeFile(path.join(recent, 'short.jsonl'), logLine('session_meta', { id: 'short' })
+    + logLine('event_msg', { type: 'task_started', turn_id: 'next' })
+    + firstRequest + firstRequest
+    + logLine('token_usage_record', { turn_id: 'next', response_id: 'last', usage: usage(300, 20, 50),
+      turn_token_usage: usage(400, 30, 450) })
+    + finish('next'));
+  assert.deepEqual((await delivered)[0].tasks.map(({ thread, turn, turnUsage }) => [thread, turn, turnUsage]),
+    [['short', 'next', { input: 500, output: 30, cached: 150 }]]);
 });

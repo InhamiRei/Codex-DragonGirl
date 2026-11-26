@@ -99,6 +99,18 @@ function renderUsage(usage) {
   message.replaceChildren(content);
 }
 
+// 标签和值分别排版，让每个指标可以完整显示，辅助阅读也能正确配对。
+function renderCompletion({ title, metrics }) {
+  const details = element('dl', 'completion-details');
+  details.setAttribute('aria-label', '本轮用量');
+  for (const { label, value } of metrics) {
+    const metric = element('div', 'completion-metric');
+    metric.append(element('dt', 'completion-label', label), element('dd', 'completion-value', value));
+    details.append(metric);
+  }
+  message.replaceChildren(element('div', 'completion-title', title), details);
+}
+
 // 判断文字是否处于固定椭圆内部，只调整内容容器，不再根据文字改写气泡尺寸。
 function contentFitsEllipse() {
   const rect = bubble.getBoundingClientRect();
@@ -127,7 +139,8 @@ function measure(model, scrollTop = 0) {
   document.body.dataset.compact = 'false';
   contentPane.scrollTop = 0;
   // 通知先利用椭圆中央的宽度保留整句，文字碰到弧线或需要滚动时恢复较窄的内容区。
-  if ((document.body.dataset.layout === 'usage' || model.kind === 'notice') &&
+  const layout = document.body.dataset.layout;
+  if ((layout === 'usage' || (layout === 'text' && model.kind === 'notice')) &&
       (contentPane.scrollHeight > contentPane.clientHeight + 1 || !contentFitsEllipse()))
     document.body.dataset.compact = 'true';
   const scrollable = contentPane.scrollHeight > contentPane.clientHeight + 1;
@@ -310,7 +323,7 @@ function render(model) {
   document.body.dataset.side = model.side;
   document.body.dataset.horizontal = model.horizontal || 'left';
   document.body.dataset.kind = model.kind;
-  document.body.dataset.layout = model.usage ? 'usage' : 'text';
+  document.body.dataset.layout = model.usage ? 'usage' : model.completion ? 'completion' : 'text';
   document.body.dataset.multiple = String((model.usage?.quotas.length || 0) > 1);
   if (renderedRevision !== model.revision) {
     renderedRevision = model.revision;
@@ -318,6 +331,7 @@ function render(model) {
     document.documentElement.style.setProperty('--bubble-scale', String(model.scale));
     plan.hidden = true;
     if (model.usage) renderUsage(model.usage);
+    else if (model.completion) renderCompletion(model.completion);
     else if (!sameTyping) message.textContent = model.typingId == null ? model.text : '';
     measure(model, scrollTop);
   }

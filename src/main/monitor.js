@@ -564,8 +564,10 @@ export class Monitor extends EventEmitter {
       const key = JSON.stringify([task.home, task.thread, task.turn || task.time]);
       if (this.seenTaskTurns.has(key)) continue;
       const prior = results.get(key);
-      // 同批日志先记录错误又成功完成时，采用最终的成功结果。
-      if (!prior || (prior.status === 'error' && task.status === 'complete')) results.set(key, task);
+      // 同批日志优先使用最终成功结果，重复的成功记录优先取有本轮用量的版本。
+      if (!prior || (task.status === 'complete' && (prior.status === 'error'
+        || (prior.status === 'complete' && task.turnUsage && !prior.turnUsage))))
+        results.set(key, task);
     }
     if (!results.size) return;
     const quiet = isQuiet(this.settings);
@@ -604,6 +606,7 @@ export class Monitor extends EventEmitter {
         dialogueKind: task.status === 'complete' ? 'complete' : task.status === 'cancelled' ? 'cancelled' : 'error',
         event: task.status === 'error' ? 'error' : 'complete',
         expression: task.status === 'complete' ? 'happy' : task.status === 'error' ? 'sad' : null,
+        turnUsage: task.status === 'complete' ? task.turnUsage : null,
       } : { event: 'complete', text: '子代理完成' });
     }
   }

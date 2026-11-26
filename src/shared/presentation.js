@@ -42,6 +42,26 @@ export function tokenDisplayParts(value) {
   return { number: parts ? parts[1] : text, unit: parts ? parts[2] : '' };
 }
 
+const compactTurnTokens = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+
+// 默认紧凑格式最大只到 T，更大的计数使用标准单位 P。
+function formatTurnTokens(value) {
+  return value >= 1e15 ? `${compactTurnTokens.format(value / 1e15)}P` : compactTurnTokens.format(value);
+}
+
+// 气泡和系统通知复用三个完整指标，缓存命中率以输入总量为分母。
+export function completionBubble({ input, output, cached }) {
+  const metrics = [
+    { label: '输入', value: formatTurnTokens(input) },
+    { label: '输出', value: formatTurnTokens(output) },
+    { label: '缓存命中', value: input > 0 ? `${Math.round((cached / input) * 100)}%` : '—' },
+  ];
+  return {
+    text: `任务完成啦！ 本轮 · ${metrics.map(({ label, value }) => `${label} ${value}`).join(' · ')}`,
+    completion: { title: '本轮任务完成啦！', metrics },
+  };
+}
+
 // 自动生成的实例名称使用中文；用户自己填写的名称原样保留。
 export function instanceLabel(instance, settings = {}) {
   if (settings.aliases?.[instance.home]) return instance.name;

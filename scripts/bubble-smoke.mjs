@@ -5,7 +5,7 @@ import os from 'node:os';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { dialogueLine } from '../src/shared/dialogue.js';
-import { quotaDisplayWindows } from '../src/shared/presentation.js';
+import { completionBubble, quotaDisplayWindows } from '../src/shared/presentation.js';
 
 const root = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'dg-bubble-'));
@@ -14,6 +14,8 @@ let application, page;
 const results = [];
 const clearances = [];
 const fixtureNow = Date.parse('2026-11-05T10:00:00+08:00');
+// 两个场景共用菜单中的六档尺寸，避免独立调整导致覆盖漏档。
+const petScales = [.5, .6, .75, 1, 1.25, 1.5];
 
 // 测量回传完成后再检查，避免透明首帧被误认为内容没有溢出。
 async function until(check, message) {
@@ -103,22 +105,25 @@ async function show(content, font = '', narrow = false) {
   }, content.text), '气泡内容没有完成测量');
 }
 
-// 检查实际文字边界、滚动空间和系统滚动条占宽，不能仅靠隐藏溢出来通过。
+// 分别检查椭圆边界和内容区边界，文字在椭圆内时也可能被滚动区域裁掉。
 async function metrics() {
   return page.evaluate(() => {
     const pane = document.getElementById('bubble-content');
+    const viewport = pane.getBoundingClientRect();
     const card = document.getElementById('bubble').getBoundingClientRect();
     const message = document.getElementById('message');
     const number = document.querySelector('.metric-value')?.getBoundingClientRect();
     const unit = document.querySelector('.metric-unit');
     const range = document.createRange();
     const walker = document.createTreeWalker(pane, NodeFilter.SHOW_TEXT);
-    let outside = false;
+    let outside = false, clipped = false;
     while (walker.nextNode()) {
       if (!walker.currentNode.textContent.trim()) continue;
       range.selectNodeContents(walker.currentNode);
       for (const line of range.getClientRects()) {
         if (!line.width || !line.height) continue;
+        if (line.top < viewport.top - .5 || line.bottom > viewport.bottom + .5
+          || line.left < viewport.left - .5 || line.right > viewport.right + .5) clipped = true;
         for (const x of [line.left, line.right]) for (const y of [line.top, line.bottom])
           if (((x - card.x - card.width / 2) / (card.width / 2 - 5)) ** 2
             + ((y - card.y - card.height / 2) / (card.height / 2 - 5)) ** 2 > 1.01) outside = true;
@@ -129,7 +134,7 @@ async function metrics() {
       clientWidth: pane.clientWidth, scrollWidth: pane.scrollWidth,
       messageLines: Math.round(message.offsetHeight / Number.parseFloat(getComputedStyle(message).lineHeight)),
       gutter: pane.offsetWidth - pane.clientWidth, scrollbar: getComputedStyle(pane).scrollbarWidth,
-      compact: document.body.dataset.compact, outside,
+      compact: document.body.dataset.compact, outside, clipped,
       // 今日用量改为同字号的普通单行文字，不再要求数字对准气泡中线。
       footerAlign: document.querySelector('.today') ? getComputedStyle(document.querySelector('.today')).textAlign : null,
       footerWeight: document.querySelector('.today') ? getComputedStyle(document.querySelector('.today')).fontWeight : null,
@@ -241,6 +246,53 @@ try {
     assert.ok(!completionLayout.outside && completionLayout.scrollHeight <= completionLayout.clientHeight + 1);
     assert.equal(await page.locator('#message').textContent(), completion);
 
+    // 六档角色尺寸在每档显示缩放下都走真实通知排版，覆盖备用字体和长用量数值。
+    const completionCases = [
+      ['', completionBubble({ input: 18200, output: 1400, cached: 14378 })],
+      ['Microsoft YaHei, sans-serif', completionBubble({ input: 128734012, output: 984567, cached: 128734012 })],
+      ['Arial, sans-serif', completionBubble({ input: 998900000000000, output: 999900000000000, cached: 998900000000000 })],
+    ];
+    for (const petScale of petScales) {
+      await application.evaluate((_, value) => globalThis.__dragonGirlTest.setScale(value), petScale);
+      await show({ text: completion, kind: 'notice' });
+      // 等视口和原生窗口一起缩放完毕，再将普通通知的尺寸作为完成通知的对照。
+      await until(() => page.evaluate(async () => {
+        const { maxWidth, maxHeight } = await window.dragonGirl.bootstrap();
+        return Math.abs(innerWidth - maxWidth) <= 1 && Math.abs(innerHeight - maxHeight) <= 1;
+      }), '完成通知的缩放视口未就绪');
+      const outline = await page.locator('#outline-path').getAttribute('d');
+      const noticeSize = await page.evaluate(() => [innerWidth, innerHeight]);
+      for (const [font, content] of completionCases) {
+        await show({ ...content, kind: 'notice' }, font);
+        const summary = await metrics();
+        assert.equal(await page.locator('#outline-path').getAttribute('d'), outline, '完成用量改变了气泡轮廓');
+        assert.deepEqual(await page.evaluate(() => [innerWidth, innerHeight]), noticeSize, '完成用量改变了气泡尺寸');
+        assert.ok(!summary.clipped && !summary.outside && summary.scrollWidth <= summary.clientWidth + 1
+          && summary.scrollHeight <= summary.clientHeight + 1,
+          `完成通知的文字被裁切：${JSON.stringify({ scale, petScale, font, ...summary })}`);
+        // 按文字实际绘制边界查折行，保留 15px 标题、13px 指标和一致的字体及字重。
+        const textStyles = await page.locator('.completion-title, .completion-label, .completion-value')
+          .evaluateAll((nodes) => nodes.map((node) => {
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const { fontFamily, fontSize, fontWeight } = getComputedStyle(node);
+            return { font: [fontFamily, fontWeight].join('|'), lines: range.getClientRects().length, fontSize };
+          }));
+        assert.equal(textStyles.length, 7);
+        const [titleStyle, ...metricStyles] = textStyles;
+        assert.equal(titleStyle.fontSize, '15px');
+        assert.ok(metricStyles.every(({ fontSize }) => fontSize === '13px'));
+        assert.ok(textStyles.every(({ lines }) => lines === 1), '完成气泡出现折行');
+        assert.equal(new Set(textStyles.map(({ font }) => font)).size, 1, '完成气泡的字体或字重不一致');
+        assert.equal(await page.locator('.completion-title').textContent(), content.completion.title);
+        assert.deepEqual(await page.locator('.completion-label').allTextContents(), content.completion.metrics.map(({ label }) => label));
+        assert.deepEqual(await page.locator('.completion-value').allTextContents(), content.completion.metrics.map(({ value }) => value));
+        if (scale === 2 && petScale === 1 && font === 'Microsoft YaHei, sans-serif')
+          await page.screenshot({ path: path.join(root, '.artifacts/bubble-turn-usage.png'), omitBackground: true });
+      }
+    }
+    await application.evaluate(() => globalThis.__dragonGirlTest.setScale(1));
+
     // 保留真正超长的内容，隐藏滚动条后依然能用滚轮读到最后一行。
     const longText = '这是需要完整保留的长消息。'.repeat(30) + '最后一行';
     await show({ text: longText });
@@ -327,7 +379,7 @@ try {
     const sentence = '今天也一起工作吧。';
     await show({ text: sentence });
     let previousLayout;
-    for (const petScale of [.5, .6, .75, 1, 1.25, 1.5]) {
+    for (const petScale of petScales) {
       const target = await application.evaluate((_, value) => {
         const c = globalThis.__dragonGirlTest;
         c.setScale(value);

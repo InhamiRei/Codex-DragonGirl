@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { DEFAULT_SETTINGS, normalizeSettings } from '../core/settings.js';
-import { planLabel, instanceLabel, quotaAvailableWindows, quotaDisplayWindows } from '../shared/presentation.js';
+import { completionBubble, planLabel, instanceLabel, quotaAvailableWindows, quotaDisplayWindows } from '../shared/presentation.js';
 import { Companion, companionAppearance } from './companion.js';
 import { followWindowFrame, followProcess } from '../shared/follow-window.js';
 import { clamp } from '../shared/geometry.js';
@@ -126,9 +126,11 @@ export class Dashboard {
       if (this.stopping) return;
       const pet =
         [this.primary, ...this.pets.values()].find((c) => c.instanceId === notice.home) || this.primary;
-      const text = notice.dialogueKind ? pet.nextDialogue(notice.dialogueKind) : notice.text;
+      // 气泡与系统通知共用本轮数据，缺少数据时沿用当前角色的完成台词。
+      const completion = notice.turnUsage ? completionBubble(notice.turnUsage) : null;
+      const text = completion?.text ?? (notice.dialogueKind ? pet.nextDialogue(notice.dialogueKind) : notice.text);
       // 主任务完成用独立台词类型识别；借用主角色显示的其他实例通知不改变窗口焦点。
-      pet.notify(notice.event, text, { focusOnClick: notice.dialogueKind === 'complete' && pet.instanceId === notice.home });
+      pet.notify(notice.event, completion ?? text, { focusOnClick: notice.dialogueKind === 'complete' && pet.instanceId === notice.home });
       if (notice.expression) pet.showExpression(notice.expression);
       if (notice.system && Notification.isSupported()) {
         const n = new Notification({ title: `GPT龙娘 · ${notice.name}`, body: text, silent: true });

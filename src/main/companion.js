@@ -93,6 +93,7 @@ export class Companion {
     this.bubbleModel = {
       text: '',
       usage: null,
+      completion: null,
       kind: 'speech',
       typingId: null,
       showId: 0,
@@ -473,15 +474,17 @@ export class Companion {
     this.showBubble(this.delegate?.bubbleFor?.(this) || this.nextDialogue('chat'), 'usage');
   }
 
-  // 文本与默认用量卡片共用内容版本，异步测量不能覆盖后来显示的新消息。
+  // 文本、额度与本轮用量共用内容版本，迟到的测量不能覆盖新消息。
   setBubbleContent(content, kind = this.bubbleKind) {
     this.bubbleKind = kind;
+    const plainText = typeof content === 'string';
     const wasTyping = this.bubbleModel.typingId !== null;
     const revision = this.bubbleModel.revision + 1;
     this.bubbleModel = {
       ...this.bubbleModel,
-      text: typeof content === 'string' ? content : content.text,
-      usage: typeof content === 'string' ? null : content.usage,
+      text: plainText ? content : content.text,
+      usage: plainText ? null : content.usage,
+      completion: plainText ? null : content.completion,
       kind,
       // 逐字播放编号只在换内容时变化，移动气泡或重新测量不会重新打字。
       typingId: kind === 'prayer' ? revision : null,
@@ -1173,12 +1176,12 @@ export class Companion {
       ? { name, source: preview ? 'preview' : 'idle' } : name);
   }
 
-  // 事件声和状态提示复用角色窗口，不额外创建音频后台进程。
-  notify(event, text, { focusOnClick = false } = {}) {
+  // 显示文本或本轮用量时，沿用通知的音效与点击聚焦行为。
+  notify(event, content, { focusOnClick = false } = {}) {
     this.windows.get('character')?.webContents.send('dg:sound', event);
     // 祷文与震荡波期间暂停显示任务通知，提示音仍然照常播放。
-    if (text && this.state.speechEnabled && !this.prayerWave && !(this.bubbleVisible && this.bubbleKind === 'prayer'))
-      this.showBubble(text, 'notice', { focusOnClick });
+    if (content && this.state.speechEnabled && !this.prayerWave && !(this.bubbleVisible && this.bubbleKind === 'prayer'))
+      this.showBubble(content, 'notice', { focusOnClick });
   }
 
   // 测试只读快照包含窗口布局和当前开关，不暴露任意系统操作。

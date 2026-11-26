@@ -2,14 +2,18 @@ import { createReadStream, watch } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parentPort, workerData } from 'node:worker_threads';
-import { isInheritedEvent, parserState, parseUsageEvent, TASK_END_EVENTS } from '../core/usage-parser.js';
+import { isInheritedEvent, parserState, parseUsageEvent, TASK_END_EVENTS, tokens } from '../core/usage-parser.js';
 import { readLogLines } from '../core/log-lines.js';
 
 // 定期检查近期日志，目录监听跟踪旧会话的追加，低频核对补齐漏掉的系统事件。
 const RECONCILE_MS = 60000;
 const RECENT_LOG_MS = 10 * 60000;
-const TASK_EVENTS = ['task_started', ...TASK_END_EVENTS];
-const TASK_MARKERS = TASK_EVENTS.map((type) => `"${type}"`);
+const CONTEXT_BYTES = 128 * 1024;
+const LOG_TYPES = ['session_meta', 'turn_context', 'token_usage_record'];
+const EVENT_TYPES = ['task_started', ...TASK_END_EVENTS, 'token_count'];
+const LOG_MARKERS = LOG_TYPES.map((type) => `"${type}"`);
+const EVENT_MARKERS = EVENT_TYPES.map((type) => `"${type}"`);
+const EMPTY_USAGE = Object.freeze(tokens());
 const sources = new Map();
 let interval, timer, scanning = false;
 
@@ -18,14 +22,14 @@ function identity(stat) {
   return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
 }
 
-// 仅解析会话元数据、轮次和任务结果，跳过正文、工具输出和用量记录。
+// 只解析会话、轮次和计数记录，跳过对话正文与工具输出。
 function taskEvent(line) {
-  if (!line || !(line.includes('"session_meta"') || line.includes('"turn_context"')
-    || (line.includes('"event_msg"') && TASK_MARKERS.some((marker) => line.includes(marker))))) return null;
+  if (!line || !(LOG_MARKERS.some((marker) => line.includes(marker))
+    || (line.includes('"event_msg"') && EVENT_MARKERS.some((marker) => line.includes(marker))))) return null;
   try {
     const event = JSON.parse(line.toString('utf8'));
-    return event?.type === 'session_meta' || event?.type === 'turn_context'
-      || (event?.type === 'event_msg' && TASK_EVENTS.includes(event.payload?.type)) ? event : null;
+    return LOG_TYPES.includes(event?.type)
+      || (event?.type === 'event_msg' && EVENT_TYPES.includes(event.payload?.type)) ? event : null;
   } catch {
     return null;
   }
@@ -34,18 +38,105 @@ function taskEvent(line) {
 // 按本次检查的文件长度读取完整行，半行保留原偏移，超长行也不会无限累积内存。
 function logLines(file, offset, size) {
   if (offset >= size) return [];
-  const stream = createReadStream(file, { start: offset, end: size - 1, highWaterMark: 128 * 1024 });
+  const stream = createReadStream(file, { start: offset, end: size - 1, highWaterMark: CONTEXT_BYTES });
   return readLogLines(stream, offset);
 }
 
-// 文件身份由首条有效会话元数据确定；父历史中的上下文、任务开始和结果都不能改变提醒状态。
+// 校验完整的轮次计数，只把显示需要的输入、输出和缓存分项交给主进程。
+function usageDifference(total, baseline) {
+  if (!total || !baseline) return null;
+  const input = total.input_tokens - baseline.input_tokens;
+  const output = total.output_tokens - baseline.output_tokens;
+  const cached = total.cached_input_tokens - baseline.cached_input_tokens;
+  if (!Number.isSafeInteger(input + output) || input < 0 || output < 0
+    || cached < 0 || cached > input || input + output === 0) return null;
+  return { input, output, cached };
+}
+
+// 优先使用 Codex 报出的本轮累计。旧日志可用会话累计差值，或去重后的独立请求记录。
+function completedTurnUsage(state) {
+  const cumulative = state.nativeTurnUsage ?? usageDifference(state.total, state.turnBaseline);
+  if (cumulative || !state.turnRequests?.size) return cumulative;
+  const total = tokens();
+  for (const request of state.turnRequests.values()) {
+    total.input_tokens += request.input_tokens;
+    total.output_tokens += request.output_tokens;
+    total.cached_input_tokens += request.cached_input_tokens;
+  }
+  return usageDifference(total, EMPTY_USAGE);
+}
+
+// 只有读到开始边界才把之前的会话累计作为基线；日志从中间接入时仍可使用本轮原生快照。
+function beginTurnUsage(state, previousTurn, atStart) {
+  const firstTurn = !previousTurn && state.fromBeginning && !state.parent && state.boundary === null;
+  state.turnBaseline = atStart ? state.total ?? (firstTurn ? EMPTY_USAGE : null) : null;
+  state.collectTurnRequests = atStart || state.fromBeginning;
+  state.turnFinished = false;
+  state.nativeTurnUsage = null;
+  state.turnRequests = null;
+}
+
+// 实时提醒只需要计数，直接读取快照，省去账本用的配额解析、请求摘要与费用字段。
+function applyTurnUsage(event, state, timestamp, inherited) {
+  if (state.source !== '主任务' || !Number.isFinite(timestamp)) return;
+  const payload = event.payload;
+  if (event.type === 'event_msg') {
+    const raw = payload.info?.total_token_usage;
+    if (!raw) return;
+    const next = tokens(raw);
+    if (!inherited && state.total && next.total_tokens < state.total.total_tokens) state.turnBaseline = null;
+    state.total = next;
+    return;
+  }
+  if (inherited || (payload?.thread_id && state.thread && payload.thread_id !== state.thread)) return;
+  if (payload?.turn_id && payload.turn_id !== state.turn) {
+    // 迟到的其他轮记录不能切换正在工作的轮次；缺少开始事件的原生记录仍能用自身轮次定位。
+    if (state.turn && !state.turnFinished) return;
+    const previousTurn = state.turn;
+    state.turn = payload.turn_id;
+    beginTurnUsage(state, previousTurn, false);
+  }
+  if (!state.turn) return;
+  const native = payload?.turn_token_usage && usageDifference(tokens(payload.turn_token_usage), EMPTY_USAGE);
+  if (native) {
+    const previous = state.nativeTurnUsage;
+    if (!previous || native.input + native.output >= previous.input + previous.output)
+      state.nativeTurnUsage = native;
+    // 可信的完整快照到达后，请求级备份不再需要，也无需随每次追加复制。
+    state.turnRequests = null;
+  } else if (state.collectTurnRequests && !state.nativeTurnUsage && payload?.usage) {
+    const request = tokens(payload.usage);
+    if (!usageDifference(request, EMPTY_USAGE)) return;
+    const key = payload.response_id ? `response:${payload.response_id}` : `record:${event.ordinal ?? timestamp}`;
+    (state.turnRequests ??= new Map()).set(key, request);
+  }
+}
+
+// 文件身份由首条有效会话元数据确定，继承的累计只用于确认旧格式的基线。
 function applyTaskEvent(event, state, home) {
   if (!event) return;
   if (event.type === 'session_meta') {
     if (state.thread) return;
-  } else if (isInheritedEvent(event, state)) return;
+    parseUsageEvent(event, state, home);
+    return;
+  }
+  const timestamp = Date.parse(event.timestamp);
+  const inherited = isInheritedEvent(event, state, timestamp);
+  if (event.type === 'token_usage_record' || event.payload?.type === 'token_count') {
+    applyTurnUsage(event, state, timestamp, inherited);
+    return;
+  }
+  if (inherited) return;
+
+  const previousTurn = state.turn;
   const { task } = parseUsageEvent(event, state, home);
-  if (task?.turn) state.turn = task.turn;
+  if (state.turn && state.turn !== previousTurn && state.source === '主任务') beginTurnUsage(state, previousTurn, true);
+  // 结束事件可以补上未知轮次，重复的旧结束记录不能改写已有的轮次归属。
+  if (task?.turn && !state.turn) state.turn = task.turn;
+  if (task?.turn && task.turn === state.turn) {
+    if (task.status === 'complete' && task.source === '主任务') task.turnUsage = completedTurnUsage(state);
+    if (task.status === 'complete' || task.status === 'cancelled') state.turnFinished = true;
+  }
   return task;
 }
 
@@ -59,13 +150,13 @@ async function readMetadata(file, offset, state, home) {
   }
 }
 
-// 旧会话追加不带轮次的结果时，用读取位置前的近期记录恢复轮次，避免同一轮响两次。
-async function readPreviousTurn(file, offset, state, home) {
-  const context = { ...state, turn: '' };
-  for await (const { line } of logLines(file, Math.max(0, offset - 128 * 1024), offset)) {
-    applyTaskEvent(taskEvent(line), context, home);
+// 老会话首次追加时回读近期上下文，恢复轮次和已落盘的计数，无需重扫全部历史。
+async function restoreRecentContext(file, offset, state, home) {
+  const start = Math.max(0, offset - CONTEXT_BYTES);
+  state.fromBeginning = start === 0;
+  for await (const { line } of logLines(file, start, offset)) {
+    applyTaskEvent(taskEvent(line), state, home);
   }
-  return context.turn;
 }
 
 // 文件无变化只做元数据检查，追加时从上次完整行继续，替换或截断时重新验证事件时间。
@@ -90,27 +181,26 @@ async function checkFile(source, file, changedByWatch) {
   const continuing = sameFile && stat.size > previous.size;
   // 启动前未变化的文件只记长度。首次发现的短会话也检查启动后的实际事件。
   let offset = continuing ? previous.offset : !changedByWatch && stat.mtimeMs <= workerData.startedAt ? stat.size : 0;
-  let state = continuing && previous.state ? { ...previous.state } : null;
+  const prior = continuing ? previous.state : null;
+  let state = prior ? { ...prior, turnRequests: prior.turnRequests && new Map(prior.turnRequests) } : null;
   const tasks = [];
   if (offset < stat.size) {
     const start = offset;
     if (!state) {
-      state = parserState();
-      if (start) await readMetadata(file, start, state, source.id);
+      state = { ...parserState(), fromBeginning: !start };
+      if (start) {
+        if (start > CONTEXT_BYTES) await readMetadata(file, start, state, source.id);
+        await restoreRecentContext(file, start, state, source.id);
+      }
     }
-    let previousTurn;
     for await (const entry of logLines(file, start, stat.size)) {
       offset = entry.offset;
       const task = applyTaskEvent(taskEvent(entry.line), state, source.id);
       if (!task) continue;
       if (!(task.time > workerData.startedAt)) continue;
-      if (!task.turn && start) {
-        previousTurn ??= await readPreviousTurn(file, start, state, source.id);
-        task.turn = state.turn = previousTurn;
-      }
-      // 跨线程只发提醒所需的标识和结果，正文、目录和账户信息留在读取线程内。
+      // 同一日志读到的完成结果和用量一起发送，提醒可独立于账本更新。
       tasks.push({ home: source.id, thread: task.thread || path.basename(file, '.jsonl'),
-        turn: task.turn, time: task.time, status: task.status, source: task.source });
+        turn: task.turn, time: task.time, status: task.status, source: task.source, turnUsage: task.turnUsage });
     }
   }
   source.files.set(file, { key, size: stat.size, mtime: stat.mtimeMs, offset, state });
