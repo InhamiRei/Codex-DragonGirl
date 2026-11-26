@@ -313,7 +313,7 @@ try {
   console.log('✓ 按压回弹、用量切语录再收起、渲染层按键处理和隐藏后迟到点击通过。');
 
   // 长短文本必须使用同一固定外框；超长内容完整保留，并能通过真实滚轮读到末尾。
-  const longText = '这是一段用于验证自动换行的较长消息。'.repeat(10);
+  const longText = '这是一段用于验证自动换行的较长消息。'.repeat(10) + '最后一行';
   await application.evaluate((_, text) => globalThis.__dragonGirlTest.showBubble(text, 'speech'), longText);
   const longBubble = await bubbleLayout(longText);
   assert.deepEqual([longBubble.width, longBubble.height], [BUBBLE_SIZE.width, BUBBLE_SIZE.height], '长文本改变了固定外框。');

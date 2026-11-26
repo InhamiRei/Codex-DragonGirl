@@ -238,13 +238,24 @@ try {
       assert.ok(zero.meters.every((meter) => meter.segments.every((fill) => fill === '0%')), '0% 电量仍点亮了格子');
       assert.deepEqual(zero.resets, ['无限制', '重置时间未知']);
     }
-    // 截图中的通知在各档显示比例下都应按原文分成两行，文字完整落在椭圆内。
-    const completion = dialogueLine('complete', 2);
-    await show({ text: completion, kind: 'notice' });
-    const completionLayout = await metrics();
-    assert.equal(completionLayout.messageLines, 2, '任务完成提示在句内折行');
-    assert.ok(!completionLayout.outside && completionLayout.scrollHeight <= completionLayout.clientHeight + 1);
-    assert.equal(await page.locator('#message').textContent(), completion);
+    // 用截图里的取消通知核对两行居中，确认只去掉整段最后一个句号。
+    const notice = dialogueLine('cancelled', 1);
+    await show({ text: notice, kind: 'notice' });
+    const noticeLayout = await metrics();
+    assert.equal(noticeLayout.messageLines, 2, '任务取消提示在句内折行');
+    assert.ok(!noticeLayout.outside && noticeLayout.scrollHeight <= noticeLayout.clientHeight + 1);
+    assert.equal(await page.locator('#message').textContent(), '收到，任务取消。\n尾巴刹住了，等你想好再出发');
+    const lineOffsets = await page.locator('#message').evaluate((node) => {
+      const card = document.getElementById('bubble').getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      return [...range.getClientRects()].filter((line) => line.width > 0)
+        .map((line) => (line.left + line.right - card.left - card.right) / 2);
+    });
+    assert.equal(lineOffsets.length, 2);
+    assert.ok(lineOffsets.every((offset) => Math.abs(offset) <= 1), `取消台词没有居中：${lineOffsets}`);
+    if (scale === 1)
+      await page.screenshot({ path: path.join(root, '.artifacts/bubble-dialogue-no-final-period.png'), scale: 'css', omitBackground: true });
 
     // 六档角色尺寸在每档显示缩放下都走真实通知排版，覆盖备用字体和长用量数值。
     const completionCases = [
@@ -254,7 +265,7 @@ try {
     ];
     for (const petScale of petScales) {
       await application.evaluate((_, value) => globalThis.__dragonGirlTest.setScale(value), petScale);
-      await show({ text: completion, kind: 'notice' });
+      await show({ text: notice, kind: 'notice' });
       // 等视口和原生窗口一起缩放完毕，再将普通通知的尺寸作为完成通知的对照。
       await until(() => page.evaluate(async () => {
         const { maxWidth, maxHeight } = await window.dragonGirl.bootstrap();
@@ -284,7 +295,7 @@ try {
         assert.ok(metricStyles.every(({ fontSize }) => fontSize === '13px'));
         assert.ok(textStyles.every(({ lines }) => lines === 1), '完成气泡出现折行');
         assert.equal(new Set(textStyles.map(({ font }) => font)).size, 1, '完成气泡的字体或字重不一致');
-        assert.equal(await page.locator('.completion-title').textContent(), content.completion.title);
+        assert.equal(await page.locator('.completion-title').textContent(), '本轮任务完成啦');
         assert.deepEqual(await page.locator('.completion-label').allTextContents(), content.completion.metrics.map(({ label }) => label));
         assert.deepEqual(await page.locator('.completion-value').allTextContents(), content.completion.metrics.map(({ value }) => value));
         if (scale === 2 && petScale === 1 && font === 'Microsoft YaHei, sans-serif')
@@ -325,7 +336,7 @@ try {
             assert.ok(result.scrollHeight <= result.clientHeight + 1, `语录需要滚动才能读完：${text}`);
             assert.equal(result.outside, false, `语录超出椭圆：${text}`);
             if (kind !== 'chat') assert.ok(result.messageLines <= 3, `任务提示超过三行：${text}`);
-            assert.equal(await page.locator('#message').textContent(), text, '语录显示不完整');
+            assert.equal(await page.locator('#message').textContent(), text.slice(0, -1), '台词应只去掉末尾标点');
           }
         }
       }
