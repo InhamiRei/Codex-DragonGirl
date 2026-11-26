@@ -99,6 +99,11 @@ function renderUsage(usage) {
   message.replaceChildren(content);
 }
 
+// 只去掉整段台词最后一个句末标点，保留句中的停顿和换行。
+function withoutFinalPunctuation(text) {
+  return text.replace(/[。！？.!?]$/, '');
+}
+
 // 标签和值分别排版，让每个指标可以完整显示，辅助阅读也能正确配对。
 function renderCompletion({ title, metrics }) {
   const details = element('dl', 'completion-details');
@@ -108,7 +113,7 @@ function renderCompletion({ title, metrics }) {
     metric.append(element('dt', 'completion-label', label), element('dd', 'completion-value', value));
     details.append(metric);
   }
-  message.replaceChildren(element('div', 'completion-title', title), details);
+  message.replaceChildren(element('div', 'completion-title', withoutFinalPunctuation(title)), details);
 }
 
 // 判断文字是否处于固定椭圆内部，只调整内容容器，不再根据文字改写气泡尺寸。
@@ -332,7 +337,11 @@ function render(model) {
     plan.hidden = true;
     if (model.usage) renderUsage(model.usage);
     else if (model.completion) renderCompletion(model.completion);
-    else if (!sameTyping) message.textContent = model.typingId == null ? model.text : '';
+    else if (!sameTyping) {
+      // 角色语录和普通通知在写入气泡时处理句尾，测量回传沿用原始内容版本。
+      const text = model.typingId == null ? model.text : '';
+      message.textContent = model.kind === 'speech' || model.kind === 'notice' ? withoutFinalPunctuation(text) : text;
+    }
     measure(model, scrollTop);
   }
   drawOutline(model);
